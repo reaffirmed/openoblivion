@@ -1,26 +1,31 @@
 //! OpenOblivion: a from-scratch engine for Oblivion's data files, on Bevy.
 //!
-//! Right now this loads the plugins from a Data directory, logs what it found,
-//! and gives you a fly camera over a placeholder ground plane. Rendering real
-//! cells comes once the NIF reader exists.
+//! Loads one interior cell from your Data directory and lets you fly around it.
+//! The world itself lives in `oo-sim`; this crate only draws it and takes input.
 
-use std::collections::BTreeMap;
+mod model;
+
 use std::path::PathBuf;
 
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use clap::Parser;
-use oo_formats::esm::Plugin;
+use oo_sim::{SimPlugin, SpawnPoint, UNITS_PER_METRE, WorldConfig};
 
-#[derive(Parser, Resource, Clone)]
+use crate::model::ModelCache;
+
+#[derive(Parser)]
 #[command(about = "Run OpenOblivion")]
 struct Args {
     /// The game's Data directory, e.g. ".../Oblivion/Data".
     #[arg(long)]
     data: Option<PathBuf>,
-    /// Plugins to load, in order.
+    /// The plugin to load. Only one for now: form IDs from other plugins aren't remapped yet.
     #[arg(long, default_value = "Oblivion.esm")]
-    plugin: Vec<String>,
+    plugin: String,
+    /// Editor ID of the interior cell to load, e.g. "ICMarketDistrictTheGildedCarafe".
+    #[arg(long)]
+    cell: Option<String>,
 }
 
 fn main() {
@@ -33,41 +38,20 @@ fn main() {
             }),
             ..default()
         }))
-        .insert_resource(args)
-        .add_systems(Startup, (load_plugins, setup_scene))
-        .add_systems(Update, fly_camera)
+        .add_plugins(SimPlugin(WorldConfig {
+            data_dir: args.data,
+            plugin: args.plugin,
+            cell: args.cell,
+        }))
+        .init_resource::<ModelCache>()
+        .insert_resource(GlobalAmbientLight {
+            brightness: 400.0,
+            ..default()
+        })
+        // After the sim's Startup systems, so the spawn point exists.
+        .add_systems(PostStartup, setup_scene)
+        .add_systems(Update, (model::attach_models, fly_camera))
         .run();
-}
-
-fn load_plugins(args: Res<Args>) {
-    let Some(data) = &args.data else {
-        warn!("no --data directory given; showing the empty scene");
-        return;
-    };
-    for name in &args.plugin {
-        let path = data.join(name);
-        let plugin = match Plugin::open(&path) {
-            Ok(p) => p,
-            Err(e) => {
-                error!("couldn't open {}: {e}", path.display());
-                continue;
-            }
-        };
-        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-        if let Err(e) =
-            plugin.for_each_record(|r| *counts.entry(r.tag.to_string()).or_default() += 1)
-        {
-            error!("{name}: {e}");
-        }
-        let total: usize = counts.values().sum();
-        info!(
-            "{name}: {total} records, masters {:?}",
-            plugin.header().masters
-        );
-        for tag in ["CELL", "WRLD", "REFR", "ACHR", "NPC_", "STAT"] {
-            info!("  {tag}: {}", counts.get(tag).copied().unwrap_or(0));
-        }
-    }
 }
 
 #[derive(Component)]
@@ -78,18 +62,22 @@ struct FlyCamera {
 
 fn setup_scene(
     mut commands: Commands,
+    spawn: Option<Res<SpawnPoint>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(200.0, 200.0))),
-        MeshMaterial3d(materials.add(Color::srgb(0.32, 0.45, 0.25))),
-    ));
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(2.0, 2.0, 2.0))),
-        MeshMaterial3d(materials.add(Color::srgb(0.6, 0.55, 0.5))),
-        Transform::from_xyz(0.0, 1.0, 0.0),
-    ));
+    let start = match spawn {
+        Some(s) => s.0,
+        None => {
+            // Nothing loaded: a placeholder floor so there's something to look at.
+            let size = 50.0 * UNITS_PER_METRE;
+            commands.spawn((
+                Mesh3d(meshes.add(Plane3d::default().mesh().size(size, size))),
+                MeshMaterial3d(materials.add(Color::srgb(0.32, 0.45, 0.25))),
+            ));
+            Vec3::new(0.0, 2.0 * UNITS_PER_METRE, 10.0 * UNITS_PER_METRE)
+        }
+    };
     commands.spawn((
         DirectionalLight {
             shadow_maps_enabled: true,
@@ -99,7 +87,12 @@ fn setup_scene(
     ));
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(0.0, 3.0, 10.0),
+        Projection::Perspective(PerspectiveProjection {
+            near: 1.0,
+            far: 500.0 * UNITS_PER_METRE,
+            ..default()
+        }),
+        Transform::from_translation(start),
         FlyCamera {
             yaw: 0.0,
             pitch: -0.2,
@@ -147,10 +140,11 @@ fn fly_camera(
         dir -= Vec3::Y;
     }
 
-    let speed = if keys.pressed(KeyCode::ShiftLeft) {
-        40.0
+    let metres_per_sec = if keys.pressed(KeyCode::ShiftLeft) {
+        20.0
     } else {
-        10.0
+        5.0
     };
-    transform.translation += dir.normalize_or_zero() * speed * time.delta_secs();
+    transform.translation +=
+        dir.normalize_or_zero() * metres_per_sec * UNITS_PER_METRE * time.delta_secs();
 }

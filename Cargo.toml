@@ -10,11 +10,16 @@ rust-version = "1.97.1"
 
 [workspace.dependencies]
 oo-formats = { path = "crates/oo-formats" }
+oo-sim = { path = "crates/oo-sim" }
 anyhow = "1"
 thiserror = "2"
 flate2 = "1"
 clap = { version = "4", features = ["derive"] }
-bevy = "0.20"
+bevy = { version = "0.20", features = ["dds"] }
+# NIF and BSA readers from ByroRedux (MIT). Pinned to a commit: it moves fast.
+byroredux-core = { git = "https://github.com/matiaszanolli/ByroRedux", rev = "eafed0bc5753226a2391c0e404a3059438176603" }
+byroredux-nif = { git = "https://github.com/matiaszanolli/ByroRedux", rev = "eafed0bc5753226a2391c0e404a3059438176603" }
+byroredux-bsa = { git = "https://github.com/matiaszanolli/ByroRedux", rev = "eafed0bc5753226a2391c0e404a3059438176603" }
 
 # Bevy is unbearably slow unoptimized; optimize dependencies even in dev builds.
 [profile.dev.package."*"]

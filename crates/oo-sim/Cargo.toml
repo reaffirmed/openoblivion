@@ -1,0 +1,15 @@
+[package]
+name = "oo-sim"
+description = "OpenOblivion's game simulation: world state with no rendering, so it can run headless on a co-op host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oo-formats.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+bevy = { workspace = true, default-features = false, features = ["std", "bevy_log"] }
+byroredux-core.workspace = true
+byroredux-bsa.workspace = true

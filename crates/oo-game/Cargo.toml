@@ -1,13 +1,15 @@
 [package]
 name = "oo-game"
-description = "The OpenOblivion engine, built on Bevy"
+description = "The OpenOblivion client: renders the simulation with Bevy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-oo-formats.workspace = true
+oo-sim.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 bevy.workspace = true
+byroredux-core.workspace = true
+byroredux-nif.workspace = true

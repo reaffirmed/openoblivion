@@ -28,6 +28,8 @@ enum Command {
     },
     /// Show a plugin's header and how many records of each type it has.
     EsmStats { plugin: PathBuf },
+    /// List the editor IDs of every interior cell (what `--cell` takes).
+    EsmCells { plugin: PathBuf },
     /// Find records by editor ID (case-insensitive substring match).
     EsmFind { plugin: PathBuf, editor_id: String },
 }
@@ -73,6 +75,13 @@ fn main() -> Result<()> {
                 println!("{tag}  {n:>8}");
             }
             println!("total {:>8}", counts.values().sum::<usize>());
+        }
+        Command::EsmCells { plugin } => {
+            let esm =
+                Plugin::open(&plugin).with_context(|| format!("opening {}", plugin.display()))?;
+            for id in oo_formats::world::interior_cell_ids(&esm)? {
+                println!("{id}");
+            }
         }
         Command::EsmFind { plugin, editor_id } => {
             let esm =
