@@ -1,0 +1,13 @@
+[package]
+name = "oo-game"
+description = "The OpenOblivion engine, built on Bevy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oo-formats.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+bevy.workspace = true

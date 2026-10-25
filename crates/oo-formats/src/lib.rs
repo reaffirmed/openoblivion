@@ -1,0 +1,11 @@
+//! Readers for the data files shipped with The Elder Scrolls IV: Oblivion.
+//!
+//! Everything here is written from public format documentation (UESP, NifTools),
+//! not from the game's executable. See `docs/CLEAN_ROOM.md` in the repository root.
+
+pub mod bsa;
+pub mod esm;
+
+mod error;
+
+pub use error::{Error, Result};

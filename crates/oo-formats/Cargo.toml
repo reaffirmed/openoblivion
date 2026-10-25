@@ -1,0 +1,11 @@
+[package]
+name = "oo-formats"
+description = "Readers for Oblivion (TES4) data files: BSA archives and ESM/ESP plugins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+flate2.workspace = true

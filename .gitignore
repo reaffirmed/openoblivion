@@ -1,0 +1,7 @@
+/target
+# Never commit game data or binaries.
+*.esm
+*.esp
+*.bsa
+*.exe
+*.dll

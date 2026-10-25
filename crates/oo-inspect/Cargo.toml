@@ -1,0 +1,12 @@
+[package]
+name = "oo-inspect"
+description = "Command-line inspector for Oblivion data files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oo-formats.workspace = true
+anyhow.workspace = true
+clap.workspace = true
