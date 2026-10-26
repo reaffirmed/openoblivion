@@ -233,7 +233,7 @@ fn quest_scripts_set_stages_and_dialogue_follows() {
     let mut state = ScriptState::default();
 
     // The quest starts enabled and its script sets stage 10 on its first run.
-    let effects = tick_quests(&data, &mut state, &facts, 0.1);
+    let effects = tick_quests(&data, &mut state, &facts, 0.1, None);
     assert!(effects.is_empty());
     assert!(state.running(QUEST));
     assert_eq!(state.stage(QUEST), 10);

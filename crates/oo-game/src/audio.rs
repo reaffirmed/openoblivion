@@ -26,7 +26,8 @@ pub struct GameAudioPlugin;
 impl Plugin for GameAudioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SoundCache>()
-            .add_systems(Update, (play_sounds, place_emitters).chain());
+            .init_resource::<Voice>()
+            .add_systems(Update, (play_sounds, play_voice, place_emitters).chain());
     }
 }
 
@@ -175,6 +176,90 @@ fn play_sounds(
             }
         }
     }
+}
+
+/// Voiced lines in conversation and from scripts. One voice at a time: a new
+/// line cuts off the one before, as in the game.
+#[derive(Resource, Default)]
+pub struct Voice {
+    /// Files still to play, in order, and who says them.
+    queue: Vec<String>,
+    speaker: u32,
+    /// Heard from where the speaker stands, rather than up close.
+    positional: bool,
+    playing: Option<Entity>,
+    /// A new line arrived; stop the one playing.
+    interrupt: bool,
+}
+
+impl Voice {
+    pub fn say(&mut self, speaker: u32, files: Vec<String>, positional: bool) {
+        self.queue = files;
+        self.speaker = speaker;
+        self.positional = positional;
+        self.interrupt = true;
+    }
+
+    pub fn stop(&mut self) {
+        self.queue.clear();
+        self.interrupt = true;
+    }
+}
+
+/// How far a voice carries; until the game's own values are known.
+const VOICE_MIN_DISTANCE: f32 = 300.0;
+const VOICE_MAX_DISTANCE: f32 = 3000.0;
+
+#[allow(clippy::too_many_arguments)]
+fn play_voice(
+    mut commands: Commands,
+    mut voice: ResMut<Voice>,
+    data: Option<Res<GameData>>,
+    mut cache: ResMut<SoundCache>,
+    mut sources: ResMut<Assets<AudioSource>>,
+    alive: Query<()>,
+    placed: Query<(&PlacedRef, &GlobalTransform), Without<Player>>,
+) {
+    let Some(data) = data else { return };
+    if std::mem::take(&mut voice.interrupt)
+        && let Some(e) = voice.playing.take()
+        && alive.contains(e)
+    {
+        commands.entity(e).despawn();
+    }
+    if voice.playing.is_some_and(|e| alive.contains(e)) || voice.queue.is_empty() {
+        return;
+    }
+    let path = voice.queue.remove(0);
+    let Some(handle) = cache.file(&path, &data, &mut sources) else {
+        return;
+    };
+    let at = placed
+        .iter()
+        .find(|(r, _)| r.0 == voice.speaker)
+        .map(|(_, t)| t.translation())
+        .filter(|_| voice.positional);
+    let entity = match at {
+        Some(at) => commands
+            .spawn((
+                AudioPlayer(handle),
+                PlaybackSettings::DESPAWN
+                    .with_spatial(true)
+                    .with_volume(Volume::Linear(0.0)),
+                Transform::from_translation(at),
+                Emitter {
+                    at,
+                    min: VOICE_MIN_DISTANCE,
+                    max: VOICE_MAX_DISTANCE,
+                    gain: 1.0,
+                },
+            ))
+            .id(),
+        None => commands
+            .spawn((AudioPlayer(handle), PlaybackSettings::DESPAWN))
+            .id(),
+    };
+    voice.playing = Some(entity);
 }
 
 /// Full volume within `min`, fading to silence at `max`. An approximation

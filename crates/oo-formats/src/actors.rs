@@ -63,6 +63,9 @@ pub struct RaceInfo {
     pub body: [HashMap<u32, RacePart>; 2],
     /// Scale applied to the whole actor, `[male, female]`.
     pub height: [f32; 2],
+    /// The race whose voices this one uses (`VNAM`), `[male, female]`; 0 for
+    /// its own.
+    pub voice: [u32; 2],
 }
 
 impl RaceInfo {
@@ -293,6 +296,9 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
                                 f32::from_le_bytes(f.data[16..20].try_into().unwrap()),
                                 f32::from_le_bytes(f.data[20..24].try_into().unwrap()),
                             ];
+                        }
+                        b"VNAM" if f.data.len() >= 8 => {
+                            race.voice = [global(u32_at(f.data, 0)), global(u32_at(f.data, 4))];
                         }
                         b"NAM0" => (section, index) = (Section::Face, None),
                         b"NAM1" => (section, index) = (Section::Body(0), None),

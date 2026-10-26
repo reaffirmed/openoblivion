@@ -117,6 +117,17 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
 - [ ] Character creation: race, birthsign, class
 - [ ] Save and load
 
+### References
+
+Public projects to read for design, never to copy code from (see
+[docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md)):
+
+- OpenMW's source and design documents: cell streaming, save handling and a modding
+  API in an engine of the same family.
+- Oblivion Reloaded and OBGE: what the shader packages expect as constants.
+- The Unofficial Oblivion Patch changelog: the list of vanilla bugs to decide on, one
+  by one, when save compatibility and bug-for-bug behaviour come up.
+
 ### Needs you
 
 Things that only the person can give; work carries on around them.
@@ -152,6 +163,13 @@ Things that only the person can give; work carries on around them.
 - [ ] Steam or relay networking without port forwarding
 
 ### Alongside everything
+
+- [ ] Replay tests: the `--script` harness keyed to simulation steps instead of
+      rendered frames, with per-step assertions (player position, quest stages,
+      actor positions), so a recorded run through the tutorial re-verifies itself
+      after every change
+- [ ] Numeric fidelity checks against the documented formulas (movement speeds,
+      combat, falloff), as tests
 
 - [ ] A native modding API (Lua or WebAssembly)
 - [ ] Graphics beyond the original: PBR-friendly shading, shadows, ambient occlusion,

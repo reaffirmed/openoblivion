@@ -126,6 +126,41 @@ pub struct Subtitle {
     pub speaker: u32,
     pub text: String,
     pub seconds: f32,
+    /// The voice files saying it, in order, where found.
+    pub voice: Vec<String>,
+}
+
+/// What finding and timing voice files needs.
+#[derive(Clone, Copy)]
+pub struct VoiceLookup<'a> {
+    pub voices: &'a crate::voice::Voices,
+    pub world: &'a WorldData,
+    pub files: &'a crate::GameData,
+}
+
+impl VoiceLookup<'_> {
+    /// Each response's voice file, if any, and the whole line's length.
+    /// `voice` is the speaker's race and whether they're female.
+    pub fn line(&self, info: u32, voice: Option<(u32, bool)>) -> (Vec<String>, Option<f32>) {
+        let Some(line) = self.world.scripting.dialogue.infos.get(&info) else {
+            return (Vec::new(), None);
+        };
+        let mut files = Vec::new();
+        let mut seconds = 0.0;
+        for r in &line.responses {
+            let file = voice.and_then(|(race, female)| {
+                self.voices.file(self.world, info, r.number, race, female)
+            });
+            match file.and_then(|p| Some((p, self.voices.seconds(p, self.files)?))) {
+                Some((path, s)) => {
+                    files.push(path.to_owned());
+                    seconds += s;
+                }
+                None => return (Vec::new(), None),
+            }
+        }
+        (files, Some(seconds + crate::dialogue::SPEECH_DELAY))
+    }
 }
 
 /// Everything scripts and dialogue have changed. Part of the save game, and
@@ -347,6 +382,9 @@ pub struct GameHost<'a> {
     /// What `GetSecondsPassed` answers: the time since this script last ran.
     /// Scripts count their timers down by it.
     pub seconds_passed: f32,
+    /// Voice files, to time and play what actors say; without them, lines
+    /// are timed from their text.
+    pub voice: Option<VoiceLookup<'a>>,
 }
 
 impl<'a> GameHost<'a> {
@@ -365,6 +403,7 @@ impl<'a> GameHost<'a> {
             effects: Vec::new(),
             stages: Vec::new(),
             seconds_passed: 0.0,
+            voice: None,
         }
     }
 
@@ -722,11 +761,16 @@ impl Host for GameHost<'_> {
                     .map(|r| r.text.as_str())
                     .collect::<Vec<_>>()
                     .join(" ");
-                let seconds = crate::dialogue::speaking_time(&text);
+                let (voice, voiced) = match self.voice {
+                    Some(v) => v.line(info, self.facts.get(&speaker).map(|f| (f.race, f.female))),
+                    None => (Vec::new(), None),
+                };
+                let seconds = voiced.unwrap_or_else(|| crate::dialogue::speaking_time(&text));
                 self.state.subtitles.push(Subtitle {
                     speaker,
                     text,
                     seconds,
+                    voice,
                 });
                 f64::from(seconds)
             }
@@ -898,6 +942,7 @@ pub fn tick_quests(
     state: &mut ScriptState,
     facts: &HashMap<u32, ActorFacts>,
     seconds: f32,
+    voice: Option<VoiceLookup<'_>>,
 ) -> Vec<WorldEffect> {
     state.start(data);
     let mut due = Vec::new();
@@ -931,6 +976,7 @@ pub fn tick_quests(
         // this quest's own variables (its fQuestDelayTime, say).
         state.quests.get_mut(&quest).unwrap().locals = locals;
         let mut host = GameHost::new(data, state, facts, Some(quest));
+        host.voice = voice;
         host.stages = stages;
         host.apply_stages();
         effects.append(&mut host.effects);
@@ -992,6 +1038,8 @@ pub(crate) fn run_object_scripts(
     loaded: Query<&PlacedRef, Added<Scripted>>,
     actors: Query<(&PlacedRef, &Actor, &Transform)>,
     mut players: Query<(&Transform, &mut Inventory), With<Player>>,
+    voices: Option<Res<crate::voice::Voices>>,
+    files: Option<Res<crate::GameData>>,
 ) {
     let Some(world) = world else { return };
     let data = &world.scripting;
@@ -1016,6 +1064,13 @@ pub(crate) fn run_object_scripts(
         }
         let mut locals = state.objects.remove(&placed.0).unwrap_or_default();
         let mut host = GameHost::new(data, &mut state, &facts, Some(placed.0));
+        if let (Some(v), Some(f)) = (&voices, &files) {
+            host.voice = Some(VoiceLookup {
+                voices: v,
+                world: &world,
+                files: f,
+            });
+        }
         // Object scripts run every step.
         host.seconds_passed = time.delta_secs();
         let outcome = host.run_script(*script, &mut locals, Event::GameMode);
@@ -1155,6 +1210,8 @@ pub(crate) fn run_quests(
     mut pending: ResMut<Pending>,
     actors: Query<(&PlacedRef, &Actor, &Transform)>,
     mut players: Query<(&Transform, &mut Inventory), With<Player>>,
+    voices: Option<Res<crate::voice::Voices>>,
+    files: Option<Res<crate::GameData>>,
 ) {
     let Some(world) = world else { return };
     let mut player = players.single_mut().ok();
@@ -1164,7 +1221,21 @@ pub(crate) fn run_quests(
         actors.iter(),
         player.as_ref().map(|(t, i)| (*t, &**i)),
     );
-    let effects = tick_quests(&world.scripting, &mut state, &facts, time.delta_secs());
+    let voice = match (&voices, &files) {
+        (Some(v), Some(f)) => Some(VoiceLookup {
+            voices: v,
+            world: &world,
+            files: f,
+        }),
+        _ => None,
+    };
+    let effects = tick_quests(
+        &world.scripting,
+        &mut state,
+        &facts,
+        time.delta_secs(),
+        voice,
+    );
     apply_effects(
         effects,
         &mut changes,

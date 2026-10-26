@@ -89,6 +89,48 @@ impl GameData {
         out
     }
 
+    /// Every file anywhere under a Data-relative folder, lower-case with
+    /// backslashes, from loose files and archives together.
+    pub fn list_all(&self, folder: &str) -> Vec<String> {
+        let mut prefix = folder.replace('/', "\\").to_ascii_lowercase();
+        if !prefix.ends_with('\\') {
+            prefix.push('\\');
+        }
+        let mut out: Vec<String> = Vec::new();
+        for (_, archive) in &self.archives {
+            for f in archive.list_files() {
+                let f = f.replace('/', "\\").to_ascii_lowercase();
+                if f.starts_with(&prefix) {
+                    out.push(f);
+                }
+            }
+        }
+        fn walk(dir: &Path, rel: &str, out: &mut Vec<String>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+                let rel = format!("{rel}{name}");
+                match e.file_type() {
+                    Ok(t) if t.is_dir() => walk(&e.path(), &format!("{rel}\\"), out),
+                    Ok(t) if t.is_file() => out.push(rel),
+                    _ => {}
+                }
+            }
+        }
+        walk(
+            &self
+                .dir
+                .join(prefix.trim_end_matches('\\').replace('\\', "/")),
+            &prefix,
+            &mut out,
+        );
+        out.sort();
+        out.dedup();
+        out
+    }
+
     /// Reads a file by its Data-relative path, e.g. `meshes\clutter\barrel01.nif`.
     pub fn read(&self, path: &str) -> Option<Vec<u8>> {
         let rel = path.replace('\\', "/");

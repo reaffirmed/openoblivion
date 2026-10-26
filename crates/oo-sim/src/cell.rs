@@ -192,6 +192,7 @@ pub(crate) fn load_world(
             return;
         }
     };
+    commands.insert_resource(crate::voice::Voices::index(&data));
     commands.insert_resource(data);
 
     match &config.cell {

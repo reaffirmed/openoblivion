@@ -424,6 +424,7 @@ const MESSAGE_SECONDS: f32 = 4.0;
 fn update_subtitles(
     time: Res<Time>,
     mut state: ResMut<ScriptState>,
+    mut voice: ResMut<audio::Voice>,
     mut shown: Local<Shown>,
     mut subtitle: Query<&mut Text, (With<SubtitleText>, Without<MessageText>)>,
     mut messages: Query<&mut Text, (With<MessageText>, Without<SubtitleText>)>,
@@ -432,6 +433,9 @@ fn update_subtitles(
     if !state.subtitles.is_empty() {
         let s = state.subtitles.pop().unwrap();
         state.subtitles.clear();
+        if !s.voice.is_empty() {
+            voice.say(s.speaker, s.voice, true);
+        }
         shown.subtitle = Some((s.text, now + s.seconds));
     }
     for m in state.messages.drain(..) {

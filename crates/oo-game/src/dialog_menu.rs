@@ -149,6 +149,8 @@ pub fn update_dialog(
     mut overlay: Query<&mut Visibility, (With<DialogOverlay>, Without<DialogText>)>,
     mut fallback: Query<(&mut Text, &mut Visibility), With<DialogText>>,
     mut images: ResMut<Assets<Image>>,
+    voices: Option<Res<oo_sim::voice::Voices>>,
+    mut voice: ResMut<crate::audio::Voice>,
 ) {
     let (Some(data), Some(world), Ok(window), Ok((talk, mut actions)), Ok(mut overlay)) = (
         data,
@@ -165,6 +167,9 @@ pub fn update_dialog(
     let was_open = menu.dialog;
     menu.dialog = talk.is_open();
     if !menu.dialog {
+        if was_open {
+            voice.stop();
+        }
         overlay.set_if_neq(Visibility::Hidden);
         text_visibility.set_if_neq(Visibility::Hidden);
         return;
@@ -185,11 +190,32 @@ pub fn update_dialog(
     let count = shown.topics.len();
     if talk.line != screen.line {
         screen.line = talk.line;
-        screen.speaking = if talk.line.is_some() {
-            oo_sim::dialogue::speaking_time(&shown.line)
-        } else {
-            0.0
+        // Voiced lines last as long as their voice; others by their length.
+        let speaker_voice = talk
+            .speaker
+            .and_then(|r| actors.iter().find(|(p, _)| p.0 == r))
+            .and_then(|(_, actor)| match *actor {
+                oo_sim::Actor::Npc(b) => world.actors.npcs.get(&b).map(|n| (n.race, n.female)),
+                oo_sim::Actor::Creature(_) => None,
+            });
+        let voiced = match (&voices, talk.line) {
+            (Some(v), Some((_, info))) => oo_sim::script::VoiceLookup {
+                voices: v,
+                world: &world,
+                files: &data,
+            }
+            .line(info, speaker_voice),
+            _ => (Vec::new(), None),
         };
+        screen.speaking = match (talk.line, voiced.1) {
+            (None, _) => 0.0,
+            (Some(_), Some(seconds)) => seconds,
+            (Some(_), None) => oo_sim::dialogue::speaking_time(&shown.line),
+        };
+        match (talk.speaker, voiced.0.is_empty()) {
+            (Some(speaker), false) => voice.say(speaker, voiced.0, false),
+            _ => voice.stop(),
+        }
     }
     screen.speaking = (screen.speaking - time.delta_secs()).max(0.0);
 
@@ -237,6 +263,7 @@ pub fn update_dialog(
     let speaking = screen.speaking > 0.0;
     if speaking && (ask || mouse.just_pressed(MouseButton::Left)) {
         screen.speaking = 0.0;
+        voice.stop();
         ask = false;
     }
     let image = screen.image.clone();

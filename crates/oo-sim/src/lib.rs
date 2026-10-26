@@ -17,6 +17,7 @@ pub mod physics;
 pub mod player;
 pub mod script;
 pub mod trigger;
+pub mod voice;
 
 use std::path::PathBuf;
 

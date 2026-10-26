@@ -73,10 +73,17 @@ impl Pick {
     }
 }
 
-/// How long a line takes to say, until voice files give the real length.
+/// How long an unvoiced line takes to say: its length times
+/// `fAIDefaultSpeechMult` (see `docs/reverse-engineering/voice.md`).
 pub fn speaking_time(text: &str) -> f32 {
-    (text.chars().count() as f32 * 0.06).max(2.0)
+    text.chars().count() as f32 * SPEECH_SECONDS_PER_CHARACTER
 }
+
+/// `fAIDefaultSpeechMult`'s value in `Oblivion.esm`.
+pub const SPEECH_SECONDS_PER_CHARACTER: f32 = 0.05;
+
+/// Added to a voiced line's length (`fSpeechDelay`).
+pub const SPEECH_DELAY: f32 = 0.0083;
 
 /// The line `speaker` says for `topic`: the first eligible one, scanning
 /// running quests and their lines in order, with runs of random lines pooled.
