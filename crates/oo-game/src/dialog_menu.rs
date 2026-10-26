@@ -287,8 +287,9 @@ pub fn update_dialog(
         xml.set_str("DialogMenu", "user4", &shown.name);
         xml.set_str("dialog_text", "string", &shown.line);
         // While a line is spoken the topics are hidden and the line shows as
-        // a subtitle (its layout shows when dialog_topics.visible is 0).
-        xml.set_num("dialog_topics", "visible", if speaking { 0.0 } else { 2.0 });
+        // a subtitle. Its layout shows when dialog_topics.visible equals
+        // &false;, which is 1, not 0.
+        xml.set_num("dialog_topics", "visible", if speaking { 1.0 } else { 2.0 });
         if log_subtitle {
             let v = |tile: &str, name: &str| xml.value(tile, name);
             info!(
