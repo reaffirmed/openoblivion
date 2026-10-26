@@ -16,6 +16,7 @@ use byroredux_core::animation::interpolation::{sample_rotation, sample_scale, sa
 use byroredux_nif::anim::{AnimationClip, import_kf};
 use byroredux_nif::import::{ImportedMesh, import_nif, import_nif_scene};
 
+use oo_sim::ai::Locomotion;
 use oo_sim::{Appearance, GameData};
 
 use crate::model::{ModelCache, read_nif, to_bevy_mesh};
@@ -24,9 +25,45 @@ use crate::model::{ModelCache, read_nif, to_bevy_mesh};
 /// its skeleton. That's `Characters\_Male\Idle.kf` for people; every creature
 /// folder has its own (a rat playing the human idle stands up on its hind legs).
 fn idle_for(skeleton: &str) -> String {
-    let dir = skeleton.rfind(['\\', '/']).map_or("", |i| &skeleton[..=i]);
-    format!("{dir}idle.kf")
+    format!("{}idle.kf", skeleton_dir(skeleton))
 }
+
+fn skeleton_dir(skeleton: &str) -> &str {
+    skeleton.rfind(['\\', '/']).map_or("", |i| &skeleton[..=i])
+}
+
+/// Standing, walking or running, from how fast the simulation moves the actor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gait {
+    Idle,
+    Walk,
+    Run,
+}
+
+impl Gait {
+    fn from_speed(speed: f32) -> Self {
+        if speed <= 1.0 {
+            Self::Idle
+        } else if speed < (oo_sim::ai::WALK_SPEED + oo_sim::ai::RUN_SPEED) / 2.0 {
+            Self::Walk
+        } else {
+            Self::Run
+        }
+    }
+
+    /// Clip names beside the skeleton, first found wins: people and creatures
+    /// name them differently.
+    fn files(self) -> &'static [&'static str] {
+        match self {
+            Self::Idle => &["idle.kf"],
+            Self::Walk => &["walkforward.kf", "forward.kf"],
+            Self::Run => &["fastforward.kf", "runforward.kf", "forward.kf"],
+        }
+    }
+}
+
+/// The bone that carries an animation's travel; looping clips play in place.
+const ACCUM_ROOT: &str = "Bip01";
 
 /// A skeleton's bones in parent-first order.
 struct Skeleton {
@@ -224,6 +261,20 @@ pub struct Animated {
     time: f32,
     /// Bone entities that the clip has channels for.
     bones: Vec<(Entity, Arc<str>)>,
+    gait: Gait,
+    skeleton: String,
+    /// Every bone entity with its name, to bind another clip.
+    all_bones: Vec<(Entity, String)>,
+}
+
+fn bind(clip: &AnimationClip, all_bones: &[(Entity, String)]) -> Vec<(Entity, Arc<str>)> {
+    all_bones
+        .iter()
+        .filter_map(|(e, name)| {
+            let (key, _) = clip.channels.get_key_value(name.as_str())?;
+            Some((*e, key.clone()))
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -380,31 +431,55 @@ pub fn attach_actors(
             continue;
         }
         if let Some(clip) = cache.clip(&idle_for(&appearance.skeleton), &data) {
-            let bones = skeleton
+            let all_bones: Vec<(Entity, String)> = skeleton
                 .bones
                 .iter()
                 .enumerate()
-                .filter_map(|(i, b)| {
-                    let (name, _) = clip.channels.get_key_value(b.name.as_str())?;
-                    Some((bone_entities[i], name.clone()))
-                })
+                .map(|(i, b)| (bone_entities[i], b.name.clone()))
                 .collect();
+            let bones = bind(&clip, &all_bones);
             // Stagger actors so a room of them doesn't breathe in unison.
             let time = (entity.to_bits() % 97) as f32 * 0.037;
-            commands
-                .entity(entity)
-                .insert(Animated { clip, time, bones });
+            commands.entity(entity).insert(Animated {
+                clip,
+                time,
+                bones,
+                gait: Gait::Idle,
+                skeleton: appearance.skeleton.clone(),
+                all_bones,
+            });
         }
     }
 }
 
-/// Plays each actor's animation on its bones, looping.
+/// Plays each actor's animation on its bones, looping: idle, or walking or
+/// running while the simulation moves it.
 pub fn animate_actors(
     time: Res<Time>,
-    mut actors: Query<&mut Animated>,
+    data: Option<Res<GameData>>,
+    mut cache: ResMut<ActorCache>,
+    mut actors: Query<(&mut Animated, Option<&Locomotion>)>,
     mut bones: Query<&mut Transform, With<ActorBone>>,
 ) {
-    for mut animated in &mut actors {
+    for (mut animated, motion) in &mut actors {
+        let gait = Gait::from_speed(motion.map_or(0.0, |m| m.speed));
+        if gait != animated.gait
+            && let Some(data) = data.as_deref()
+        {
+            let dir = skeleton_dir(&animated.skeleton).to_owned();
+            let clip = gait
+                .files()
+                .iter()
+                .find_map(|f| cache.clip(&format!("{dir}{f}"), data));
+            if let Some(clip) = clip {
+                animated.bones = bind(&clip, &animated.all_bones);
+                animated.clip = clip;
+                animated.time = 0.0;
+            }
+            // Remember the gait even without a clip, so it isn't looked up again.
+            animated.gait = gait;
+        }
+        let in_place = animated.gait != Gait::Idle;
         let duration = animated.clip.duration.max(1e-3);
         animated.time = (animated.time + time.delta_secs()) % duration;
         let t = animated.time;
@@ -414,7 +489,9 @@ pub fn animate_actors(
             else {
                 continue;
             };
-            if let Some(v) = sample_translation(channel, t) {
+            if let Some(v) = sample_translation(channel, t)
+                && !(in_place && &**name == ACCUM_ROOT)
+            {
                 transform.translation = v;
             }
             if let Some(q) = sample_rotation(channel, t) {
