@@ -9,6 +9,7 @@ pub mod actor;
 pub mod ai;
 pub mod animated;
 pub mod cell;
+pub mod combat;
 pub mod data;
 pub mod dialogue;
 pub mod interact;
@@ -65,7 +66,7 @@ impl Plugin for SimPlugin {
             .init_resource::<script::Pending>()
             .init_resource::<trigger::PhantomCache>()
             .add_message::<animated::PlaySound>()
-            .add_systems(Update, trigger::attach_zones)
+            .add_systems(Update, (trigger::attach_zones, combat::attach_fighters))
             // The simulation steps at a fixed rate, independent of framerate.
             .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
             .add_systems(Startup, cell::load_world)
@@ -79,6 +80,7 @@ impl Plugin for SimPlugin {
                     interact::activate,
                     dialogue::update_conversations,
                     inventory::handle_actions,
+                    combat::run_combat,
                     script::run_quests,
                     trigger::update_triggers,
                     script::run_object_scripts,

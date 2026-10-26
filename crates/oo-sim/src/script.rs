@@ -203,6 +203,11 @@ pub struct ScriptState {
     pub locks: HashMap<u32, Lock>,
     /// Character generation is under way (`SetInChargen`).
     pub in_chargen: bool,
+    /// Health, magicka and fatigue of every actor met so far, and the
+    /// player's.
+    pub vitals: HashMap<u32, crate::combat::Vitals>,
+    /// Who is fighting whom.
+    pub fighting: HashMap<u32, u32>,
     started: bool,
 }
 
@@ -277,6 +282,8 @@ pub struct ActorFacts {
     /// The base form's script, if any.
     pub script: Option<u32>,
     pub items: HashMap<u32, i32>,
+    /// Attributes, skills and AI numbers from the base form.
+    pub stats: oo_formats::actors::Stats,
 }
 
 /// A change to the world that the simulation applies after the script ran.
@@ -601,7 +608,102 @@ impl Host for GameHost<'_> {
             },
             // Until disposition is modelled: everyone is neutral.
             "GetDisposition" => 50.0,
-            "GetDead" => flag(facts.dead),
+            "GetDead" => flag(
+                facts.dead
+                    || subject
+                        .and_then(|r| self.state.vitals.get(&r))
+                        .is_some_and(|v| v.dead),
+            ),
+            "GetActorValue" | "GetBaseActorValue" => {
+                let vitals = subject.and_then(|r| self.state.vitals.get(&r));
+                let base = command.name == "GetBaseActorValue";
+                let code = arg_number(args, 0) as usize;
+                let stats = &facts.stats;
+                f64::from(match code {
+                    0..=7 => f32::from(stats.attributes[code]),
+                    8..=10 => vitals.map_or(0.0, |v| {
+                        let (now, max) = match code {
+                            8 => (v.health, v.max_health),
+                            9 => (v.magicka, v.max_magicka),
+                            _ => (v.fatigue, v.max_fatigue),
+                        };
+                        if base { max } else { now }
+                    }),
+                    12..=32 => f32::from(stats.skills[code - 12]),
+                    33 => f32::from(stats.aggression),
+                    34 => f32::from(stats.confidence),
+                    35 => f32::from(stats.energy),
+                    36 => f32::from(stats.responsibility),
+                    _ => 0.0,
+                })
+            }
+            "SetActorValue" | "ModActorValue" | "ForceActorValue" => {
+                let code = arg_number(args, 0) as usize;
+                let amount = arg_number(args, 1) as f32;
+                if let Some(v) = subject.and_then(|r| self.state.vitals.get_mut(&r))
+                    && (8..=10).contains(&code)
+                {
+                    let (now, max) = match code {
+                        8 => (&mut v.health, &mut v.max_health),
+                        9 => (&mut v.magicka, &mut v.max_magicka),
+                        _ => (&mut v.fatigue, &mut v.max_fatigue),
+                    };
+                    match command.name {
+                        "SetActorValue" => {
+                            *now += amount - *max;
+                            *max = amount;
+                        }
+                        "ModActorValue" => {
+                            *now += amount;
+                            *max += amount;
+                        }
+                        _ => *now += amount,
+                    }
+                } else if self
+                    .state
+                    .unsupported
+                    .insert(format!("{} {code}", command.name))
+                {
+                    debug!("{} on actor value {code} has no effect yet", command.name);
+                }
+                1.0
+            }
+            "IsInCombat" => flag(subject.is_some_and(|r| self.state.fighting.contains_key(&r))),
+            "GetCombatTarget" => f64::from(
+                subject
+                    .and_then(|r| self.state.fighting.get(&r))
+                    .copied()
+                    .unwrap_or(0),
+            ),
+            "StartCombat" => {
+                let Some(who) = subject else {
+                    return Err("StartCombat requires a reference".into());
+                };
+                let target = match form(0) {
+                    0 => PLAYER_REF,
+                    t => t,
+                };
+                if self.state.fighting.insert(who, target).is_none() {
+                    self.state.raise(who, target, event::START_COMBAT);
+                }
+                1.0
+            }
+            "StopCombat" => {
+                if let Some(who) = subject {
+                    self.state.fighting.remove(&who);
+                }
+                1.0
+            }
+            "Kill" => {
+                if let Some(v) = subject.and_then(|r| self.state.vitals.get_mut(&r))
+                    && !v.dead
+                {
+                    v.health = 0.0;
+                    v.dead = true;
+                    v.killer = form(0);
+                }
+                1.0
+            }
             "GetDeadCount" => 0.0,
             "GetRandomPercent" => f64::from(self.state.next_random() % 100),
             "GetItemCount" => f64::from(facts.items.get(&form(0)).copied().unwrap_or(0)),
@@ -640,12 +742,9 @@ impl Host for GameHost<'_> {
             // Only interiors are loaded so far.
             "IsInInterior" => 1.0,
             "GetInWorldspace" => 0.0,
-            // Until actor values exist: an average 50 in everything.
-            "GetActorValue" | "GetBaseActorValue" => 50.0,
             // Nothing below is modelled yet; these are what the game would
             // answer for a peaceful, law-abiding start.
-            "IsInCombat"
-            | "IsSneaking"
+            "IsSneaking"
             | "IsRidingHorse"
             | "IsPlayerInJail"
             | "IsPCAMurderer"
@@ -678,9 +777,6 @@ impl Host for GameHost<'_> {
             | "RemoveSpell"
             | "AddSpell"
             | "ModDisposition"
-            | "ForceActorValue"
-            | "SetActorValue"
-            | "ModActorValue"
             | "PlaySound"
             | "PlaySound3D"
             | "LoopGroup"
@@ -1140,9 +1236,12 @@ pub(crate) fn gather_facts<'a>(
             f.factions = npc.factions.clone();
             f.level = npc.level;
             f.script = npc.script;
+            f.stats = npc.stats.clone();
         } else if let Some(c) = world.actors.creatures.get(&base) {
             f.factions = c.factions.clone();
             f.script = c.script;
+            f.stats = c.stats.clone();
+            f.level = c.stats.level;
         }
         f
     };

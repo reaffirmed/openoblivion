@@ -108,12 +108,17 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
 - [ ] The opening scene end to end: the Emperor's conversation, race and birthsign,
       the secret wall, the assassins, the escort through the Subterrane (stage 15 of
       CharacterGen reached on the PC so far)
-- [ ] Audio, in this order: (1) sound effects from `SOUN` records, 3D with the
-      records' distances, wired to doors, locks, pickups and footsteps; (2) voiced
-      dialogue from `Sound\Voice`, with the real line length and `.lip` timing for
-      subtitles and SayTo; (3) cell ambience and the music playlists from
-      `Data\Music`
-- [ ] Melee, archery and magic combat; health, magicka and fatigue
+- [x] Audio: sound effects from `SOUN` records with DirectSound's 3D falloff; voiced
+      dialogue with `.lip` timing; cell ambience and music picked the game's way
+      (loose files by music type, uniform random). Open: battle music, footsteps
+- [ ] Combat, progress: health, magicka and fatigue from the records with the
+      derived-stat formulas and regeneration, on the HUD; punching with the
+      hand-to-hand formula (left mouse) and blocking (right mouse); creatures with
+      aggression above 50 attack the player on sight and hit for their attack
+      damage; anyone hit fights back; death raises OnDeath and drops the body;
+      `StartCombat`, `StopCombat`, `IsInCombat`, `Kill`, `GetActorValue` and
+      `ModActorValue` for health, magicka and fatigue. Next: weapons, armour,
+      attack and death animations, NPC dispositions, archery, magic
 - [ ] Character creation: race, birthsign, class
 - [ ] Save and load
 

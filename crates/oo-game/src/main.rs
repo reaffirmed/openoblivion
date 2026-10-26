@@ -314,7 +314,8 @@ fn grab_cursor(
 }
 
 /// Keyboard and mouse to [`PlayerIntent`], with Oblivion's default bindings:
-/// WASD, Shift to run (Caps Lock toggles), E to jump, Space to activate.
+/// WASD, Shift to run (Caps Lock toggles), E to jump, Space to activate,
+/// left mouse to attack, right mouse to block.
 /// N toggles noclip.
 /// `--spin`: degrees per second to turn the player.
 #[derive(Resource)]
@@ -328,6 +329,7 @@ fn spin(time: Res<Time>, rate: Res<Spin>, mut players: Query<&mut PlayerIntent, 
 
 fn player_input(
     keys: Res<ButtonInput<KeyCode>>,
+    buttons: Res<ButtonInput<MouseButton>>,
     mouse: Res<AccumulatedMouseMotion>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     menu: Res<menu::Menu>,
@@ -366,6 +368,10 @@ fn player_input(
     if keys.just_pressed(KeyCode::Space) {
         intent.activate = true;
     }
+    if buttons.just_pressed(MouseButton::Left) {
+        intent.attack = true;
+    }
+    intent.block = buttons.pressed(MouseButton::Right);
     if keys.just_pressed(KeyCode::KeyN) {
         intent.noclip = !intent.noclip;
         info!("noclip {}", if intent.noclip { "on" } else { "off" });

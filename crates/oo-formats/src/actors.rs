@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use crate::Result;
+use crate::esm::Field;
 use crate::items::{Stack, for_each_top_record, u32_at};
 use crate::load_order::LoadOrder;
 
@@ -31,6 +32,7 @@ pub struct NpcInfo {
     pub script: Option<u32>,
     /// AI packages in priority order (`PKID`).
     pub packages: Vec<u32>,
+    pub stats: Stats,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -44,6 +46,125 @@ pub struct CreatureInfo {
     pub factions: Vec<(u32, i8)>,
     pub script: Option<u32>,
     pub packages: Vec<u32>,
+    pub stats: Stats,
+    /// Creature-only combat numbers (`DATA`).
+    pub combat: CreatureCombat,
+}
+
+/// The numbers an NPC or creature fights and lives by, from `ACBS`, `AIDT`
+/// and `DATA`; see `docs/reverse-engineering/combat-and-levelling.md`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Stats {
+    /// `ACBS` flags; see the `FLAG_*` constants.
+    pub flags: u32,
+    /// Magicka and fatigue on top of what attributes give.
+    pub magicka: u16,
+    pub fatigue: u16,
+    pub level: i16,
+    pub aggression: u8,
+    pub confidence: u8,
+    pub energy: u8,
+    pub responsibility: u8,
+    /// Strength, Intelligence, Willpower, Agility, Speed, Endurance,
+    /// Personality, Luck.
+    pub attributes: [u8; 8],
+    /// The 21 skills in actor-value order, Armorer to Speechcraft. Creatures
+    /// have three: combat, magic and stealth, which stand in for the skills
+    /// each governs.
+    pub skills: [u8; 21],
+    pub health: u32,
+}
+
+impl Stats {
+    pub const FLAG_FEMALE: u32 = 0x1;
+    pub const FLAG_ESSENTIAL: u32 = 0x2;
+    pub const FLAG_RESPAWN: u32 = 0x8;
+    pub const FLAG_AUTO_CALC: u32 = 0x10;
+    pub const FLAG_PC_LEVEL_OFFSET: u32 = 0x80;
+    pub const FLAG_NO_LOW_LEVEL: u32 = 0x200;
+
+    pub const STRENGTH: usize = 0;
+    pub const INTELLIGENCE: usize = 1;
+    pub const WILLPOWER: usize = 2;
+    pub const AGILITY: usize = 3;
+    pub const SPEED: usize = 4;
+    pub const ENDURANCE: usize = 5;
+    pub const PERSONALITY: usize = 6;
+    pub const LUCK: usize = 7;
+
+    pub const BLADE: usize = 2;
+    pub const BLOCK: usize = 3;
+    pub const BLUNT: usize = 4;
+    pub const HAND_TO_HAND: usize = 5;
+    pub const MARKSMAN: usize = 16;
+
+    /// The essential flag: the actor is knocked out instead of dying.
+    pub fn essential(&self) -> bool {
+        self.flags & Self::FLAG_ESSENTIAL != 0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct CreatureCombat {
+    /// Creature, daedra, undead, humanoid, horse, giant.
+    pub kind: u8,
+    pub combat: u8,
+    pub magic: u8,
+    pub stealth: u8,
+    pub soul: u8,
+    pub attack_damage: u16,
+}
+
+/// The skills a creature's combat and magic numbers stand for; stealth
+/// covers the rest.
+const CREATURE_COMBAT_SKILLS: std::ops::RangeInclusive<usize> = 0..=6;
+const CREATURE_MAGIC_SKILLS: std::ops::RangeInclusive<usize> = 7..=13;
+
+fn stats(fields: &[Field<'_>], creature: bool) -> (Stats, CreatureCombat) {
+    let find = |tag: &[u8; 4], len: usize| {
+        fields
+            .iter()
+            .find(|f| f.tag.0 == *tag && f.data.len() >= len)
+            .map(|f| f.data)
+    };
+    let u16_at = |d: &[u8], at: usize| u16::from_le_bytes([d[at], d[at + 1]]);
+    let mut s = Stats::default();
+    let mut c = CreatureCombat::default();
+    if let Some(d) = find(b"ACBS", 16) {
+        s.flags = u32_at(d, 0);
+        s.magicka = u16_at(d, 4);
+        s.fatigue = u16_at(d, 6);
+        s.level = u16_at(d, 10) as i16;
+    }
+    if let Some(d) = find(b"AIDT", 4) {
+        [s.aggression, s.confidence, s.energy, s.responsibility] = [d[0], d[1], d[2], d[3]];
+    }
+    if creature {
+        if let Some(d) = find(b"DATA", 20) {
+            c = CreatureCombat {
+                kind: d[0],
+                combat: d[1],
+                magic: d[2],
+                stealth: d[3],
+                soul: d[4],
+                attack_damage: u16_at(d, 10),
+            };
+            s.health = u32::from(u16_at(d, 6));
+            s.attributes.copy_from_slice(&d[12..20]);
+            s.skills = [c.stealth; 21];
+            for i in CREATURE_COMBAT_SKILLS {
+                s.skills[i] = c.combat;
+            }
+            for i in CREATURE_MAGIC_SKILLS {
+                s.skills[i] = c.magic;
+            }
+        }
+    } else if let Some(d) = find(b"DATA", 33) {
+        s.skills.copy_from_slice(&d[..21]);
+        s.health = u32_at(d, 21);
+        s.attributes.copy_from_slice(&d[25..33]);
+    }
+    (s, c)
 }
 
 /// One piece of a race's head (`NAM0` section) or body (`NAM1`).
@@ -235,10 +356,12 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
                         factions: factions(),
                         script: form(b"SCRI"),
                         packages: packages(),
+                        stats: stats(&fields, false).0,
                     },
                 );
             }
             b"CREA" => {
+                let (stats, combat) = stats(&fields, true);
                 let body_models = fields
                     .iter()
                     .filter(|f| f.tag.0 == *b"NIFZ")
@@ -257,6 +380,8 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
                         factions: factions(),
                         script: form(b"SCRI"),
                         packages: packages(),
+                        stats,
+                        combat,
                     },
                 );
             }

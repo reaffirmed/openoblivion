@@ -12,6 +12,7 @@
 //! 160 move 400 300       # put the cursor here, in window pixels
 //! 161 click              # left button down and up
 //! 170 wheel -2           # scroll, in lines (negative is down)
+//! 180 block 2            # hold the right mouse button for this many seconds
 //! 200 quit
 //! ```
 //!
@@ -25,6 +26,8 @@
 //! t40 expect stage CharacterGen >= 14      # ==, >=, <=, >, <
 //! t40 expect near 824 -104 0 64            # the player within 64 units
 //! t40 expect actor 0002ABCD near 200 0 30 100
+//! t50 expect health player >= 20           # or a reference in hex
+//! t50 expect dead 0002ABCD                 # or alive
 //! t60 quit
 //! ```
 
@@ -49,6 +52,9 @@ enum Action {
     Quit,
     ExpectStage(String, Compare, u16),
     ExpectNear(Option<u32>, Vec3, f32),
+    Block(f32),
+    ExpectHealth(Option<u32>, Compare, f32),
+    ExpectDead(u32, bool),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -72,7 +78,7 @@ impl Compare {
         })
     }
 
-    fn holds(self, a: u16, b: u16) -> bool {
+    fn holds<T: PartialOrd>(self, a: T, b: T) -> bool {
         match self {
             Self::Eq => a == b,
             Self::Ge => a >= b,
@@ -103,6 +109,8 @@ pub struct Script {
     /// Held down until their seconds run out.
     holding: Vec<(KeyCode, f32)>,
     held_click: bool,
+    /// Seconds the right button stays down.
+    blocking: f32,
 }
 
 pub struct ScriptPlugin(pub PathBuf);
@@ -120,6 +128,7 @@ impl Plugin for ScriptPlugin {
                     held_keys: Vec::new(),
                     holding: Vec::new(),
                     held_click: false,
+                    blocking: 0.0,
                 })
                 .add_systems(PreUpdate, run_script.after(InputSystems));
             }
@@ -158,6 +167,7 @@ fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
             "wheel" => Action::Wheel(words.next().ok_or_else(bad)?.parse()?),
             "shot" => Action::Shot(words.next().ok_or_else(bad)?.into()),
             "quit" => Action::Quit,
+            "block" => Action::Block(number(&mut words)?),
             "expect" => match words.next().ok_or_else(bad)? {
                 "stage" => {
                     let quest = words.next().ok_or_else(bad)?.to_owned();
@@ -185,6 +195,18 @@ fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
                     );
                     Action::ExpectNear(Some(id), at, number(&mut words)?)
                 }
+                "health" => {
+                    let who = match words.next().ok_or_else(bad)? {
+                        "player" => None,
+                        id => Some(u32::from_str_radix(id, 16)?),
+                    };
+                    let op = Compare::parse(words.next().ok_or_else(bad)?).ok_or_else(bad)?;
+                    Action::ExpectHealth(who, op, number(&mut words)?)
+                }
+                which @ ("dead" | "alive") => Action::ExpectDead(
+                    u32::from_str_radix(words.next().ok_or_else(bad)?, 16)?,
+                    which == "dead",
+                ),
                 _ => return Err(bad()),
             },
             _ => return Err(bad()),
@@ -281,6 +303,12 @@ fn run_script(
     if std::mem::take(&mut script.held_click) {
         mouse.release(MouseButton::Left);
     }
+    if script.blocking > 0.0 {
+        script.blocking -= dt;
+        if script.blocking <= 0.0 {
+            mouse.release(MouseButton::Right);
+        }
+    }
     let frame = script.frame;
     let now = fixed.elapsed_secs();
     let mut due: Vec<Action> = Vec::new();
@@ -360,6 +388,24 @@ fn run_script(
                 let pass = have.is_some_and(|h| op.holds(h, want));
                 check(&mut script, pass, || {
                     format!("stage {quest} is {have:?}, wanted {op:?} {want}")
+                });
+            }
+            Action::Block(seconds) => {
+                mouse.press(MouseButton::Right);
+                script.blocking = seconds;
+            }
+            Action::ExpectHealth(who, op, want) => {
+                let r = who.unwrap_or(oo_sim::script::PLAYER_REF);
+                let have = state.vitals.get(&r).map(|v| v.health);
+                let pass = have.is_some_and(|h| op.holds(h, want));
+                check(&mut script, pass, || {
+                    format!("{r:08X} has health {have:?}, wanted {op:?} {want}")
+                });
+            }
+            Action::ExpectDead(r, dead) => {
+                let have = state.vitals.get(&r).map(|v| v.dead);
+                check(&mut script, have == Some(dead), || {
+                    format!("{r:08X} dead is {have:?}, wanted {dead}")
                 });
             }
             Action::ExpectNear(who, at, radius) => {

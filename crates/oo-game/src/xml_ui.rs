@@ -13,7 +13,8 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::PrimaryWindow;
 use byroredux_menuxml::{MenuAssets, MenuProfile, MenuRenderer, ScreenTraits, TextureSet};
 
-use oo_sim::{GameData, Player, PlayerIntent};
+use oo_sim::script::PLAYER_REF;
+use oo_sim::{GameData, Player, PlayerIntent, ScriptState};
 
 use crate::menu::Menu;
 
@@ -249,6 +250,7 @@ pub fn update_hud_overlay(
     menu: Res<Menu>,
     window: Query<&Window, With<PrimaryWindow>>,
     players: Query<&PlayerIntent, With<Player>>,
+    script: Res<ScriptState>,
     mut images: ResMut<Assets<Image>>,
 ) {
     let (Some(data), Ok(window), Ok(intent)) = (data, window.single(), players.single()) else {
@@ -271,13 +273,21 @@ pub fn update_hud_overlay(
     }
     // Yaw turns counter-clockwise from north; the compass wants clockwise degrees.
     let heading = (-intent.yaw.to_degrees()).rem_euclid(360.0).round() as i32 % 360;
+    // In hundredths, so regeneration redraws the bars only when they move.
+    let ratio = |now: f32, max: f32| {
+        if max > 0.0 {
+            ((now / max).clamp(0.0, 1.0) * 100.0).round() / 100.0
+        } else {
+            1.0
+        }
+    };
+    let vitals = script.vitals.get(&PLAYER_REF).copied().unwrap_or_default();
     let state = HudState {
         size,
         heading,
-        // Until actors have health, magicka and fatigue.
-        health: 1.0,
-        magicka: 1.0,
-        fatigue: 1.0,
+        health: ratio(vitals.health, vitals.max_health),
+        magicka: ratio(vitals.magicka, vitals.max_magicka),
+        fatigue: ratio(vitals.fatigue, vitals.max_fatigue),
         explore: !menu.is_open(),
     };
     if hud.drawn == Some(state) {

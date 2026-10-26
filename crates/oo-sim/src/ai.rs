@@ -93,6 +93,10 @@ pub struct Ai {
     reevaluate_in: f32,
     /// Seconds until a wanderer picks somewhere new.
     wander_in: f32,
+    /// In a fight: packages wait while combat decides.
+    pub fighting: bool,
+    /// Where combat wants the actor to run to.
+    pub chase: Option<Vec3>,
 }
 
 impl Ai {
@@ -346,7 +350,10 @@ pub(crate) fn run_ai(
     cell: Option<Res<CurrentCell>>,
     mut state: ResMut<ScriptState>,
     refs: Query<(&PlacedRef, &Transform), Without<Ai>>,
-    mut actors: Query<(&PlacedRef, &Actor, &mut Transform, &mut Ai, &mut Locomotion)>,
+    mut actors: Query<
+        (&PlacedRef, &Actor, &mut Transform, &mut Ai, &mut Locomotion),
+        Without<crate::combat::Dead>,
+    >,
     players: Query<PlayerView, (With<Player>, Without<Ai>)>,
 ) {
     let Some(world) = world else { return };
@@ -414,7 +421,12 @@ pub(crate) fn run_ai(
         let package = ai.current.and_then(|p| world.packages.get(&p));
         let mut speed = 0.0;
         let mut goal = None;
-        if let Some(p) = package {
+        if ai.fighting {
+            goal = ai.chase;
+            if goal.is_some() {
+                speed = RUN_SPEED;
+            }
+        } else if let Some(p) = package {
             let run = p.flags & Package::ALWAYS_RUN != 0;
             let pace = if run { RUN_SPEED } else { WALK_SPEED };
             match p.kind {

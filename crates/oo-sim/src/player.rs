@@ -40,6 +40,10 @@ pub struct PlayerIntent {
     pub noclip: bool,
     /// Activate what's in front of you. One-shot: the simulation clears it.
     pub activate: bool,
+    /// Swing. One-shot: the simulation clears it.
+    pub attack: bool,
+    /// Hold up a guard.
+    pub block: bool,
 }
 
 /// The player's position at the last two simulation steps. The simulation runs
