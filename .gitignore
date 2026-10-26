@@ -8,3 +8,4 @@
 
 # Local game install lives here; never commit it.
 /Oblivion/
+.claude/settings.local.json
