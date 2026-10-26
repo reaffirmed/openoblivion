@@ -89,9 +89,17 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
       dialogue, the journal and the rest replace today's text placeholders. Because
       the layouts come from the player's own files, UI mods such as DarNified UI and
       DarkUId DarN work as they do in the original.
-- [ ] Dialogue: topics, conditions, the dialogue screen
-- [ ] The script engine: compile and run Oblivion's script language (quest stages,
-      result scripts, object scripts)
+- [ ] The real menus, progress: HUD done and matching the game; inventory, container
+      and dialogue screens drawn from the XML with readable fonts and mouse input;
+      row alignment and screen anchoring still off
+- [x] Dialogue data and picking: topics, lines, conditions (all 124 functions vanilla
+      uses decode; the most used ones answer), random pools, say-once, the dialogue
+      screen
+- [x] The script engine, compiled half: every vanilla script (9,440 counting dialogue
+      and quest-stage results) decodes and runs; quest scripts on their timers, stage
+      results, Enable/Disable, AddTopic, AddItem, MessageBox
+- [ ] The script engine, the rest: object scripts and their event blocks, the long
+      tail of commands, compiling source for mods that ship only source
 - [ ] AI packages, enough for the Emperor's escort and hostile rats, goblins and
       zombies
 - [ ] Melee, archery and magic combat; health, magicka and fatigue
