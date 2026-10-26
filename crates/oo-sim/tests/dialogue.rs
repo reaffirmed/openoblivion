@@ -261,3 +261,93 @@ fn quest_scripts_set_stages_and_dialogue_follows() {
         assert!(matches!(pick, Pick::Line(0x53 | 0x54)), "{pick:?}");
     }
 }
+
+/// `Begin <block> [args]`, its body, then `End`.
+fn block(kind: u16, args: &[u8], body: &[Vec<u8>]) -> Vec<u8> {
+    let body = [body.concat(), stmt(0x11, &[])].concat();
+    let mut header = kind.to_le_bytes().to_vec();
+    header.extend((body.len() as u32).to_le_bytes());
+    header.extend(args);
+    [stmt(0x10, &header), body].concat()
+}
+
+fn set_short(index: u16, value: &str) -> Vec<u8> {
+    let expr = format!(" {value}").into_bytes();
+    let mut p = vec![b's'];
+    p.extend(index.to_le_bytes());
+    p.extend((expr.len() as u16).to_le_bytes());
+    p.extend(expr);
+    stmt(0x15, &p)
+}
+
+#[test]
+fn object_scripts_catch_events() {
+    use oo_formats::scripts::{Script, ScriptCode, ScriptKind, ScriptRef};
+    use oo_script::{Locals, Outcome};
+    use oo_sim::script::{Event, GameHost, event};
+
+    const LEVER: u32 = 0x70;
+    const LEVER_SCRIPT: u32 = 0x71;
+    const PACKAGE: u32 = 0x72;
+    let one_package = [&1u16.to_le_bytes()[..], b"r", &1u16.to_le_bytes()].concat();
+    let code = [
+        stmt(0x1D, &[]),
+        block(21, &[], &[set_short(1, "1")]),
+        block(2, &[], &[call(0x100D, &[])]),
+        block(16, &one_package, &[set_short(2, "1")]),
+    ]
+    .concat();
+    let mut data = ScriptData::default();
+    data.scripts.insert(
+        LEVER_SCRIPT,
+        Script {
+            kind: ScriptKind::Object,
+            code: ScriptCode {
+                compiled: code.clone(),
+                refs: vec![ScriptRef::Form(PACKAGE)],
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    data.decoded
+        .insert(LEVER_SCRIPT, oo_script::decode(&code).unwrap());
+    assert!(data.handles_activation(LEVER_SCRIPT));
+    let facts = facts();
+    let mut state = ScriptState::default();
+    let mut locals = Locals::default();
+    let mut run = |state: &mut ScriptState, locals: &mut Locals| {
+        let mut host = GameHost::new(&data, state, &facts, Some(LEVER));
+        let outcome = host.run_script(LEVER_SCRIPT, locals, Event::GameMode);
+        assert_eq!(outcome, Outcome::Finished);
+        let effects = std::mem::take(&mut host.effects);
+        // As the simulation does after a completed run.
+        for e in state.events.get_mut(&LEVER).into_iter().flatten() {
+            e.1 = 0;
+        }
+        state.activated.remove(&LEVER);
+        effects
+    };
+
+    // OnLoad reaches a script that hasn't run yet.
+    state.raise(LEVER, 0, event::LOAD);
+    assert!(run(&mut state, &mut locals).is_empty());
+    assert_eq!(locals.get(1), 1.0);
+
+    // OnActivate: the script's own Activate does the usual thing.
+    state.activated.insert(LEVER, PLAYER_REF);
+    let effects = run(&mut state, &mut locals);
+    assert_eq!(
+        effects,
+        [WorldEffect::Activate {
+            target: LEVER,
+            by: PLAYER_REF,
+            run_script: false
+        }]
+    );
+
+    // A filtered block hears events only once it has been evaluated.
+    state.raise(LEVER, PACKAGE, event::PACKAGE_DONE);
+    run(&mut state, &mut locals);
+    assert_eq!(locals.get(2), 1.0);
+}
