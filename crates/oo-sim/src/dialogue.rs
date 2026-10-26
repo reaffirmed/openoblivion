@@ -18,6 +18,13 @@ use crate::script::{
 /// The topic every conversation opens with.
 pub const GREETING: &str = "GREETING";
 
+/// Topics the game finds by form ID in `Oblivion.esm`.
+pub const GREETING_ID: u32 = 0xC8;
+/// Matches any earlier topic when choices are matched.
+pub const ANY_ID: u32 = 0xD3;
+/// Rumours, asked at most once per conversation.
+pub const INFOGENERAL_ID: u32 = 0xD7;
+
 /// What a topic answers with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pick {
@@ -124,7 +131,8 @@ pub fn say(
     host.effects
 }
 
-/// The topics the player can ask `speaker` about, sorted by name.
+/// The topics the player can ask `speaker` about from what they know, sorted
+/// by name.
 pub fn available_topics(
     data: &ScriptData,
     state: &mut ScriptState,
@@ -138,20 +146,35 @@ pub fn available_topics(
             .get(t)
             .is_some_and(|topic| topic.kind == TopicKind::Topic)
     });
-    let mut out: Vec<u32> = known
-        .into_iter()
-        .filter(|&t| {
-            matches!(
-                pick_response(data, state, facts, t, speaker),
-                Some(Pick::Line(_))
-            )
-        })
-        .collect();
-    out.sort_by(|a, b| {
+    known.sort_by(|a, b| {
         data.dialogue.topics[a]
             .name
             .cmp(&data.dialogue.topics[b].name)
     });
+    topics_from(data, state, facts, speaker, &known)
+}
+
+/// The topics of `source` that `speaker` has an answer for, in order, without
+/// duplicates. `GREETING` is never one; it only opens the conversation.
+pub fn topics_from(
+    data: &ScriptData,
+    state: &mut ScriptState,
+    facts: &HashMap<u32, ActorFacts>,
+    speaker: u32,
+    source: &[u32],
+) -> Vec<u32> {
+    let mut out = Vec::new();
+    for &t in source {
+        if t == GREETING_ID || out.contains(&t) {
+            continue;
+        }
+        if matches!(
+            pick_response(data, state, facts, t, speaker),
+            Some(Pick::Line(_))
+        ) {
+            out.push(t);
+        }
+    }
     out
 }
 
@@ -176,6 +199,10 @@ pub struct Conversation {
     pub topics: Vec<u32>,
     /// The line is a goodbye: the conversation ends once it's been read.
     pub goodbye: bool,
+    /// The last line's choices, which replace the known topics while set.
+    pub choices: Vec<u32>,
+    /// Rumours have been asked about in this conversation.
+    pub asked_rumors: bool,
 }
 
 impl Conversation {
@@ -243,21 +270,36 @@ pub(crate) fn update_conversations(
             continue;
         };
         for topic in asked {
+            if topic == INFOGENERAL_ID {
+                talk.asked_rumors = true;
+            }
+            talk.line = None;
+            talk.choices.clear();
             match pick_response(data, &mut state, &facts, topic, speaker) {
-                Some(pick) => {
-                    let info = pick.info();
+                Some(Pick::Line(info)) => {
                     effects.extend(say(data, &mut state, &facts, info, speaker));
                     talk.line = Some((topic, info));
-                    talk.goodbye = data
-                        .dialogue
-                        .infos
-                        .get(&info)
-                        .is_some_and(|i| i.flags & Info::GOODBYE != 0);
+                    let line = data.dialogue.infos.get(&info);
+                    talk.goodbye = line.is_some_and(|i| i.flags & Info::GOODBYE != 0);
+                    talk.choices = line.map(|i| i.choices.clone()).unwrap_or_default();
                 }
-                None => talk.line = None,
+                // The game answers with a line from its built-in refusal
+                // topic instead, which isn't identified yet.
+                Some(Pick::DispositionTooLow(info)) => {
+                    debug!("{speaker:08X} refuses {topic:08X} ({info:08X}): disposition too low");
+                }
+                None => {}
             }
         }
-        talk.topics = available_topics(data, &mut state, &facts, speaker);
+        talk.topics = if talk.choices.is_empty() {
+            available_topics(data, &mut state, &facts, speaker)
+        } else {
+            let choices = talk.choices.clone();
+            topics_from(data, &mut state, &facts, speaker, &choices)
+        };
+        if talk.asked_rumors {
+            talk.topics.retain(|&t| t != INFOGENERAL_ID);
+        }
         apply_effects(effects, &mut changes, &mut pending, Some(&mut inventory));
         if goodbye {
             *talk = Conversation::default();
