@@ -83,6 +83,10 @@ struct Args {
     /// Start with collision shapes shown, as if F3 had been pressed.
     #[arg(long)]
     show_collision: bool,
+    /// Start without character generation: no prison, no tutorial scripts
+    /// moving the player. For trying other cells.
+    #[arg(long)]
+    skip_chargen: bool,
     /// Leave NPCs and creatures in their skeleton's bind pose instead of animating them.
     #[arg(long)]
     bind_pose: bool,
@@ -201,6 +205,11 @@ fn main() -> AppExit {
     );
     if let Some(camera) = args.camera {
         app.insert_resource(CameraStart(camera));
+    }
+    if args.skip_chargen {
+        app.add_systems(Startup, |mut state: ResMut<ScriptState>| {
+            state.skip_chargen = true;
+        });
     }
     if let Some(path) = args.script {
         app.add_plugins(script::ScriptPlugin(path));

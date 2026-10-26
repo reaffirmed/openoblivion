@@ -346,6 +346,11 @@ pub(crate) fn animate_objects(
                     state.doors.insert(placed.0, now);
                     let info = door.and_then(|Door(base)| world.as_ref()?.doors.get(base));
                     let sound = info.map_or(0, |d| if open { d.open_sound } else { d.close_sound });
+                    debug!(
+                        "{:08X}: door {} (sound {sound:08X})",
+                        placed.0,
+                        if open { "opens" } else { "closes" }
+                    );
                     if sound != 0 {
                         sounds.write(PlaySound {
                             source: placed.0,

@@ -166,6 +166,7 @@ pub fn update_chargen(
                 .filter(|c| list.iter().any(|(id, _)| id == c))
                 .or(Some(oo_sim::character::suggested_class(&state.skill_use))),
         };
+        info!("character creation: {next:?} menu");
         *screen = ChargenScreen {
             open: Some(next),
             row: list.iter().position(|c| Some(c.0) == current).unwrap_or(0),

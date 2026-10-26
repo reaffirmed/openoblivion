@@ -215,6 +215,11 @@ pub struct ScriptState {
     /// How much the player has used each skill, in skill-index order; the
     /// class menu suggests a class from it.
     pub skill_use: [f32; 21],
+    /// Start without character generation, for testing elsewhere than the
+    /// prison (`--skip-chargen`).
+    pub skip_chargen: bool,
+    /// The race menu a new game opens with has been asked for.
+    pub race_menu_asked: bool,
     /// A character-creation menu is up (the client says so): the game is in
     /// menu mode, so `GameMode` scripts, AI and fighting wait.
     pub menu_open: bool,
@@ -229,7 +234,7 @@ impl ScriptState {
             return;
         }
         self.started = true;
-        if data.dialogue.quests.contains_key(&data.chargen_quest) {
+        if !self.skip_chargen && data.dialogue.quests.contains_key(&data.chargen_quest) {
             self.quests.entry(data.chargen_quest).or_default().running = true;
             self.in_chargen = true;
         }
@@ -606,7 +611,12 @@ impl Host for GameHost<'_> {
             "GetIsRace" => flag(facts.race == form(0)),
             "GetIsSex" => flag(facts.female == (arg_number(args, 0) as u16 == 1)),
             "GetIsClass" => flag(facts.class == Some(form(0))),
+            // The class the class menu would suggest, against a class given
+            // or the actor's own.
             "GetIsClassDefault" => {
+                flag(form(0) == crate::character::suggested_class(&self.state.skill_use))
+            }
+            "GetClassDefaultMatch" => {
                 flag(facts.class == Some(crate::character::suggested_class(&self.state.skill_use)))
             }
             "GetPCIsRace" => flag(player.race == form(0)),
@@ -672,7 +682,8 @@ impl Host for GameHost<'_> {
                             *now += amount;
                             *max += amount;
                         }
-                        _ => *now += amount,
+                        // ForceActorValue sets the current value outright.
+                        _ => *now = amount,
                     }
                 } else if self
                     .state
@@ -814,6 +825,7 @@ impl Host for GameHost<'_> {
             | "DisableLinkedPathPoints"
             | "EnableLinkedPathPoints"
             | "EnablePlayerControls"
+            | "StopCombatAlarmOnActor"
             | "DisablePlayerControls"
             | "Autosave" => {
                 if self.state.unsupported.insert(command.name.to_owned()) {

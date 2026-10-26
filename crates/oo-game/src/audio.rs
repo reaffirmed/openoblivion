@@ -163,7 +163,7 @@ fn play_sounds(
             SoundRef::EditorId(name) => world.sound_ids.get(&name.to_ascii_lowercase()).copied(),
         };
         let Some(sound) = id.and_then(|id| world.sounds.get(&id)) else {
-            debug!("no sound record for {:?}", request.sound);
+            warn!("no sound record for {:?}", request.sound);
             continue;
         };
         let Some(path) = cache.pick(sound, &data) else {
