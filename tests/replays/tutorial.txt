@@ -1,4 +1,4 @@
-# The tutorial prison from a new game, as far as the scene goes so far.
+# The tutorial from a new game, by the player's route, as far as it goes so far.
 #
 #   oo-game --data <Oblivion Data> --cell ImperialDungeon01 --script tests/replays/tutorial.txt
 #
@@ -46,11 +46,41 @@ t176 key Enter
 t300 expect stage Charactergen >= 18
 
 # Renault walks to the switch and opens the secret wall (19); the Blades
-# lead the Emperor through it (20). The ambush (22) waits for the player to
-# come within 480 units of CGMarkerCEmperor or 900 of CGMarkerC2Renote, and
-# this replay stays in the cell.
+# lead the Emperor through it (20).
 t330 expect stage Charactergen >= 19
 t380 expect stage Charactergen >= 20
-t420 expect stage Charactergen == 20
 
-t430 quit
+# Follow the Emperor (00032A17) out through the wall. The ambush (22) waits
+# for the player to come near; Renault (00032A15) dies by script and the
+# Blades kill the four assassins (26 to 29).
+t381 follow 00032A17 250
+t382 await stage Charactergen >= 22 120
+t383 await stage Charactergen >= 29 180
+t384 expect dead 00032A15
+t384 expect dead 000178C4
+t384 expect dead 00014A30
+t384 expect dead 000178C3
+t384 expect dead 00014A2C
+t384 expect alive 00032A17
+t384 expect alive 00032A16
+t384 expect alive 00032A18
+
+# The Blades take the Emperor through the door to the Subterrane (00022288).
+# It's locked for good on this side; the player has to find another way.
+t385 await actor 00032A17 cell 00022288 180
+t386 expect actor 00032A16 cell 00022288
+t386 expect actor 00032A18 cell 00022288
+t387 follow off
+t388 expect cell ImperialDungeon01
+
+# Take a dead assassin's gear and arm up.
+t390 travel 000178C3
+t396 take all
+t397 where
+
+# Through the hole into the natural caves.
+t400 travel 000248B2
+t401 await cell ImperialDungeon04 60
+t402 where
+
+t410 quit
