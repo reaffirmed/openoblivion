@@ -650,6 +650,9 @@ pub(crate) fn run_ai(
                                         pending.greetings.push(placed.0);
                                     } else {
                                         info!("{:08X} activates {target:08X}", placed.0);
+                                        state.npc_talks.push(crate::dialogue::NpcTalk::start(
+                                            placed.0, target,
+                                        ));
                                     }
                                 }
                             }

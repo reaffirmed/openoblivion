@@ -216,6 +216,8 @@ pub struct ScriptState {
     pub faction_reaction_mods: HashMap<(u32, u32), i32>,
     /// Aggression scripts set, by reference.
     pub aggression: HashMap<u32, f32>,
+    /// Conversations between actors under way.
+    pub npc_talks: Vec<crate::dialogue::NpcTalk>,
     /// Lines actors said outside conversation, oldest first; the client
     /// shows and drains them.
     pub subtitles: Vec<Subtitle>,
@@ -556,6 +558,33 @@ impl<'a> GameHost<'a> {
                 }
             }
         }
+    }
+
+    /// Says a line out loud: runs it (see [`crate::dialogue::say_to`]) and
+    /// shows it as a subtitle with its voice. Returns how long it takes.
+    pub fn speak(&mut self, speaker: u32, info: u32, target: u32, how: &str) -> f32 {
+        let effects =
+            crate::dialogue::say_to(self.data, self.state, self.facts, info, speaker, target);
+        self.effects.extend(effects);
+        let text = self.data.dialogue.infos[&info]
+            .responses
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let (voice, voiced) = match self.voice {
+            Some(v) => v.line(info, self.facts.get(&speaker).map(|f| (f.race, f.female))),
+            None => (Vec::new(), None),
+        };
+        let seconds = voiced.unwrap_or_else(|| crate::dialogue::speaking_time(&text));
+        info!("{speaker:08X} {} {info:08X}: {text}", how);
+        self.state.subtitles.push(Subtitle {
+            speaker,
+            text,
+            seconds,
+            voice,
+        });
+        seconds
     }
 
     fn unsupported(&mut self, name: &str) -> f64 {
@@ -980,10 +1009,13 @@ impl Host for GameHost<'_> {
                 let Some(speaker) = subject else {
                     return Err(format!("{} requires a reference", command.name));
                 };
-                let topic = form(usize::from(command.name == "SayTo"));
-                let Some((_, info)) =
-                    crate::dialogue::answer(self.data, self.state, self.facts, topic, speaker)
-                else {
+                let (topic, target) = match command.name {
+                    "SayTo" => (form(1), form(0)),
+                    _ => (form(0), PLAYER_REF),
+                };
+                let Some((_, info)) = crate::dialogue::answer_to(
+                    self.data, self.state, self.facts, topic, speaker, target,
+                ) else {
                     if self
                         .state
                         .unsupported
@@ -996,28 +1028,7 @@ impl Host for GameHost<'_> {
                     }
                     return Ok(0.0);
                 };
-                let effects =
-                    crate::dialogue::say(self.data, self.state, self.facts, info, speaker);
-                self.effects.extend(effects);
-                let text = self.data.dialogue.infos[&info]
-                    .responses
-                    .iter()
-                    .map(|r| r.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let (voice, voiced) = match self.voice {
-                    Some(v) => v.line(info, self.facts.get(&speaker).map(|f| (f.race, f.female))),
-                    None => (Vec::new(), None),
-                };
-                let seconds = voiced.unwrap_or_else(|| crate::dialogue::speaking_time(&text));
-                info!("{speaker:08X} {} {info:08X}: {text}", command.name);
-                self.state.subtitles.push(Subtitle {
-                    speaker,
-                    text,
-                    seconds,
-                    voice,
-                });
-                f64::from(seconds)
+                f64::from(self.speak(speaker, info, target, command.name))
             }
 
             // What scripts do.

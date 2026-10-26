@@ -82,6 +82,7 @@ impl Plugin for SimPlugin {
                     interact::update_looking_at,
                     interact::activate,
                     dialogue::update_conversations,
+                    dialogue::run_npc_conversations.run_if(character::in_game_mode),
                     character::apply_choices,
                     inventory::handle_actions,
                     combat::fly_arrows.run_if(character::in_game_mode),

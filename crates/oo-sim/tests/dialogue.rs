@@ -4,7 +4,9 @@ use std::collections::HashMap;
 
 use oo_formats::esm::Plugin;
 use oo_formats::load_order::LoadOrder;
-use oo_sim::dialogue::{Pick, available_topics, pick_response, say, topic_by_editor_id};
+use oo_sim::dialogue::{
+    Pick, available_topics, pick_response, pick_response_to, say, say_to, topic_by_editor_id,
+};
 use oo_sim::script::{ActorFacts, PLAYER_REF, ScriptData, ScriptState, WorldEffect, tick_quests};
 
 const QUEST: u32 = 0x10;
@@ -15,6 +17,7 @@ const GUARD: u32 = 0x30;
 const BAURUS: u32 = 0x31;
 const GUARD_REF: u32 = 0x40;
 const GATE_REF: u32 = 0x41;
+const BAURUS_REF: u32 = 0x42;
 
 fn field(tag: &[u8; 4], data: &[u8]) -> Vec<u8> {
     let mut out = tag.to_vec();
@@ -188,7 +191,16 @@ fn order() -> LoadOrder {
         info(0x54, 0x02 | 0x20, "Yes?", vec![]),
         info(0x55, 0, "Never reached.", vec![]),
     ];
-    let rumors = [info(0x60, 0, "They say the Emperor is here.", vec![])];
+    let rumors = [
+        // Only to Baurus: a run-on-target GetIsID.
+        info(
+            0x61,
+            0,
+            "Hello, Baurus.",
+            vec![ctda(0x02, 1.0, 0x48, BAURUS)],
+        ),
+        info(0x60, 0, "They say the Emperor is here.", vec![]),
+    ];
     let plugin = [
         header,
         group(*b"SCPT", 0, &[script]),
@@ -221,8 +233,31 @@ fn facts() -> HashMap<u32, ActorFacts> {
                 ..Default::default()
             },
         ),
+        (
+            BAURUS_REF,
+            ActorFacts {
+                base: BAURUS,
+                ..Default::default()
+            },
+        ),
         (PLAYER_REF, ActorFacts::default()),
     ])
+}
+
+#[test]
+fn lines_can_be_for_another_actor() {
+    let data = ScriptData::load(&order()).unwrap();
+    let facts = facts();
+    let mut state = ScriptState::default();
+    tick_quests(&data, &mut state, &facts, 0.1, None);
+    let to = |state: &mut ScriptState, target| {
+        pick_response_to(&data, state, &facts, RUMORS, GUARD_REF, target)
+    };
+    assert_eq!(to(&mut state, BAURUS_REF), Some(Pick::Line(0x61)));
+    assert_eq!(to(&mut state, PLAYER_REF), Some(Pick::Line(0x60)));
+    // A line to another actor doesn't count as talking to the player.
+    say_to(&data, &mut state, &facts, 0x61, GUARD_REF, BAURUS_REF);
+    assert!(!state.talked_to_pc.contains(&GUARD_REF));
 }
 
 #[test]

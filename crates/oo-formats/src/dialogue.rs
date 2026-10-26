@@ -115,6 +115,9 @@ pub struct Info {
     pub topic: u32,
     pub quest: u32,
     pub flags: u8,
+    /// Who speaks next in a conversation between actors (`DATA`): see the
+    /// `NEXT_*` constants.
+    pub next_speaker: u8,
     pub responses: Vec<Response>,
     pub conditions: Vec<Condition>,
     /// Choices offered after this line (`TCLT`), for conversation trees.
@@ -131,6 +134,10 @@ impl Info {
     pub const REFUSAL: u8 = 0x10;
     pub const RANDOM_END: u8 = 0x20;
     pub const RUMORS: u8 = 0x40;
+
+    pub const NEXT_TARGET: u8 = 0;
+    pub const NEXT_SELF: u8 = 1;
+    pub const NEXT_EITHER: u8 = 2;
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -301,7 +308,10 @@ fn read_info(
     let mut script = ScriptReader::default();
     for f in &fields {
         match &f.tag.0 {
-            b"DATA" if f.data.len() >= 3 => info.flags = f.data[2],
+            b"DATA" if f.data.len() >= 3 => {
+                info.next_speaker = f.data[1];
+                info.flags = f.data[2];
+            }
             b"QSTI" if f.data.len() >= 4 => info.quest = global(u32_at(f.data, 0)),
             b"PNAM" if f.data.len() >= 4 => previous = Some(global(u32_at(f.data, 0))),
             b"NAME" if f.data.len() >= 4 => info.add_topics.push(global(u32_at(f.data, 0))),
