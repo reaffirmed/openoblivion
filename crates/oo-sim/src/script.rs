@@ -112,15 +112,19 @@ pub struct QuestProgress {
 }
 
 impl QuestProgress {
-    /// Starts the quest and marks `stage` done. The current stage only moves
-    /// up: vanilla scripts set lower stages to make sure their results ran
-    /// (the tutorial's stage 24 sets 23 "to make sure", and each ambush
-    /// assassin's death sets 23 before checking for 26), which only works if
-    /// `GetStage` keeps the highest. Waiting on the RE notes to confirm.
-    pub fn set_stage(&mut self, stage: u16) {
-        self.running = true;
+    /// `SetStage` on a quest that has the stage; see "SetStage" in
+    /// `docs/reverse-engineering/script-vm.md`. The quest runs again unless
+    /// it was completed without allowing repeated stages, the stored stage
+    /// only moves up, and the stage is marked done. Returns whether the
+    /// stage's result should run: the first time, or every time when the
+    /// quest allows repeated stages.
+    pub fn set_stage(&mut self, stage: u16, quest_flags: u8) -> bool {
+        let repeats = quest_flags & Quest::FLAG_REPEATED_STAGES != 0;
+        if !self.completed || repeats {
+            self.running = true;
+        }
         self.stage = self.stage.max(stage);
-        self.done.insert(stage);
+        self.done.insert(stage) || repeats
     }
 }
 
@@ -524,7 +528,6 @@ impl<'a> GameHost<'a> {
             let Some(q) = self.data.dialogue.quests.get(&quest) else {
                 continue;
             };
-            self.state.quests.entry(quest).or_default().set_stage(stage);
             let Some(stage) = q.stages.iter().find(|s| s.index == stage) else {
                 continue;
             };
@@ -947,10 +950,17 @@ impl Host for GameHost<'_> {
             // run sees it; its result script runs after the run.
             "SetStage" => {
                 let (quest, stage) = (form(0), arg_number(args, 1) as u16);
-                if self.data.dialogue.quests.contains_key(&quest) {
-                    self.state.quests.entry(quest).or_default().set_stage(stage);
+                if let Some(q) = self.data.dialogue.quests.get(&quest)
+                    && q.stages.iter().any(|s| s.index == stage)
+                    && self
+                        .state
+                        .quests
+                        .entry(quest)
+                        .or_default()
+                        .set_stage(stage, q.flags)
+                {
+                    self.stages.push((quest, stage));
                 }
-                self.stages.push((quest, stage));
                 1.0
             }
             "StartQuest" => {
@@ -1192,10 +1202,19 @@ mod tests {
     #[test]
     fn a_lower_stage_runs_but_keeps_the_current_one() {
         let mut q = QuestProgress::default();
-        q.set_stage(24);
-        q.set_stage(23);
+        assert!(q.set_stage(24, 0));
+        assert!(q.set_stage(23, 0));
         assert_eq!(q.stage, 24);
         assert!(q.done.contains(&23) && q.done.contains(&24));
+        // A stage's result runs once, unless the quest repeats stages.
+        assert!(!q.set_stage(23, 0));
+        assert!(q.set_stage(23, Quest::FLAG_REPEATED_STAGES));
+        // A completed quest stays stopped unless it repeats stages.
+        q.running = false;
+        q.completed = true;
+        q.set_stage(30, 0);
+        assert!(!q.running);
+        assert_eq!(q.stage, 30);
     }
 
     #[test]

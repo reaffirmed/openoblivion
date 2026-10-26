@@ -163,6 +163,9 @@ pub struct Quest {
 }
 
 impl Quest {
+    /// `DATA` flag: stages can be set, and their results run, again.
+    pub const FLAG_REPEATED_STAGES: u8 = 0x08;
+
     pub const START_GAME_ENABLED: u8 = 0x01;
     pub const REPEATED_TOPICS: u8 = 0x04;
     pub const REPEATED_STAGES: u8 = 0x08;

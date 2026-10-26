@@ -675,12 +675,19 @@ pub(crate) fn run_combat(
             fatigue *= 1.0 - stopped;
         }
         let essential = target_stats.is_some_and(|(s, _)| s.essential());
+        if state
+            .vitals
+            .get(&blow.target)
+            .is_none_or(|v| v.dead || v.unconscious > 0.0)
+        {
+            continue;
+        }
+        // OnHit is raised before the damage, so a killing or knockout blow
+        // still runs the target's OnHit block (with OnDeath after it).
+        state.raise(blow.target, blow.attacker, event::HIT);
         let Some(v) = state.vitals.get_mut(&blow.target) else {
             continue;
         };
-        if v.dead || v.unconscious > 0.0 {
-            continue;
-        }
         v.health -= health;
         v.fatigue = (v.fatigue - fatigue).max(0.0);
         // Essential actors are knocked out instead of dying; see
@@ -723,7 +730,6 @@ pub(crate) fn run_combat(
         } else if blow.target == PLAYER_REF && player_blocking {
             state.skill_use[Stats::BLOCK] += 1.0;
         }
-        state.raise(blow.target, blow.attacker, event::HIT);
         if blow.target == PLAYER_REF {
             if died {
                 state.messages.push("You have died.".to_owned());
