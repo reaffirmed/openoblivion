@@ -37,6 +37,8 @@ pub struct DialogScreen {
     line: Option<(u32, u32)>,
     /// Seconds left of the line being spoken.
     speaking: f32,
+    /// The line whose subtitle tiles were last logged.
+    logged: Option<(u32, u32)>,
 }
 
 /// How long a line stays up without a voice: a reading pace, with a floor.
@@ -274,6 +276,10 @@ pub fn update_dialog(
     }
     let image = screen.image.clone();
     let (mut selected, mut scroll) = (screen.selected, screen.scroll);
+    let log_subtitle = speaking && screen.logged != talk.line;
+    if log_subtitle {
+        screen.logged = talk.line;
+    }
     if let Some(xml) = screen.xml.as_mut() {
         text_visibility.set_if_neq(Visibility::Hidden);
         overlay.set_if_neq(Visibility::Inherited);
@@ -283,6 +289,23 @@ pub fn update_dialog(
         // While a line is spoken the topics are hidden and the line shows as
         // a subtitle (its layout shows when dialog_topics.visible is 0).
         xml.set_num("dialog_topics", "visible", if speaking { 0.0 } else { 2.0 });
+        if log_subtitle {
+            let v = |tile: &str, name: &str| xml.value(tile, name);
+            info!(
+                "dialogue subtitle: topics visible {:?}, layout visible {:?} alpha {:?}, \
+                 text visible {:?} alpha {:?} at ({:?}, {:?}) size ({:?}, {:?}), string {:?}",
+                v("dialog_topics", "visible"),
+                v("dialog_text_layout", "visible"),
+                v("dialog_text_layout", "alpha"),
+                v("dialog_text", "visible"),
+                v("dialog_text", "alpha"),
+                v("dialog_text", "x"),
+                v("dialog_text", "y"),
+                v("dialog_text", "width"),
+                v("dialog_text", "height"),
+                v("dialog_text", "string"),
+            );
+        }
         if let Err(e) = xml.ensure_rows(count, TEMPLATE, PANE, ROW) {
             warn!("dialogue topics: {e}");
         }
