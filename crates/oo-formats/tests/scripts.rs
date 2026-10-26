@@ -40,8 +40,11 @@ fn reads_code_variables_and_references() {
         ],
     );
     let plugin = [header, group(b"SCPT", 0, &[script])].concat();
-    let order =
-        LoadOrder::new(vec![("Test.esm".into(), Plugin::from_bytes(plugin).unwrap())]).unwrap();
+    let order = LoadOrder::new(vec![(
+        "Test.esm".into(),
+        Plugin::from_bytes(plugin).unwrap(),
+    )])
+    .unwrap();
     let all = scripts(&order).unwrap();
     let s = &all[&0x10];
     assert_eq!(s.editor_id, "TutorialScript");

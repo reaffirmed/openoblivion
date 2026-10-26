@@ -4574,6 +4574,7 @@ dependencies = [
  "byroredux-menuxml",
  "clap",
  "oo-formats",
+ "oo-script",
 ]
 
 [[package]]

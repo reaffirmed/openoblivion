@@ -240,45 +240,96 @@ impl<H: Host + ?Sized> Run<'_, H> {
     }
 
     fn eval(&mut self, expr: &[Token]) -> Result<f64, String> {
-        let mut stack: Vec<f64> = Vec::with_capacity(8);
+        let mut stack: Vec<Num> = Vec::with_capacity(8);
         let underflow = || "expression stack underflow".to_string();
         for t in expr {
             let v = match t {
-                Token::Number(n) => *n,
-                Token::Var(v) => self.read(*v),
-                Token::Form(r) => f64::from(self.reference(*r)),
-                // What a failed command gives an expression is open; 0 keeps going.
-                Token::Call(c) => self.call(c).unwrap_or(0.0),
-                Token::Op(Op::Neg) => -stack.pop().ok_or_else(underflow)?,
+                Token::Int(n) => Num::Int(*n),
+                Token::Float(n) => Num::Float(*n),
+                Token::Var(v) => Num::Float(self.read(*v)),
+                Token::Form(r) => Num::Float(f64::from(self.reference(*r))),
+                Token::Call(c) => Num::Float(self.call(c)?),
+                Token::Op(Op::Neg) => match stack.pop().ok_or_else(underflow)? {
+                    Num::Int(i) => Num::Int(i.wrapping_neg()),
+                    Num::Float(f) => Num::Float(-f),
+                },
                 Token::Op(op) => {
                     let b = stack.pop().ok_or_else(underflow)?;
                     let a = stack.pop().ok_or_else(underflow)?;
-                    let bool = |x: bool| if x { 1.0 } else { 0.0 };
-                    match op {
-                        Op::Add => a + b,
-                        Op::Sub => a - b,
-                        Op::Mul => a * b,
-                        // Division by zero is open; 0 rather than infinity.
-                        Op::Div if b == 0.0 => 0.0,
-                        Op::Div => a / b,
-                        Op::Eq => bool(a == b),
-                        Op::Ne => bool(a != b),
-                        Op::Gt => bool(a > b),
-                        Op::Ge => bool(a >= b),
-                        Op::Lt => bool(a < b),
-                        Op::Le => bool(a <= b),
-                        Op::And => bool(a != 0.0 && b != 0.0),
-                        Op::Or => bool(a != 0.0 || b != 0.0),
-                        Op::Neg => unreachable!(),
-                    }
+                    binary(*op, a, b)?
                 }
             };
             stack.push(v);
         }
         match stack[..] {
-            [v] => Ok(v),
+            [v] => Ok(v.float()),
             [] => Err("empty expression".into()),
             _ => Err("expression left values over".into()),
         }
     }
+}
+
+/// An expression value: integer literals stay integers until a double meets
+/// them, so `5 / 2` is 2 but `x / 2` is 2.5.
+#[derive(Debug, Clone, Copy)]
+enum Num {
+    Int(i32),
+    Float(f64),
+}
+
+impl Num {
+    fn float(self) -> f64 {
+        match self {
+            Self::Int(i) => f64::from(i),
+            Self::Float(f) => f,
+        }
+    }
+
+    fn truthy(self) -> bool {
+        self.float() != 0.0
+    }
+}
+
+fn binary(op: Op, a: Num, b: Num) -> Result<Num, String> {
+    let flag = |x: bool| Num::Int(i32::from(x));
+    Ok(match op {
+        Op::Eq => flag(a.float() == b.float()),
+        Op::Ne => flag(a.float() != b.float()),
+        Op::Gt => flag(a.float() > b.float()),
+        Op::Ge => flag(a.float() >= b.float()),
+        Op::Lt => flag(a.float() < b.float()),
+        Op::Le => flag(a.float() <= b.float()),
+        Op::And => flag(a.truthy() && b.truthy()),
+        Op::Or => flag(a.truthy() || b.truthy()),
+        Op::Mod => {
+            let (x, y) = (a.float() as i32, b.float() as i32);
+            if y == 0 {
+                return Err("remainder by zero".into());
+            }
+            match (a, b) {
+                (Num::Int(_), Num::Int(_)) => Num::Int(x.wrapping_rem(y)),
+                _ => Num::Float(f64::from(x.wrapping_rem(y))),
+            }
+        }
+        Op::Add | Op::Sub | Op::Mul | Op::Div => match (a, b) {
+            (Num::Int(x), Num::Int(y)) => Num::Int(match op {
+                Op::Add => x.wrapping_add(y),
+                Op::Sub => x.wrapping_sub(y),
+                Op::Mul => x.wrapping_mul(y),
+                _ if y == 0 => return Err("division by zero".into()),
+                _ => x.wrapping_div(y),
+            }),
+            _ => {
+                let (x, y) = (a.float(), b.float());
+                Num::Float(match op {
+                    Op::Add => x + y,
+                    Op::Sub => x - y,
+                    Op::Mul => x * y,
+                    _ if y == 0.0 => return Err("division by zero".into()),
+                    _ => x / y,
+                })
+            }
+        },
+        Op::Neg => unreachable!("unary"),
+    })
 }

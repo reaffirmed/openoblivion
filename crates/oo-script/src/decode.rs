@@ -41,6 +41,7 @@ pub enum Op {
     Sub,
     Mul,
     Div,
+    Mod,
     Eq,
     Ne,
     Gt,
@@ -55,7 +56,9 @@ pub enum Op {
 /// One token of a postfix expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    Number(f64),
+    /// A literal written without a decimal point.
+    Int(i32),
+    Float(f64),
     Op(Op),
     Var(Var),
     /// The form at a reference-list entry, as a value.
@@ -476,6 +479,7 @@ fn expression(bytes: &[u8], base: usize) -> Result<Vec<Token>, DecodeError> {
                     "-" => Token::Op(Op::Sub),
                     "*" => Token::Op(Op::Mul),
                     "/" => Token::Op(Op::Div),
+                    "%" => Token::Op(Op::Mod),
                     "==" => Token::Op(Op::Eq),
                     "!=" => Token::Op(Op::Ne),
                     ">" => Token::Op(Op::Gt),
@@ -485,7 +489,10 @@ fn expression(bytes: &[u8], base: usize) -> Result<Vec<Token>, DecodeError> {
                     "&&" => Token::Op(Op::And),
                     "||" => Token::Op(Op::Or),
                     "~" => Token::Op(Op::Neg),
-                    _ => Token::Number(word.parse().map_err(|_| bad("number", start))?),
+                    _ if !word.contains(['.', 'e', 'E']) => {
+                        Token::Int(word.parse().map_err(|_| bad("number", start))?)
+                    }
+                    _ => Token::Float(word.parse().map_err(|_| bad("number", start))?),
                 });
             }
         }

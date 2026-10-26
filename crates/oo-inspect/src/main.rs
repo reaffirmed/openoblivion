@@ -9,6 +9,7 @@ use oo_formats::bsa::Archive;
 use oo_formats::commands;
 use oo_formats::dialogue::{Comparand, Condition, dialogue_data};
 use oo_formats::esm::Plugin;
+use oo_formats::scripts::scripts;
 
 #[derive(Parser)]
 #[command(about = "Inspect Oblivion BSA archives and ESM/ESP plugins")]
@@ -39,6 +40,14 @@ enum Command {
     Dialogue {
         plugin: PathBuf,
         topic: Option<String>,
+    },
+    /// Decode every compiled script (SCPT, and dialogue and quest-stage
+    /// results) and report the ones that don't parse.
+    Scripts {
+        plugin: PathBuf,
+        /// Print the decoded statements of scripts whose editor ID contains this.
+        #[arg(long)]
+        show: Option<String>,
     },
     /// Print a quest's stages, journal text and conditions.
     Quest { plugin: PathBuf, quest: String },
@@ -250,6 +259,60 @@ fn main() -> Result<()> {
                     }
                 }
             }
+        }
+        Command::Scripts { plugin, show } => {
+            let order = open_single(&plugin)?;
+            let mut all: Vec<(String, oo_formats::scripts::ScriptCode)> = scripts(&order)?
+                .into_values()
+                .map(|s| (s.editor_id, s.code))
+                .collect();
+            let d = dialogue_data(&order)?;
+            for (id, i) in &d.infos {
+                if let Some(r) = &i.result {
+                    all.push((format!("INFO {id:08X}"), r.clone()));
+                }
+            }
+            for q in d.quests.values() {
+                for s in &q.stages {
+                    for (n, e) in s.entries.iter().enumerate() {
+                        if let Some(r) = &e.result {
+                            all.push((
+                                format!("{} stage {} #{n}", q.editor_id, s.index),
+                                r.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+            all.sort_by(|a, b| a.0.cmp(&b.0));
+            let (mut ok, mut failed, mut source_only) = (0, 0, 0);
+            for (name, code) in &all {
+                if code.compiled.is_empty() {
+                    source_only += 1;
+                    continue;
+                }
+                match oo_script::decode(&code.compiled) {
+                    Ok(statements) => {
+                        ok += 1;
+                        let wanted = show.as_ref().is_some_and(|w| {
+                            name.to_ascii_lowercase().contains(&w.to_ascii_lowercase())
+                        });
+                        if wanted {
+                            println!("{name}");
+                            for (i, s) in statements.iter().enumerate() {
+                                println!("  {i:4} {s:?}");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        if failed <= 20 {
+                            println!("FAIL {name}: {e}");
+                        }
+                    }
+                }
+            }
+            println!("{ok} decoded, {failed} failed, {source_only} with source only");
         }
         Command::Quest { plugin, quest } => {
             let d = dialogue_data(&open_single(&plugin)?)?;
