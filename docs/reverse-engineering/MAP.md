@@ -66,11 +66,11 @@ a fraction of its functions read.
 | Script VM and command semantics | 1 | format fully decoded; runner, branches, Set, errors documented; evaluator and event tests open | [script-commands.md](script-commands.md), [script-vm.md](script-vm.md) |
 | Dialogue and quest conditions | 2 | conditions and response picking done; topic list and quest stages open | [conditions.md](conditions.md), [dialogue.md](dialogue.md) |
 | AI packages | 3 | package selection and schedules done; package behaviour open | [ai-packages.md](ai-packages.md) |
-| Combat and levelling formulas | 4 | not started | |
+| Combat and levelling formulas | 4 | melee, block, fatigue, regen, level-up done; hit flow, armour, magic open | [combat-and-levelling.md](combat-and-levelling.md) |
 | Menus | 5 | layout, scaling, entities done | [menu-layout.md](menu-layout.md) |
 | Actors and animation | 6 | not started | |
 | Cell loading | 7 | not started | |
 | Save format | 8 | not started | |
 | Lighting | — | attenuation formula done; shader side open | [light-falloff.md](light-falloff.md) |
 
-Functions studied so far: about 110 of roughly 9,500 game-code functions (1.2%). Script VM and conditions documented; dialogue and AI packages partly.
+Functions studied so far: about 140 of roughly 9,500 game-code functions (1.5%). Script VM and conditions documented; dialogue, AI packages and combat formulas partly.

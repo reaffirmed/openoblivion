@@ -56,6 +56,15 @@ and the Xbox entities (`&xbox;`, `&xenon;`, `&xboxhint;`, `&xbutton…;`) = 1. S
 that reads 1 is *false*: that's why `hudmain_frame` (visible = `user3`, and `user3` = 1 in
 play) is not drawn.
 
+
+## Fonts
+
+Glyph records in the game's `.fnt` files (e.g. the Kingthings fonts): the texture corners
+are stored as (u, v) pairs; field 9 is the cell width, field 10 the height, the advance is
+field 9 + field 12, and field 13 is the cell height above the baseline (not an advance).
+Source: byte-level checks of the vanilla font files on the test PC. Confidence: confirmed
+for the vanilla fonts.
+
 ## Evidence
 
 | Fact | Source | Confidence |

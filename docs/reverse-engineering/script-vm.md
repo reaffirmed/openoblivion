@@ -17,7 +17,7 @@ All numbers are little-endian. A script is a flat sequence of statements:
 statement   := [ 0x1C u16 refIndex ] u16 opcode  u16 length  payload[length]
 ```
 
-The optional `0x1C` prefix means "call the following command on reference `refIndex`"
+The optional prefix is a **16-bit** `0x001C` followed by a u16 reference index (inside expressions the same idea uses the one-byte `r` tag instead). It means "call the following command on reference `refIndex`"
 (`SomeRef.Disable`). `refIndex` is 1-based into the script's reference list (`SCRO`/`SCRV`
 subrecords, in order).
 
@@ -83,7 +83,7 @@ table:
 | string, variable name | u16 length, text (no terminator) |
 | int, quest stage, form type | `n` + i32, or `z` + f64, or a variable operand |
 | float | `z` + f64, or a variable operand |
-| crime type | as int, except in an `OnAlarm` block header where it is a bare u16 |
+| crime type | bare u16 code (in commands such as `GetCrimeKnown` and in `OnAlarm` block headers) |
 | actor value, anim group, sex | bare u16 code |
 | axis | one byte: `X`, `Y` or `Z` |
 | any form or reference kind | `r` + u16 reference-list index, or a variable operand holding a form |
