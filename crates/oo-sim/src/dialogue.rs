@@ -73,6 +73,11 @@ impl Pick {
     }
 }
 
+/// How long a line takes to say, until voice files give the real length.
+pub fn speaking_time(text: &str) -> f32 {
+    (text.chars().count() as f32 * 0.06).max(2.0)
+}
+
 /// The line `speaker` says for `topic`: the first eligible one, scanning
 /// running quests and their lines in order, with runs of random lines pooled.
 pub fn pick_response(

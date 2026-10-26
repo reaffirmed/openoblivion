@@ -355,6 +355,11 @@ pub(crate) fn run_ai(
         );
     }
 
+    for (placed, _, _, mut ai, _) in &mut actors {
+        if state.evaluate.remove(&placed.0) {
+            ai.reevaluate_in = 0.0;
+        }
+    }
     let due = actors
         .iter()
         .any(|(_, _, _, ai, _)| ai.reevaluate_in - dt <= 0.0);

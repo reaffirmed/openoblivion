@@ -173,7 +173,12 @@ fn main() {
             )
                 .chain(),
             debug_keys,
-            (update_hud, update_cell_label, menu::update_menu),
+            (
+                update_hud,
+                update_cell_label,
+                update_subtitles,
+                menu::update_menu,
+            ),
             xml_ui::update_hud_overlay,
             (
                 lighting::apply_cell_lighting,
@@ -394,6 +399,56 @@ struct ActivatePrompt;
 #[derive(Component)]
 struct CellLabel;
 
+/// Lines actors say aloud outside conversation, and script messages. A plain
+/// stand-in until the HUD menu's own subtitle and message elements are used.
+#[derive(Component)]
+struct SubtitleText;
+
+#[derive(Component)]
+struct MessageText;
+
+/// What's on screen now, and until when (seconds since startup).
+#[derive(Default)]
+struct Shown {
+    subtitle: Option<(String, f32)>,
+    messages: Vec<(String, f32)>,
+}
+
+const MESSAGE_SECONDS: f32 = 4.0;
+
+fn update_subtitles(
+    time: Res<Time>,
+    mut state: ResMut<oo_sim::script::ScriptState>,
+    mut shown: Local<Shown>,
+    mut subtitle: Query<&mut Text, (With<SubtitleText>, Without<MessageText>)>,
+    mut messages: Query<&mut Text, (With<MessageText>, Without<SubtitleText>)>,
+) {
+    let now = time.elapsed_secs();
+    if !state.subtitles.is_empty() {
+        let s = state.subtitles.pop().unwrap();
+        state.subtitles.clear();
+        shown.subtitle = Some((s.text, now + s.seconds));
+    }
+    for m in state.messages.drain(..) {
+        shown.messages.push((m, now + MESSAGE_SECONDS));
+    }
+    shown.subtitle.take_if(|(_, until)| *until <= now);
+    shown.messages.retain(|(_, until)| *until > now);
+    if let Ok(mut text) = subtitle.single_mut() {
+        let wanted = shown.subtitle.as_ref().map_or("", |(t, _)| t.as_str());
+        if text.0 != wanted {
+            text.0 = wanted.to_owned();
+        }
+    }
+    if let Ok(mut text) = messages.single_mut() {
+        let wanted: Vec<&str> = shown.messages.iter().map(|(t, _)| t.as_str()).collect();
+        let wanted = wanted.join("\n");
+        if text.0 != wanted {
+            text.0 = wanted;
+        }
+    }
+}
+
 fn setup_hud(mut commands: Commands) {
     commands.spawn((
         Crosshair,
@@ -416,6 +471,28 @@ fn setup_hud(mut commands: Commands) {
             position_type: PositionType::Absolute,
             top: percent(55),
             width: percent(100),
+            ..default()
+        },
+    ));
+    commands.spawn((
+        SubtitleText,
+        Text::new(""),
+        TextLayout::justify(Justify::Center),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: percent(12),
+            left: percent(15),
+            width: percent(70),
+            ..default()
+        },
+    ));
+    commands.spawn((
+        MessageText,
+        Text::new(""),
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(12),
+            top: px(36),
             ..default()
         },
     ));

@@ -108,6 +108,14 @@ pub struct QuestProgress {
     pub delay: f32,
 }
 
+/// A line said aloud, shown as a subtitle.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Subtitle {
+    pub speaker: u32,
+    pub text: String,
+    pub seconds: f32,
+}
+
 /// Everything scripts and dialogue have changed. Part of the save game, and
 /// in co-op owned by the host.
 #[derive(Resource, Debug, Clone, Default)]
@@ -135,6 +143,12 @@ pub struct ScriptState {
     pub activated: HashMap<u32, u32>,
     /// Scripts that failed to evaluate and won't run again this session.
     pub disabled: HashSet<u32>,
+    /// Lines actors said outside conversation, oldest first; the client
+    /// shows and drains them.
+    pub subtitles: Vec<Subtitle>,
+    /// Actors to choose a package again on the next AI step
+    /// (`EvaluatePackage`).
+    pub evaluate: HashSet<u32>,
     /// Character generation is under way (`SetInChargen`).
     pub in_chargen: bool,
     started: bool,
@@ -597,17 +611,75 @@ impl Host for GameHost<'_> {
                 1.0
             }
             // Accepted and ignored until what they change exists.
-            "SetGhost" | "SetUnconscious" | "SetDestroyed" | "RemoveSpell" | "AddSpell"
-            | "ModDisposition" | "ForceActorValue" | "SetActorValue" | "ModActorValue" | "Lock"
-            | "Unlock" | "PlaySound" | "PlaySound3D" | "PlayGroup" | "LoopGroup" | "PickIdle"
-            | "Say" | "SayTo" | "EvaluatePackage" | "SetAlert" | "SetRestrained"
-            | "SetNoAvoidance" | "SetOpenState" | "SetForceRun" | "SetForceSneak" => {
+            "SetGhost"
+            | "SetUnconscious"
+            | "SetDestroyed"
+            | "RemoveSpell"
+            | "AddSpell"
+            | "ModDisposition"
+            | "ForceActorValue"
+            | "SetActorValue"
+            | "ModActorValue"
+            | "Lock"
+            | "Unlock"
+            | "PlaySound"
+            | "PlaySound3D"
+            | "PlayGroup"
+            | "LoopGroup"
+            | "PickIdle"
+            | "SetAlert"
+            | "SetRestrained"
+            | "SetNoAvoidance"
+            | "SetOpenState"
+            | "SetForceRun"
+            | "SetForceSneak"
+            | "SetIgnoreFriendlyHits"
+            | "DisableLinkedPathPoints"
+            | "EnableLinkedPathPoints"
+            | "EnablePlayerControls"
+            | "DisablePlayerControls"
+            | "Autosave" => {
                 if self.state.unsupported.insert(command.name.to_owned()) {
                     debug!("script command {} has no effect yet", command.name);
                 }
                 1.0
             }
-            "GetDisabled" => 0.0,
+            "GetDisabled" | "IsXBox" => 0.0,
+            "EvaluatePackage" => {
+                if let Some(actor) = subject {
+                    self.state.evaluate.insert(actor);
+                }
+                1.0
+            }
+            // Says a topic's line aloud and returns how long it takes, which
+            // scripts use as a timer. The line's result script runs now.
+            "Say" | "SayTo" => {
+                let Some(speaker) = subject else {
+                    return Err(format!("{} requires a reference", command.name));
+                };
+                let topic = form(usize::from(command.name == "SayTo"));
+                let Some((_, info)) =
+                    crate::dialogue::answer(self.data, self.state, self.facts, topic, speaker)
+                else {
+                    return Ok(0.0);
+                };
+                let effects =
+                    crate::dialogue::say(self.data, self.state, self.facts, info, speaker);
+                self.effects.extend(effects);
+                let text = self.data.dialogue.infos[&info]
+                    .responses
+                    .iter()
+                    .map(|r| r.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let seconds = crate::dialogue::speaking_time(&text);
+                self.state.subtitles.push(Subtitle {
+                    speaker,
+                    text,
+                    seconds,
+                });
+                f64::from(seconds)
+            }
 
             // What scripts do.
             "SetStage" => {

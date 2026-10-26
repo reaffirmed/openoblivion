@@ -40,10 +40,6 @@ pub struct DialogScreen {
 }
 
 /// How long a line stays up without a voice: a reading pace, with a floor.
-fn speaking_time(text: &str) -> f32 {
-    (text.chars().count() as f32 * 0.06).max(2.0)
-}
-
 #[derive(Component)]
 pub struct DialogOverlay;
 
@@ -190,7 +186,7 @@ pub fn update_dialog(
     if talk.line != screen.line {
         screen.line = talk.line;
         screen.speaking = if talk.line.is_some() {
-            speaking_time(&shown.line)
+            oo_sim::dialogue::speaking_time(&shown.line)
         } else {
             0.0
         };
