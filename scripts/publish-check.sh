@@ -16,7 +16,7 @@ if git grep -nIE '\b(FUN|DAT|LAB|sub|loc|off|unk)_[0-9a-fA-F]{6,8}\b' -- ':!scri
 fi
 
 # Retail Oblivion.exe images load at 0x00400000; flag literal addresses in that range.
-if git grep -nIE '0x00[4-9a-fA-F][0-9a-fA-F]{5}\b' -- '*.rs'; then
+if git grep -nIE '0x00[4-9a-fA-F][0-9a-fA-F]{5}\b' -- '*.rs' 'docs/**'; then
     echo "error: what look like retail addresses found (above)" >&2
     fail=1
 fi
