@@ -6,6 +6,8 @@
 //!
 //! ```text
 //! 120 key Space          # press and release a KeyCode by name
+//! 130 hold KeyW 1.5      # hold a key down for this many seconds
+//! 140 where              # log the player's position
 //! 150 shot out/menu.png  # save a screenshot
 //! 160 move 400 300       # put the cursor here, in window pixels
 //! 161 click              # left button down and up
@@ -25,6 +27,8 @@ use bevy::window::PrimaryWindow;
 #[derive(Debug, Clone)]
 enum Action {
     Key(KeyCode),
+    Hold(KeyCode, f32),
+    Where,
     Move(f64, f64),
     Click,
     Wheel(f32),
@@ -38,6 +42,8 @@ pub struct Script {
     frame: u32,
     /// Pressed last frame, released this one.
     held_keys: Vec<KeyCode>,
+    /// Held down until their seconds run out.
+    holding: Vec<(KeyCode, f32)>,
     held_click: bool,
 }
 
@@ -51,6 +57,7 @@ impl Plugin for ScriptPlugin {
                     steps,
                     frame: 0,
                     held_keys: Vec::new(),
+                    holding: Vec::new(),
                     held_click: false,
                 })
                 .add_systems(PreUpdate, run_script.after(InputSystems));
@@ -73,6 +80,11 @@ fn load(path: &Path) -> anyhow::Result<Vec<(u32, Action)>> {
         let frame: u32 = words.next().ok_or_else(bad)?.parse()?;
         let action = match words.next().ok_or_else(bad)? {
             "key" => Action::Key(key_code(words.next().ok_or_else(bad)?).ok_or_else(bad)?),
+            "hold" => Action::Hold(
+                key_code(words.next().ok_or_else(bad)?).ok_or_else(bad)?,
+                words.next().ok_or_else(bad)?.parse()?,
+            ),
+            "where" => Action::Where,
             "move" => Action::Move(
                 words.next().ok_or_else(bad)?.parse()?,
                 words.next().ok_or_else(bad)?.parse()?,
@@ -143,11 +155,24 @@ fn run_script(
     mut wheel: MessageWriter<MouseWheel>,
     mut window: Query<(Entity, &mut Window), With<PrimaryWindow>>,
     mut exit: MessageWriter<AppExit>,
+    time: Res<Time>,
+    player: Query<&Transform, With<oo_sim::Player>>,
 ) {
     script.frame += 1;
     for key in std::mem::take(&mut script.held_keys) {
         keys.release(key);
     }
+    let dt = time.delta_secs();
+    script.holding.retain_mut(|(key, left)| {
+        *left -= dt;
+        if *left > 0.0 {
+            keys.press(*key);
+            true
+        } else {
+            keys.release(*key);
+            false
+        }
+    });
     if std::mem::take(&mut script.held_click) {
         mouse.release(MouseButton::Left);
     }
@@ -164,6 +189,15 @@ fn run_script(
             Action::Key(key) => {
                 keys.press(key);
                 script.held_keys.push(key);
+            }
+            Action::Hold(key, seconds) => {
+                keys.press(key);
+                script.holding.push((key, seconds));
+            }
+            Action::Where => {
+                if let Ok(t) = player.single() {
+                    info!("script frame {frame}: player at {}", t.translation);
+                }
             }
             Action::Move(x, y) => {
                 if let Ok((_, mut w)) = window.single_mut() {
