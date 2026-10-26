@@ -205,3 +205,53 @@ fn a_barred_gate_on_a_low_sill_stops_the_player() {
     let end = walk(&mut app, player, 0.0, 120);
     assert!(end.z > -100.0, "went through the gate: {end}");
 }
+
+/// The prison cell gate as imported: two thin convex leaves, 5 thick and
+/// 160 tall, on child nodes of a fixed body, standing on the floor.
+#[test]
+fn the_prison_gate_stops_the_player() {
+    let mut app = app();
+    run(&mut app, 1);
+    let world = app.world_mut();
+    world.spawn((
+        RigidBody::Fixed,
+        Collider::cuboid(400.0, 10.0, 400.0),
+        Transform::from_xyz(0.0, -10.0, 0.0),
+    ));
+    let leaf = |z0: f32, z1: f32| {
+        let mut points = Vec::new();
+        for x in [-2.5, 2.9] {
+            for y in [-78.6, 80.3] {
+                for z in [z0, z1] {
+                    points.push(Vec3::new(x, y, z));
+                }
+            }
+        }
+        Collider::convex_hull(&points).unwrap()
+    };
+    // Facing along X, like the tutorial's: the player walks along -X.
+    world
+        .spawn((RigidBody::Fixed, Transform::from_xyz(-100.0, 0.0, 0.0)))
+        .with_children(|gate| {
+            gate.spawn((leaf(0.0, 46.8), Transform::from_xyz(-16.3, 75.0, -46.66)));
+            gate.spawn((leaf(-46.9, 0.0), Transform::from_xyz(-16.3, 75.0, 48.79)));
+        });
+    let player = app
+        .world_mut()
+        .query_filtered::<Entity, With<Player>>()
+        .single(app.world())
+        .unwrap();
+    app.world_mut()
+        .entity_mut(player)
+        .get_mut::<Transform>()
+        .unwrap()
+        .translation = Vec3::new(0.0, PLAYER_HALF_HEIGHT + PLAYER_RADIUS + 2.0, -10.0);
+    run(&mut app, 60);
+    // Yaw π/2 faces -X.
+    let end = walk(&mut app, player, std::f32::consts::FRAC_PI_2, 120);
+    println!("gate: {end}");
+    assert!(
+        end.x > -116.3 + PLAYER_RADIUS - 5.0,
+        "went through the gate: {end}"
+    );
+}

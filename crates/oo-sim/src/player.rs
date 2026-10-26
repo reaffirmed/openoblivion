@@ -8,6 +8,7 @@ use bevy::prelude::*;
 use bevy_rapier3d::control::{CharacterAutostep, CharacterLength};
 use bevy_rapier3d::prelude::*;
 
+use crate::cell::Model;
 use crate::interact::LookingAt;
 use crate::inventory::{Inventory, OpenContainer, PlayerActions};
 use crate::{SpawnPoint, UNITS_PER_METRE};
@@ -149,7 +150,12 @@ type MovingPlayer<'a> = (
     Option<&'a KinematicCharacterControllerOutput>,
 );
 
-pub fn move_player(time: Res<Time>, rapier: ReadRapierContext, mut players: Query<MovingPlayer>) {
+pub fn move_player(
+    time: Res<Time>,
+    rapier: ReadRapierContext,
+    mut players: Query<MovingPlayer>,
+    models: Query<(Option<&Model>, Option<&ChildOf>)>,
+) {
     let dt = time.delta_secs().min(0.1);
     let rapier = rapier.single().ok();
     for (entity, intent, mut motion, mut transform, mut controller, output) in &mut players {
@@ -211,14 +217,31 @@ pub fn move_player(time: Res<Time>, rapier: ReadRapierContext, mut players: Quer
             && motion.vertical_speed <= 0.0
             && !intent.jump
             && let Some(r) = rapier.as_ref()
-            && let Some(to) = step_up(r, entity, transform.translation, step)
+            && let Some((to, onto)) = step_up(r, entity, transform.translation, step)
         {
+            debug!(
+                "player steps up {:.1} onto {}",
+                to.y - transform.translation.y,
+                model_of(&models, onto)
+            );
             transform.translation = to;
             controller.translation = None;
             continue;
         }
         controller.translation = Some(velocity * dt);
     }
+}
+
+/// The model an entity (or one of its parents) was loaded from, for logs.
+fn model_of(models: &Query<(Option<&Model>, Option<&ChildOf>)>, mut entity: Entity) -> String {
+    while let Ok((model, parent)) = models.get(entity) {
+        if let Some(model) = model {
+            return model.0.clone();
+        }
+        let Some(parent) = parent else { break };
+        entity = parent.parent();
+    }
+    format!("{entity}")
 }
 
 /// The highest step the player walks up.
@@ -228,7 +251,13 @@ const STEP_HEIGHT: f32 = 30.0;
 /// the direction of `step`: lifted by up to [`STEP_HEIGHT`], moved across, and
 /// set down on a walkable floor higher than before. `None` if there's no room
 /// above, it's still blocked at that height, or there's nothing to stand on.
-fn step_up(rapier: &RapierContext, entity: Entity, from: Vec3, step: Vec3) -> Option<Vec3> {
+/// With it, what it stands on.
+fn step_up(
+    rapier: &RapierContext,
+    entity: Entity,
+    from: Vec3,
+    step: Vec3,
+) -> Option<(Vec3, Entity)> {
     let across = step.with_y(0.0);
     let len = across.length();
     if len < 1e-3 {
@@ -259,12 +288,10 @@ fn step_up(rapier: &RapierContext, entity: Entity, from: Vec3, step: Vec3) -> Op
         compute_impact_geometry_on_penetration: false,
     };
     let cast_hit = |at: Vec3, towards: Vec3, max: f32| {
-        rapier
-            .cast_shape(at, Quat::IDENTITY, towards, &shape, options(max), filter)
-            .map(|(_, hit)| hit)
+        rapier.cast_shape(at, Quat::IDENTITY, towards, &shape, options(max), filter)
     };
     let cast = |at: Vec3, towards: Vec3, max: f32| {
-        cast_hit(at, towards, max).map(|hit| hit.time_of_impact)
+        cast_hit(at, towards, max).map(|(_, hit)| hit.time_of_impact)
     };
     let lift = cast(from, Vec3::Y, STEP_HEIGHT).unwrap_or(STEP_HEIGHT);
     if lift < 4.0 {
@@ -278,7 +305,7 @@ fn step_up(rapier: &RapierContext, entity: Entity, from: Vec3, step: Vec3) -> Op
         return None;
     }
     let over = top + dir * moved;
-    let drop = cast_hit(over, Vec3::NEG_Y, lift + 2.0)?;
+    let (onto, drop) = cast_hit(over, Vec3::NEG_Y, lift + 2.0)?;
     let landed = over - Vec3::Y * drop.time_of_impact;
     // It must have climbed, onto something level enough to stand on: the
     // tread, or its edge under the capsule's rounded bottom.
@@ -295,5 +322,5 @@ fn step_up(rapier: &RapierContext, entity: Entity, from: Vec3, step: Vec3) -> Op
         inside = true;
         false
     });
-    (!inside).then_some(to)
+    (!inside).then_some((to, onto))
 }
