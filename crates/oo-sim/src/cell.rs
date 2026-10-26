@@ -166,6 +166,8 @@ fn spawn_cell(commands: &mut Commands, world: &WorldData, cell: &Cell) -> Option
     let mut placed = Vec::new();
     let mut spawn = None;
     let mut doors = 0;
+    // Load doors out of here that lead to another interior: (destination cell, door there).
+    let mut exits = Vec::new();
     for r in &cell.references {
         let translation = Vec3::from(zup_to_yup_pos(r.position));
         let [rx, ry, rz] = r.rotation;
@@ -186,8 +188,16 @@ fn spawn_cell(commands: &mut Commands, world: &WorldData, cell: &Cell) -> Option
             BaseForm(r.base),
             CellMember,
         ));
-        // Markers, NPCs and the like have no model of their own (yet).
-        if let Some(model) = world.models.get(&r.base).filter(|m| !is_marker_model(m)) {
+        // Markers have no model to draw. Neither do actors yet: an NPC's or
+        // creature's MODL is its skeleton.nif, which has no visible mesh but
+        // does carry a ragdoll, and frozen in its bind pose that ragdoll is an
+        // invisible T-shaped wall. Actors get their models when they're animated.
+        let actor = matches!(&r.tag.0, b"ACHR" | b"ACRE");
+        if let Some(model) = world
+            .models
+            .get(&r.base)
+            .filter(|m| !actor && !is_marker_model(m))
+        {
             debug!(
                 "{:08X} at {:?} rot {:?}: {model}",
                 r.form_id, r.position, r.rotation
@@ -197,6 +207,9 @@ fn spawn_cell(commands: &mut Commands, world: &WorldData, cell: &Cell) -> Option
         }
         if let Some(t) = &r.teleport {
             let destination = world.reference_cells.get(&t.door).copied();
+            if let Some(cell) = destination {
+                exits.push((cell, t.door));
+            }
             let label = destination
                 .and_then(|c| world.cell_names.get(&c).cloned())
                 .unwrap_or_else(|| "outside".to_owned());
@@ -211,16 +224,26 @@ fn spawn_cell(commands: &mut Commands, world: &WorldData, cell: &Cell) -> Option
             doors += 1;
         }
     }
+    let marker = spawn.is_some();
+    // Oblivion.esm has no COCMarkerHeading (that's a later games' convention), so
+    // most cells have no marker. The next best place is where the game itself puts
+    // you when you arrive: the far side of one of this cell's load doors leads back
+    // here, and its XTEL is a spot on the floor in front of the door.
+    if spawn.is_none() {
+        spawn = exits
+            .iter()
+            .find_map(|&(other, door)| arrival_through(world, other, door));
+    }
     info!(
-        "cell {} ({:08X}): {} references, {} with models, {doors} load doors, spawn marker {}",
+        "cell {} ({:08X}): {} references, {} with models, {doors} load doors, spawn {}",
         cell.editor_id,
         cell.form_id,
         cell.references.len(),
         placed.len(),
-        if spawn.is_some() {
-            "found"
-        } else {
-            "not found"
+        match (marker, spawn) {
+            (true, _) => "at COC marker".to_owned(),
+            (false, Some(s)) => format!("at a load door's arrival point {}", s.position),
+            (false, None) => "above the middle of the cell".to_owned(),
         },
     );
     commands.insert_resource(CurrentCell {
@@ -245,6 +268,20 @@ fn spawn_cell(commands: &mut Commands, world: &WorldData, cell: &Cell) -> Option
             position: median + Vec3::Y * 100.0,
             yaw: 0.0,
         })
+    })
+}
+
+/// Where a door in cell `other` drops you when you go through it, if it's a load door.
+fn arrival_through(world: &WorldData, other: u32, door: u32) -> Option<SpawnPoint> {
+    let cell = interior_cell_by_form_id(&world.plugin, other).ok()??;
+    let t = cell
+        .references
+        .iter()
+        .find(|r| r.form_id == door)?
+        .teleport?;
+    Some(SpawnPoint {
+        position: Vec3::from(zup_to_yup_pos(t.position)),
+        yaw: heading_to_yaw(t.rotation[2]),
     })
 }
 

@@ -39,6 +39,7 @@ pub(crate) fn update_looking_at(
                     .find(|e| refs.contains(*e))
             });
         if looking.0 != hit {
+            debug!("player {player} now looking at {hit:?}");
             looking.0 = hit;
         }
     }

@@ -62,8 +62,9 @@ degrees) puts the player's eyes there in noclip.
 
 1. **Data files.** Plugin and BSA readers, interior cells and references (done).
 2. **Walk around.** NIF meshes and DDS textures, Havok collision, a first-person
-   character controller, load doors between interior cells. Meshes and textures work on
-   real game files; collision and doors are tested on synthetic data so far.
+   character controller, load doors between interior cells. All of it works on the real
+   tutorial prison; `OO_DATA=/path/to/Data cargo test -p oo-sim --test real_data` checks
+   landing, walls and a load door against your own copy of the game.
 3. **Interact.** Pick up items, containers, inventory, the activate prompt for each.
 4. **People.** NPCs standing where they're placed, then dialogue topics.
 5. **The tutorial.** Enough scripting, AI and combat to play from the prison cell to

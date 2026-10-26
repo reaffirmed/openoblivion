@@ -51,25 +51,39 @@ impl CollisionCache {
         let parts: Vec<ColliderPart> = match scene {
             Some(scene) => {
                 let (_, collisions) = import_nif_with_collision(&scene, &mut self.pool);
-                collisions
-                    .into_iter()
-                    .filter(|c| c.body.collidable)
-                    .filter_map(|c| {
-                        Some(ColliderPart {
-                            collider: to_collider(&c.shape)?,
-                            transform: Transform {
-                                translation: Vec3::from(c.translation),
-                                rotation: Quat::from_array(c.rotation),
-                                scale: Vec3::splat(c.scale),
-                            },
-                        })
-                    })
-                    .collect()
+                let mut parts = Vec::new();
+                for c in collisions.into_iter().filter(|c| c.body.collidable) {
+                    let transform = Transform {
+                        translation: Vec3::from(c.translation),
+                        rotation: Quat::from_array(c.rotation),
+                        scale: Vec3::splat(c.scale),
+                    };
+                    flatten(&c.shape, transform, &mut parts);
+                }
+                parts
             }
             None => Vec::new(),
         };
         self.models.insert(key, parts.clone());
         parts
+    }
+}
+
+/// Turns a shape into colliders, one per leaf. Compounds are split into separate
+/// colliders rather than mapped to a Rapier compound, because parry panics on a
+/// compound holding another composite shape, and real Havok lists often hold
+/// triangle meshes (`bhkListShape` of `bhkNiTriStripsShape`s).
+fn flatten(shape: &CollisionShape, transform: Transform, out: &mut Vec<ColliderPart>) {
+    if let CollisionShape::Compound { children } = shape {
+        for (pos, rot, child) in children {
+            let local = Transform::from_translation(*pos).with_rotation(*rot);
+            flatten(child, transform * local, out);
+        }
+    } else if let Some(collider) = to_collider(shape) {
+        out.push(ColliderPart {
+            collider,
+            transform,
+        });
     }
 }
 
@@ -89,16 +103,7 @@ fn to_collider(shape: &CollisionShape) -> Option<Collider> {
         CollisionShape::TriMesh { vertices, indices } => {
             Collider::trimesh(vertices.clone(), indices.clone()).ok()?
         }
-        CollisionShape::Compound { children } => {
-            let parts: Vec<_> = children
-                .iter()
-                .filter_map(|(pos, rot, child)| Some((*pos, *rot, to_collider(child)?)))
-                .collect();
-            if parts.is_empty() {
-                return None;
-            }
-            Collider::compound(parts)
-        }
+        CollisionShape::Compound { .. } => unreachable!("flatten splits compounds"),
     })
 }
 

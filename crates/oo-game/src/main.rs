@@ -41,6 +41,9 @@ struct Args {
     /// "x,y,z,yaw,pitch", in engine units (Y up) and degrees.
     #[arg(long, value_delimiter = ',', allow_negative_numbers = true)]
     camera: Option<Vec<f32>>,
+    /// Start with collision shapes shown, as if F3 had been pressed.
+    #[arg(long)]
+    show_collision: bool,
 }
 
 /// Where `--camera` puts the player's eyes, if it was given.
@@ -71,7 +74,7 @@ fn main() {
         cell: args.cell,
     }))
     .add_plugins(RapierDebugRenderPlugin {
-        enabled: false,
+        enabled: args.show_collision,
         ..default()
     })
     .init_resource::<ModelCache>()
