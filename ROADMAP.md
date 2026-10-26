@@ -1,5 +1,32 @@
 # Roadmap
 
+## Principles
+
+Standing decisions, agreed on 2026-10-26. They decide what gets worked on and how.
+
+1. **The vanilla game first.** "Done" means a full playthrough of the original game
+   works. Enhancements (shadows, ambient occlusion, co-op, new UI, the Enhanced
+   lighting mode beyond what exists) wait until then: each one now is a second
+   behaviour to keep correct.
+2. **Exact where players notice, close enough elsewhere.** Formulas, scripts, AI and
+   menus match the original game exactly. Physics details such as stepping up stairs,
+   and tolerances such as light falloff, only have to be close. When our data import is
+   wrong, fix the importer rather than copying the original engine's quirks one by one.
+   The reverse-engineering notes mark which rules are exact and which are close.
+3. **OpenMW's architecture, not its code**, for milestones 3 to 6: cell streaming,
+   exterior terrain, save and load, and the modding API are solved problems in an
+   engine of the same family. Read their design; write our own code (see
+   [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md)).
+4. **One reference session per milestone.** Captures from the original game
+   (screenshots, clips, runtime dumps) are batched into one sitting per milestone, from
+   the list under [Next reference session](#next-reference-session), instead of ad hoc
+   requests.
+5. **MIT licence**, so the project is open to contributions from day one.
+6. **The way of working stays**: a design thread, a thread that tests on a PC with the
+   game, and a reverse-engineering thread, all working against
+   [the repository](https://github.com/reaffirmed/openoblivion) rather than exchanging
+   patch files.
+
 ## The goal
 
 A complete, open engine for The Elder Scrolls IV: Oblivion, in the spirit of
@@ -152,9 +179,29 @@ Public projects to read for design, never to copy code from (see
 
 Things that only the person can give; work carries on around them.
 
-- Reference screenshots and short clips from the original game for side-by-side
-  checks (lighting, menus, the opening scene), which need a click to launch it.
+- The next reference session (below), when it suits.
 - Priority calls when two directions compete; until then the order above stands.
+
+### Next reference session
+
+What to capture from the original game at the next sitting, kept up to date as work
+turns up questions. Everything here is for side-by-side checks and stays out of the
+repository.
+
+- **Lighting:** the prison cell and the corridor outside it, and ambush room A, with
+  the same camera positions as `--lighting vanilla` uses, to settle the falloff and
+  the overall brightness (Vanilla currently renders darker than Enhanced).
+- **Menus:** the race, birthsign and class screens, the inventory, container and
+  dialogue screens at 1280×720 and 1920×1080, for layout and text colour.
+- **The opening scene:** a clip from the cell door opening to the party leaving
+  ambush room A: who walks where, when lines are said, which assassin goes for whom
+  after Renault falls, and how many hits each assassin takes.
+- **The locked cell gate:** whether anything gets over it, and its height against the
+  player's eye line, to check the imported collision.
+- **Combat:** how many blows a Blade needs per assassin, and whether the tutorial's
+  rats and the zombie ever fight each other.
+- **Sound:** footsteps on stone, and when the music switches to and from battle
+  music.
 
 ### 3. Step outside: Tamriel and the Imperial City
 
