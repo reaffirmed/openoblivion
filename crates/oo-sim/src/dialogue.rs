@@ -24,6 +24,37 @@ pub const GREETING_ID: u32 = 0xC8;
 pub const ANY_ID: u32 = 0xD3;
 /// Rumours, asked at most once per conversation.
 pub const INFOGENERAL_ID: u32 = 0xD7;
+/// What an actor says instead when their disposition is too low.
+pub const INFO_REFUSAL_ID: u32 = 0x118;
+
+/// The line that answers `topic`, and the topic it belongs to. A line that
+/// only failed on disposition is swapped for an `InfoRefusal` line, unless it
+/// is itself flagged as a refusal or the speaker has no refusal line.
+pub fn answer(
+    data: &ScriptData,
+    state: &mut ScriptState,
+    facts: &HashMap<u32, ActorFacts>,
+    topic: u32,
+    speaker: u32,
+) -> Option<(u32, u32)> {
+    match pick_response(data, state, facts, topic, speaker)? {
+        Pick::Line(info) => Some((topic, info)),
+        Pick::DispositionTooLow(info) => {
+            let refusal_flagged = data
+                .dialogue
+                .infos
+                .get(&info)
+                .is_some_and(|i| i.flags & Info::REFUSAL != 0);
+            if !refusal_flagged
+                && let Some(Pick::Line(refusal)) =
+                    pick_response(data, state, facts, INFO_REFUSAL_ID, speaker)
+            {
+                return Some((INFO_REFUSAL_ID, refusal));
+            }
+            Some((topic, info))
+        }
+    }
+}
 
 /// What a topic answers with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,21 +306,14 @@ pub(crate) fn update_conversations(
             }
             talk.line = None;
             talk.choices.clear();
-            match pick_response(data, &mut state, &facts, topic, speaker) {
-                Some(Pick::Line(info)) => {
-                    effects.extend(say(data, &mut state, &facts, info, speaker));
-                    talk.line = Some((topic, info));
-                    let line = data.dialogue.infos.get(&info);
-                    talk.goodbye = line.is_some_and(|i| i.flags & Info::GOODBYE != 0);
-                    talk.choices = line.map(|i| i.choices.clone()).unwrap_or_default();
-                }
-                // The game answers with a line from its built-in refusal
-                // topic instead, which isn't identified yet.
-                Some(Pick::DispositionTooLow(info)) => {
-                    debug!("{speaker:08X} refuses {topic:08X} ({info:08X}): disposition too low");
-                }
-                None => {}
-            }
+            let Some((topic, info)) = answer(data, &mut state, &facts, topic, speaker) else {
+                continue;
+            };
+            effects.extend(say(data, &mut state, &facts, info, speaker));
+            talk.line = Some((topic, info));
+            let line = data.dialogue.infos.get(&info);
+            talk.goodbye = line.is_some_and(|i| i.flags & Info::GOODBYE != 0);
+            talk.choices = line.map(|i| i.choices.clone()).unwrap_or_default();
         }
         talk.topics = if talk.choices.is_empty() {
             available_topics(data, &mut state, &facts, speaker)
