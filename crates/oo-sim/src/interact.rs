@@ -108,6 +108,7 @@ type PlayerView = (
 pub(crate) fn activate(
     mut commands: Commands,
     mut transition: ResMut<PendingTransition>,
+    mut exterior: ResMut<crate::exterior::PendingExterior>,
     world: Option<Res<WorldData>>,
     mut changes: ResMut<WorldChanges>,
     mut state: ResMut<ScriptState>,
@@ -234,20 +235,33 @@ pub(crate) fn activate(
             container_contents(&mut changes, &world, placed.0, *base);
             open.0 = Some(placed.0);
         } else if let Some(door) = door {
-            match door.cell {
-                Some(cell) => {
-                    info!("going to {}", door.label);
+            let going = match (door.cell, door.exterior) {
+                (Some(cell), _) => {
                     transition.0 = Some((cell, door.arrival));
-                    // The door is unloaded with its cell, so the sound plays
-                    // at the player.
-                    if door.sound != 0 {
-                        sounds.write(PlaySound {
-                            source: PLAYER_REF,
-                            sound: SoundRef::Form(door.sound),
-                        });
-                    }
+                    true
                 }
-                None => info!("that door leads outside; exteriors aren't implemented yet"),
+                (None, Some(worldspace)) => {
+                    exterior.0 = Some((worldspace, door.arrival));
+                    true
+                }
+                (None, None) => {
+                    info!(
+                        "that door leads to {:08X}, which isn't in any cell",
+                        door.door
+                    );
+                    false
+                }
+            };
+            if going {
+                info!("going to {}", door.label);
+                // The door is unloaded with its cell, so the sound plays
+                // at the player.
+                if door.sound != 0 {
+                    sounds.write(PlaySound {
+                        source: PLAYER_REF,
+                        sound: SoundRef::Form(door.sound),
+                    });
+                }
             }
         }
     }

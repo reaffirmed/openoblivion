@@ -62,8 +62,13 @@ pub struct Owner(pub u32);
 /// A load door: activating it takes the player to another cell.
 #[derive(Component, Debug, Clone)]
 pub struct LoadDoor {
-    /// Destination cell's form ID, or `None` if it's outside (exteriors aren't loaded yet).
+    /// Destination cell's form ID, or `None` if it's outside.
     pub cell: Option<u32>,
+    /// For a door that leads outside, the worldspace it leads to, once
+    /// [`crate::exterior`] has found the door on the other side.
+    pub exterior: Option<u32>,
+    /// The door on the other side.
+    pub door: u32,
     /// What to call the destination, e.g. "Imperial Prison".
     pub label: String,
     pub arrival: SpawnPoint,
@@ -178,7 +183,7 @@ pub fn is_marker_model(model: &str) -> bool {
 
 /// Bethesda's Z rotation is a clockwise heading from north (+Y), which the axis
 /// swap turns into -Z; Bevy's yaw is counter-clockwise from -Z.
-fn heading_to_yaw(z_rotation: f32) -> f32 {
+pub(crate) fn heading_to_yaw(z_rotation: f32) -> f32 {
     -z_rotation
 }
 
@@ -224,6 +229,8 @@ pub(crate) fn load_world(
     commands.insert_resource(data);
 
     match &config.cell {
+        // Starting outside: crate::exterior loads it.
+        Some(start) if crate::exterior::parse_start(start).is_some() => {}
         Some(editor_id) => match interior_cell(&world.order, editor_id) {
             Ok(Some(cell)) => {
                 if let Some(spawn) = spawn_cell(&mut commands, &world, &changes, &cell) {
@@ -290,7 +297,11 @@ fn unknown_cell_message(order: &LoadOrder, editor_id: &str) -> String {
 /// that flag. Parents outside the cell aren't loaded yet, so those references
 /// go by their own flag. (The prison's assassins 2 to 4 are flagged but follow
 /// assassin 1, who is enabled; one of them starts the ambush at stage 22.)
-fn is_enabled(r: &Reference, cell: &HashMap<u32, &Reference>, changes: &WorldChanges) -> bool {
+pub(crate) fn is_enabled(
+    r: &Reference,
+    cell: &HashMap<u32, &Reference>,
+    changes: &WorldChanges,
+) -> bool {
     fn go(
         r: &Reference,
         cell: &HashMap<u32, &Reference>,
@@ -502,7 +513,8 @@ fn spawn_visitors(commands: &mut Commands, world: &WorldData, changes: &WorldCha
 
 /// What spawning one reference found out, for picking a spawn point.
 #[derive(Default)]
-struct Spawned {
+pub(crate) struct Spawned {
+    pub(crate) entity: Option<Entity>,
     translation: Vec3,
     has_model: bool,
     coc_marker: Option<SpawnPoint>,
@@ -514,7 +526,7 @@ struct Spawned {
 /// Spawns one reference with everything its base form calls for.
 /// `at`, for an actor that has moved since, is its place instead of the
 /// record's.
-fn spawn_reference_at(
+pub(crate) fn spawn_reference_at(
     commands: &mut Commands,
     world: &WorldData,
     r: &Reference,
@@ -543,6 +555,7 @@ fn spawn_reference_at(
         BaseForm(r.base),
         CellMember,
     ));
+    out.entity = Some(entity.id());
     // Markers have no model to draw. Actors don't get a Model either: an
     // NPC's or creature's MODL is its skeleton.nif, which has no visible
     // mesh but does carry a ragdoll, and as a static model that ragdoll is
@@ -599,6 +612,8 @@ fn spawn_reference_at(
             .unwrap_or_else(|| "outside".to_owned());
         entity.insert(LoadDoor {
             cell: destination,
+            exterior: None,
+            door: t.door,
             label,
             arrival: SpawnPoint {
                 position: Vec3::from(zup_to_yup_pos(t.position)),

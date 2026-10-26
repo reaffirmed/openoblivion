@@ -136,6 +136,27 @@ impl Plugin {
         Nodes::new(&self.bytes[self.body_offset..])
     }
 
+    /// Where a group or record starts in the plugin's bytes, to come back to it
+    /// later with [`Plugin::node_at`] without walking the plugin again.
+    pub fn offset_of(&self, node: &Node<'_>) -> Option<usize> {
+        let body = match node {
+            Node::Group(g) => g.body,
+            Node::Record(r) => r.body,
+        };
+        let start = (body.as_ptr() as usize).checked_sub(self.bytes.as_ptr() as usize)?;
+        let start = start.checked_sub(HEADER_LEN)?;
+        (start + HEADER_LEN + body.len() <= self.bytes.len()).then_some(start)
+    }
+
+    /// The group or record at an offset from [`Plugin::offset_of`].
+    pub fn node_at(&self, offset: usize) -> Result<Node<'_>> {
+        let bytes = self
+            .bytes
+            .get(offset..)
+            .ok_or_else(|| Error::Corrupt(format!("offset {offset} is past the end")))?;
+        Nodes::new(bytes).read_node()
+    }
+
     /// Calls `f` for every record in the plugin, depth first, excluding the header.
     pub fn for_each_record(&self, mut f: impl FnMut(&Record<'_>)) -> Result<()> {
         fn walk<'a>(nodes: Nodes<'a>, f: &mut impl FnMut(&Record<'a>)) -> Result<()> {

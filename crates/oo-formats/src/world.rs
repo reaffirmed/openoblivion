@@ -298,7 +298,7 @@ impl PathGrid {
 }
 
 impl Reference {
-    fn from_record(r: &Record<'_>) -> Result<Self> {
+    pub(crate) fn from_record(r: &Record<'_>) -> Result<Self> {
         let mut out = Reference {
             tag: r.tag,
             form_id: r.form_id,
@@ -506,7 +506,7 @@ pub fn interior_cell_by_form_id(order: &LoadOrder, form_id: u32) -> Result<Optio
     }))
 }
 
-fn remap_reference(order: &LoadOrder, index: usize, r: &mut Reference) {
+pub(crate) fn remap_reference(order: &LoadOrder, index: usize, r: &mut Reference) {
     r.form_id = order.global(index, r.form_id);
     r.base = order.global(index, r.base);
     if let Some(t) = &mut r.teleport {
@@ -586,7 +586,7 @@ pub fn form_id_by_editor_id(order: &LoadOrder, editor_id: &str) -> Result<Option
 }
 
 /// A cell's editor ID (`EDID`) and display name (`FULL`).
-fn cell_names(cell: &Record<'_>) -> Result<(Option<String>, Option<String>)> {
+pub(crate) fn cell_names(cell: &Record<'_>) -> Result<(Option<String>, Option<String>)> {
     let (mut editor_id, mut name) = (None, None);
     let fields = cell.fields()?;
     for field in fields.iter() {
@@ -669,7 +669,7 @@ fn walk_cell_blocks<'a>(
 }
 
 /// The cell's path grid, wherever in its children groups it sits.
-fn find_path_grid(nodes: Nodes<'_>) -> Result<Option<PathGrid>> {
+pub(crate) fn find_path_grid(nodes: Nodes<'_>) -> Result<Option<PathGrid>> {
     for node in nodes {
         match node? {
             Node::Record(r) if r.tag.0 == *b"PGRD" && !r.is_deleted() => {
@@ -688,7 +688,7 @@ fn find_path_grid(nodes: Nodes<'_>) -> Result<Option<PathGrid>> {
 
 /// Collects references with their deleted flag; deletions matter when merging
 /// a load order, since they remove a master's reference.
-fn collect_references(nodes: Nodes<'_>, out: &mut Vec<(Reference, bool)>) -> Result<()> {
+pub(crate) fn collect_references(nodes: Nodes<'_>, out: &mut Vec<(Reference, bool)>) -> Result<()> {
     for node in nodes {
         match node? {
             Node::Record(r) if matches!(&r.tag.0, b"REFR" | b"ACHR" | b"ACRE") => {

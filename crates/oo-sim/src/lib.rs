@@ -13,6 +13,7 @@ pub mod character;
 pub mod combat;
 pub mod data;
 pub mod dialogue;
+pub mod exterior;
 pub mod faction;
 pub mod interact;
 pub mod inventory;
@@ -63,6 +64,9 @@ impl Plugin for SimPlugin {
         app.insert_resource(self.0.clone())
             .add_plugins((physics::PhysicsPlugin, player::PlayerPlugin))
             .init_resource::<cell::PendingTransition>()
+            .init_resource::<exterior::PendingExterior>()
+            .init_resource::<exterior::ExteriorGrid>()
+            .init_resource::<exterior::CellCache>()
             .init_resource::<WorldChanges>()
             .init_resource::<script::ScriptState>()
             .init_resource::<script::Pending>()
@@ -72,7 +76,10 @@ impl Plugin for SimPlugin {
             .add_systems(Update, (trigger::attach_zones, combat::attach_fighters))
             // The simulation steps at a fixed rate, independent of framerate.
             .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
-            .add_systems(Startup, cell::load_world)
+            .add_systems(
+                Startup,
+                (cell::load_world, exterior::start_exterior).chain(),
+            )
             .add_systems(FixedFirst, ai::remember_pose)
             .add_systems(FixedLast, ai::record_pose)
             .add_systems(
@@ -94,9 +101,17 @@ impl Plugin for SimPlugin {
                     ai::run_ai.run_if(character::in_game_mode),
                     animated::open_doors_for_actors.run_if(character::in_game_mode),
                     animated::animate_objects,
-                    cell::resync_cell,
+                    (exterior::resync_exterior, cell::resync_cell).chain(),
                     cell::apply_moves,
-                    cell::apply_transition,
+                    (
+                        exterior::leave_exterior,
+                        cell::apply_transition,
+                        exterior::enter_exterior,
+                        exterior::stream_exterior,
+                        exterior::track_actor_cells,
+                        exterior::resolve_exterior_doors,
+                    )
+                        .chain(),
                 )
                     .chain()
                     .after(bevy_rapier3d::prelude::PhysicsSet::Writeback),
