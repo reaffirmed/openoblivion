@@ -33,7 +33,7 @@ impl Plugin for PhysicsPlugin {
         )
         .init_resource::<CollisionCache>()
         .init_resource::<AnimatedModels>()
-        .add_systems(Update, attach_colliders);
+        .add_systems(FixedPreUpdate, attach_colliders);
     }
 }
 
