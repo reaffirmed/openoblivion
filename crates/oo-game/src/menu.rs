@@ -18,10 +18,14 @@ use oo_sim::{
 #[derive(Resource, Debug, Default)]
 pub struct Menu {
     inventory: bool,
-    container: bool,
+    pub(crate) container: bool,
     /// Selected column: false for the container, true for the inventory.
-    right: bool,
-    row: usize,
+    pub(crate) right: bool,
+    pub(crate) row: usize,
+    /// The game's own menus are drawn (see `xml_menu`), not the text placeholders.
+    pub(crate) xml: bool,
+    /// A click on a close button, handled with the next input.
+    pub(crate) close_requested: bool,
 }
 
 impl Menu {
@@ -112,18 +116,22 @@ pub(crate) fn menu_input(
             *menu = Menu {
                 inventory: true,
                 right: true,
+                xml: menu.xml,
                 ..default()
             };
         }
         return;
     }
-    if close {
+    if close || menu.close_requested {
         keys.clear_just_pressed(KeyCode::Tab);
         keys.clear_just_pressed(KeyCode::Escape);
         if menu.container {
             actions.0.push(PlayerAction::CloseContainer);
         }
-        *menu = Menu::default();
+        *menu = Menu {
+            xml: menu.xml,
+            ..default()
+        };
         return;
     }
 
@@ -152,27 +160,37 @@ pub(crate) fn menu_input(
     }
     if pressed(&keys, KeyCode::Space, KeyCode::Enter) {
         keys.clear_just_pressed(KeyCode::Space);
-        let side = if menu.right {
-            Some(&inventory.0)
-        } else {
-            container
-        };
-        if let Some(stack) = side.and_then(|s| s.get(menu.row)) {
-            actions.0.push(if menu.right {
-                PlayerAction::Put {
-                    item: stack.item,
-                    count: stack.count,
-                }
-            } else {
-                PlayerAction::Take {
-                    item: stack.item,
-                    count: stack.count,
-                }
-            });
-        }
+        move_selected(&menu, &inventory.0, container, &mut actions);
     }
     if keys.just_pressed(KeyCode::KeyT) {
         actions.0.push(PlayerAction::TakeAll);
+    }
+}
+
+/// Moves the selected stack to the other side of an open container.
+pub(crate) fn move_selected(
+    menu: &Menu,
+    inventory: &[Stack],
+    container: Option<&Vec<Stack>>,
+    actions: &mut PlayerActions,
+) {
+    let side = if menu.right {
+        Some(inventory)
+    } else {
+        container.map(Vec::as_slice)
+    };
+    if let Some(stack) = side.and_then(|s| s.get(menu.row)) {
+        actions.0.push(if menu.right {
+            PlayerAction::Put {
+                item: stack.item,
+                count: stack.count,
+            }
+        } else {
+            PlayerAction::Take {
+                item: stack.item,
+                count: stack.count,
+            }
+        });
     }
 }
 
@@ -210,12 +228,14 @@ pub(crate) fn update_menu(
     else {
         return;
     };
-    visibility.set_if_neq(if menu.is_open() {
+    // The placeholder text panel, when the game's own menus aren't available.
+    let shown = menu.is_open() && !menu.xml;
+    visibility.set_if_neq(if shown {
         Visibility::Inherited
     } else {
         Visibility::Hidden
     });
-    if !menu.is_open() {
+    if !shown {
         return;
     }
     let container = open.0.and_then(|r| changes.containers.get(&r));

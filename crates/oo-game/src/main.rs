@@ -7,6 +7,7 @@ mod actor;
 mod lighting;
 mod menu;
 mod model;
+mod xml_menu;
 mod xml_ui;
 
 use std::path::PathBuf;
@@ -134,6 +135,7 @@ fn main() {
     })
     .init_resource::<menu::Menu>()
     .init_resource::<xml_ui::Hud>()
+    .init_resource::<xml_menu::XmlScreens>()
     .add_systems(
         Startup,
         (
@@ -141,6 +143,7 @@ fn main() {
             setup_hud,
             menu::setup_menu,
             xml_ui::setup_hud_overlay,
+            xml_menu::setup_menu_overlay,
         ),
     )
     .add_systems(
@@ -148,7 +151,14 @@ fn main() {
         (
             model::attach_models,
             (actor::attach_actors, actor::animate_actors).chain(),
-            (menu::menu_input, grab_cursor, player_input, follow_player).chain(),
+            (
+                xml_menu::update_menu_overlay,
+                menu::menu_input,
+                grab_cursor,
+                player_input,
+                follow_player,
+            )
+                .chain(),
             debug_keys,
             (update_hud, update_cell_label, menu::update_menu),
             xml_ui::update_hud_overlay,
@@ -240,14 +250,32 @@ fn setup_scene(mut commands: Commands) {
 }
 
 /// Click to capture the mouse, Escape to release it.
+/// While a menu is open the cursor is free, for the mouse; closing it captures
+/// the mouse again.
 fn grab_cursor(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    menu: Res<menu::Menu>,
+    mut was_open: Local<bool>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
     let Ok(mut cursor) = cursor.single_mut() else {
         return;
     };
+    let open = menu.is_open();
+    if open != *was_open {
+        *was_open = open;
+        cursor.grab_mode = if open {
+            CursorGrabMode::None
+        } else {
+            CursorGrabMode::Locked
+        };
+        cursor.visible = open;
+        return;
+    }
+    if open {
+        return;
+    }
     if mouse.just_pressed(MouseButton::Left) {
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;

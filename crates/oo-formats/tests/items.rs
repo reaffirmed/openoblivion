@@ -49,6 +49,11 @@ fn order() -> LoadOrder {
                 &[
                     field(b"EDID", &zstr("Lockpick")),
                     field(b"FULL", &zstr("Lockpick")),
+                    field(b"ICON", &zstr("Clutter\\Lockpick.dds")),
+                    field(
+                        b"DATA",
+                        &[5i32.to_le_bytes(), 0.25f32.to_le_bytes()].concat(),
+                    ),
                 ],
             ),
             record(b"MISC", 0, 0x11, &[field(b"EDID", &zstr("Bone01"))]),
@@ -126,6 +131,8 @@ fn order() -> LoadOrder {
 fn indexes_carriable_items() {
     let items = items(&order()).unwrap();
     assert_eq!(items[&0x10].name, "Lockpick");
+    assert_eq!(items[&0x10].icon.as_deref(), Some("Clutter\\Lockpick.dds"));
+    assert_eq!((items[&0x10].value, items[&0x10].weight), (5, 0.25));
     assert_eq!(items[&0x11].name, "Bone01", "falls back to the editor ID");
     assert_eq!(items[&0x20].tag, Tag(*b"LIGH"), "torches can be carried");
     assert!(!items.contains_key(&0x21), "wall sconces can't");

@@ -25,6 +25,53 @@ pub struct ItemInfo {
     pub tag: Tag,
     /// In-game name (`FULL`), falling back to the editor ID.
     pub name: String,
+    /// Inventory icon (`ICON`), relative to `textures\menus\icons\`.
+    pub icon: Option<String>,
+    /// Base value in gold.
+    pub value: i32,
+    pub weight: f32,
+}
+
+/// Where each item type keeps its value and weight in `DATA` (or, for
+/// ingredients and potions, the value in `ENIT`): byte offsets.
+fn value_weight_offsets(tag: &[u8; 4]) -> (Option<(&'static [u8; 4], usize)>, Option<usize>) {
+    match tag {
+        b"MISC" | b"KEYM" => (Some((b"DATA", 0)), Some(4)),
+        b"WEAP" => (Some((b"DATA", 16)), Some(24)),
+        b"ARMO" => (Some((b"DATA", 2)), Some(10)),
+        b"CLOT" | b"SLGM" => (Some((b"DATA", 0)), Some(4)),
+        b"BOOK" | b"APPA" | b"SGST" => (Some((b"DATA", 1)), Some(5)),
+        b"AMMO" => (Some((b"DATA", 8)), Some(12)),
+        b"INGR" | b"ALCH" => (Some((b"ENIT", 0)), Some(0)),
+        b"LIGH" => (Some((b"DATA", 24)), Some(28)),
+        _ => (None, None),
+    }
+}
+
+fn item_details(r: &Record<'_>) -> Result<(Option<String>, i32, f32)> {
+    let (value_at, weight_at) = value_weight_offsets(&r.tag.0);
+    let (mut icon, mut value, mut weight) = (None, 0, 0.0);
+    let fields = r.fields()?;
+    for f in fields.iter() {
+        let f = f?;
+        let d = f.data;
+        if f.tag.0 == *b"ICON" && icon.is_none() {
+            icon = Some(f.zstring()).filter(|s| !s.is_empty());
+        }
+        if let Some((tag, at)) = value_at
+            && f.tag.0 == *tag
+            && d.len() >= at + 4
+        {
+            value = u32_at(d, at) as i32;
+        }
+        if let Some(at) = weight_at
+            && f.tag.0 == *b"DATA"
+            && d.len() >= at + 4
+        {
+            weight = f32::from_le_bytes(d[at..at + 4].try_into().unwrap());
+        }
+    }
+    Ok((icon, value, weight))
 }
 
 /// One line of a container's or leveled list's contents.
@@ -79,11 +126,15 @@ pub fn items(order: &LoadOrder) -> Result<HashMap<u32, ItemInfo>> {
             return Ok(());
         }
         let (edid, full) = names(r)?;
+        let (icon, value, weight) = item_details(r)?;
         out.insert(
             id,
             ItemInfo {
                 tag: r.tag,
                 name: full.or(edid).unwrap_or_default(),
+                icon,
+                value,
+                weight,
             },
         );
         Ok(())

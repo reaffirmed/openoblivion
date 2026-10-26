@@ -30,7 +30,7 @@ const SAFE_ZONE: f32 = 20.0;
 
 /// The UI's virtual screen for a window: 960 lines tall, as wide as the
 /// window's aspect allows. Widescreen keeps the 4:3 layout centred.
-fn ui_screen(window: UVec2) -> ScreenTraits {
+pub(crate) fn ui_screen(window: UVec2) -> ScreenTraits {
     let width = (UI_HEIGHT * window.x as f32 / window.y as f32).round();
     let base = ScreenTraits::new(width, UI_HEIGHT);
     ScreenTraits {
@@ -109,7 +109,7 @@ pub fn setup_hud_overlay(
     ));
 }
 
-fn blank_image(size: UVec2) -> Image {
+pub(crate) fn blank_image(size: UVec2) -> Image {
     Image::new_fill(
         Extent3d {
             width: size.x,
