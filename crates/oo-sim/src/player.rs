@@ -197,6 +197,77 @@ pub fn move_player(time: Res<Time>, rapier: ReadRapierContext, mut players: Quer
                 velocity.y = -(velocity.x * n.x + velocity.z * n.z) / n.y;
             }
         }
+        // Rapier's autostep doesn't get a capsule over vertical risers (the
+        // rounded bottom meets the edge as a wall), so when the last move was
+        // mostly blocked, try stepping up by hand.
+        let blocked = output.is_some_and(|o| {
+            let want = o.desired_translation.xz().length();
+            want > 0.1 && o.effective_translation.xz().length() < want * 0.5
+        });
+        let step = horizontal * speed * dt;
+        // Grounded or not: pressed against a riser, the capsule's rounded
+        // bottom rocks on the edge and loses contact with the floor.
+        if blocked
+            && motion.vertical_speed <= 0.0
+            && !intent.jump
+            && let Some(r) = rapier.as_ref()
+            && let Some(to) = step_up(r, entity, transform.translation, step)
+        {
+            transform.translation = to;
+            controller.translation = None;
+            continue;
+        }
         controller.translation = Some(velocity * dt);
     }
+}
+
+/// The highest step the player walks up.
+const STEP_HEIGHT: f32 = 30.0;
+
+/// Where the capsule centred at `from` ends up stepping up onto a ledge in
+/// the direction of `step`: lifted by up to [`STEP_HEIGHT`], moved across, and
+/// set down on a walkable floor higher than before. `None` if there's no room
+/// above, it's still blocked at that height, or there's nothing to stand on.
+fn step_up(rapier: &RapierContext, entity: Entity, from: Vec3, step: Vec3) -> Option<Vec3> {
+    let across = step.with_y(0.0);
+    let len = across.length();
+    if len < 1e-3 {
+        return None;
+    }
+    let dir = across / len;
+    let shape = Collider::capsule_y(PLAYER_HALF_HEIGHT, PLAYER_RADIUS);
+    let filter = QueryFilter::default().exclude_rigid_body(entity);
+    let options = |max| ShapeCastOptions {
+        max_time_of_impact: max,
+        target_distance: 0.5,
+        stop_at_penetration: false,
+        compute_impact_geometry_on_penetration: false,
+    };
+    let cast_hit = |at: Vec3, towards: Vec3, max: f32| {
+        rapier
+            .cast_shape(at, Quat::IDENTITY, towards, &shape, options(max), filter)
+            .map(|(_, hit)| hit)
+    };
+    let cast = |at: Vec3, towards: Vec3, max: f32| {
+        cast_hit(at, towards, max).map(|hit| hit.time_of_impact)
+    };
+    let lift = cast(from, Vec3::Y, STEP_HEIGHT).unwrap_or(STEP_HEIGHT);
+    if lift < 4.0 {
+        return None;
+    }
+    let top = from + Vec3::Y * lift;
+    // Far enough onto the tread to stand on it, at least.
+    let ahead = len.max(PLAYER_RADIUS * 0.5);
+    let moved = cast(top, dir, ahead).unwrap_or(ahead);
+    if moved < 1.0 {
+        return None;
+    }
+    let over = top + dir * moved;
+    let drop = cast_hit(over, Vec3::NEG_Y, lift + 2.0)?;
+    let landed = over - Vec3::Y * drop.time_of_impact;
+    // It must have climbed, onto something level enough to stand on: the
+    // tread, or its edge under the capsule's rounded bottom.
+    // A cast that starts inside something has no details: it isn't a landing.
+    let normal = drop.details.filter(|_| drop.time_of_impact > 0.0)?.normal1;
+    (landed.y >= from.y + 2.0 && normal.y > 0.7).then_some(landed + Vec3::Y * 0.5)
 }

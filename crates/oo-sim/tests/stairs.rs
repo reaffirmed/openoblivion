@@ -1,0 +1,165 @@
+//! The player's controller on synthetic stairs: box steps with vertical
+//! risers, like the tutorial's stairs out of the first ambush room (about 20
+//! units of rise and 33 of tread).
+
+use std::time::Duration;
+
+use bevy::prelude::*;
+use bevy::time::TimeUpdateStrategy;
+use bevy_rapier3d::prelude::*;
+use oo_sim::player::{PLAYER_HALF_HEIGHT, PLAYER_RADIUS};
+use oo_sim::{Player, PlayerIntent, PlayerMotion, SimPlugin, WorldConfig};
+
+const RISE: f32 = 20.0;
+const TREAD: f32 = 33.0;
+const STEPS: usize = 6;
+
+fn app() -> App {
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, TransformPlugin))
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+            16,
+        )))
+        .add_plugins(SimPlugin(WorldConfig {
+            data_dir: None,
+            plugins: Vec::new(),
+            cell: None,
+        }));
+    app
+}
+
+fn run(app: &mut App, frames: u32) {
+    for _ in 0..frames {
+        app.update();
+    }
+}
+
+/// A floor at y = 0 and steps climbing along -Z from z = 0, then a landing.
+fn build_stairs(app: &mut App) {
+    let world = app.world_mut();
+    world.spawn((
+        RigidBody::Fixed,
+        Collider::cuboid(400.0, 10.0, 400.0),
+        Transform::from_xyz(0.0, -10.0, 200.0),
+    ));
+    for i in 0..STEPS {
+        let top = RISE * (i + 1) as f32;
+        world.spawn((
+            RigidBody::Fixed,
+            Collider::cuboid(100.0, top / 2.0, TREAD / 2.0),
+            Transform::from_xyz(0.0, top / 2.0, -(TREAD * i as f32 + TREAD / 2.0)),
+        ));
+    }
+    let top = RISE * STEPS as f32;
+    world.spawn((
+        RigidBody::Fixed,
+        Collider::cuboid(100.0, top / 2.0, 200.0),
+        Transform::from_xyz(0.0, top / 2.0, -(TREAD * STEPS as f32 + 200.0)),
+    ));
+}
+
+fn walk(app: &mut App, player: Entity, yaw: f32, frames: u32) -> Vec3 {
+    {
+        let mut e = app.world_mut().entity_mut(player);
+        let mut i = e.get_mut::<PlayerIntent>().unwrap();
+        i.yaw = yaw;
+        i.movement = Vec2::Y;
+        i.noclip = false;
+    }
+    run(app, frames);
+    app.world()
+        .entity(player)
+        .get::<Transform>()
+        .unwrap()
+        .translation
+}
+
+#[test]
+fn the_player_walks_up_and_down_stairs() {
+    let mut app = app();
+    run(&mut app, 1);
+    build_stairs(&mut app);
+    let player = app
+        .world_mut()
+        .query_filtered::<Entity, With<Player>>()
+        .single(app.world())
+        .unwrap();
+    app.world_mut()
+        .entity_mut(player)
+        .get_mut::<Transform>()
+        .unwrap()
+        .translation = Vec3::new(0.0, PLAYER_HALF_HEIGHT + PLAYER_RADIUS + 2.0, 120.0);
+    run(&mut app, 60);
+    let start = app
+        .world()
+        .entity(player)
+        .get::<Transform>()
+        .unwrap()
+        .translation;
+    assert!(
+        app.world()
+            .entity(player)
+            .get::<PlayerMotion>()
+            .unwrap()
+            .grounded
+    );
+
+    // Facing -Z is yaw 0. Walk up: the landing is 120 up.
+    let up = walk(&mut app, player, 0.0, 200);
+    println!("up: {start} -> {up}");
+    assert!(
+        up.y - start.y > RISE * STEPS as f32 - 5.0,
+        "should have climbed the stairs: {start} -> {up}"
+    );
+    // And back down.
+    let down = walk(&mut app, player, std::f32::consts::PI, 200);
+    println!("down: {up} -> {down}");
+    assert!(
+        (down.y - start.y).abs() < 5.0,
+        "should be back down: {down}"
+    );
+}
+
+#[test]
+fn a_ledge_too_high_stops_the_player() {
+    let mut app = app();
+    run(&mut app, 1);
+    let world = app.world_mut();
+    world.spawn((
+        RigidBody::Fixed,
+        Collider::cuboid(400.0, 10.0, 400.0),
+        Transform::from_xyz(0.0, -10.0, 0.0),
+    ));
+    // 40 high: more than a step.
+    world.spawn((
+        RigidBody::Fixed,
+        Collider::cuboid(100.0, 20.0, 100.0),
+        Transform::from_xyz(0.0, 20.0, -150.0),
+    ));
+    let player = app
+        .world_mut()
+        .query_filtered::<Entity, With<Player>>()
+        .single(app.world())
+        .unwrap();
+    app.world_mut()
+        .entity_mut(player)
+        .get_mut::<Transform>()
+        .unwrap()
+        .translation = Vec3::new(0.0, PLAYER_HALF_HEIGHT + PLAYER_RADIUS + 2.0, 0.0);
+    run(&mut app, 60);
+    let start = app
+        .world()
+        .entity(player)
+        .get::<Transform>()
+        .unwrap()
+        .translation;
+    let end = walk(&mut app, player, 0.0, 120);
+    assert!(
+        end.y - start.y < 5.0,
+        "climbed a 40-unit ledge: {start} -> {end}"
+    );
+    assert!(
+        end.z > -50.0 - PLAYER_RADIUS,
+        "went through the ledge: {end}"
+    );
+}
