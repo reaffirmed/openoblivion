@@ -117,13 +117,38 @@ exactly.
 | 5 | `0x20` | spells: u16 count, u32 each (spells, then levelled spells) |
 | 6 | `0x100` | AI data: aggression, confidence, energy, responsibility (u8 each) |
 | 7 | `0x4` | u32 (base health, likely) |
-| 8 | `0x10000000` | a block written by another component, 17 bytes in 773 of 799 cases (open) |
+| 8 | `0x10000000` | actor-value modifiers: u16 count, per entry u8 actor value + f32 (17 bytes for 3 entries, the common case) |
 | 9 | `0x80` | full name: u8 length, text |
 | 10 | `0x200` | 21 skill values (u8 each) |
 | 11 | `0x400` | class: u32 form index |
 
 Nearly all vanilla NPC records in a save are `0x21C` (health, attributes, base data,
 skills): the game stores levelled NPC stats it computed when the NPC was first loaded.
+
+**`ACHR` / `ACRE` (placed NPC / creature).** A reference record with an AI-process block
+and actor fields:
+
+| Order | Bit(s) | Data |
+|------:|--------|------|
+| 1–3 | as `REFR` | cell-change, moved and new-cell parts |
+| 4 | — | u8 process level: 0 high, 1 middle-high, 2 middle-low, 3 low, 255 none |
+| 5–10 | as `REFR` | form flags, inventory, extra-data list (**always present** for actors), the three u16-counted blocks, `0x10` |
+| 11 | process level ≠ 255 | the AI process's own data (not decoded yet) |
+| 12 | — | actor fields: u32, u8, u8, u8 |
+| 13 | `0x40` | u8 |
+| 14 | horse creatures only | u8 "has rider/owner", then u32 form index if set |
+| 15 | `0x8000` | u16 count, per entry u32 form index + u32 |
+| 16 | `0x20000000` | u32 |
+| 17 | — | u16 count, per entry u32 form index + u32 |
+| 18 | — | two u32 form indices |
+| 19 | `0x200000` | actor-value modifiers: u16 count, per entry u8 actor value + f32 |
+| 20 | — | u8, u32 form index, u32 form index, u32, u32, u8, u8, u32, u32, u8, u8 (later-version fields) |
+
+Checked on all saves: of the 47,066 actor records without an AI process, 44,157 (94%)
+decode exactly; the rest hit rarer extra-data payloads. Records with a process (about
+80% of actor records) need the process block decoded next. The actor-value modifier block
+is the same one `NPC_` records use for bit `0x10000000` (2 + 5 × count bytes; 3 entries =
+17 bytes).
 
 **Extra-data list:** u16 count, then per entry a u8 extra type and its payload. An entry is
 written only when its gating flag is set on the record (inventory stacks are written as if
@@ -193,12 +218,13 @@ with the script-variable block filling the remainder.
 | `QUST` and `CELL` layouts | Executable: their save routines; `QUST` also checked on all saves | confirmed (`CELL` not yet checked on saves) |
 | `INFO` marker | All saves | confirmed (its meaning: likely) |
 | `REFR` layout and extra-data payloads | Executable: the reference, inventory, extra-data and script-variable save routines; then a decoder run over all 932,274 reference records (99.98% exact) | confirmed; bit meanings marked "likely" or open where noted |
+| `ACHR`/`ACRE` layout | Executable: actor and mobile-object save routines; decoder over all actor records without a process (94% exact) | confirmed for the parts listed; process block open |
 | `NPC_` layout | Executable: the NPC, actor-base, actor-base-data, spell-list and AI-data save routines; decoder over all 159,906 records (99.98% exact) | confirmed |
 
 ## Open
 
-1. Per-type layouts still to do: `ACHR`/`ACRE` (references plus actor state) and the two
-   open `CELL` blocks.
+1. Still to do: the AI process block inside `ACHR`/`ACRE` records (per process level), the
+   meanings of the unnamed actor fields, and the two open `CELL` blocks.
 2. Contents of the eight size-prefixed blobs (processes, weather, quick keys…).
 3. How the game applies change records on load (order, what happens to records whose form
    no longer exists).
