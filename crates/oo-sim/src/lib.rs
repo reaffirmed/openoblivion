@@ -63,6 +63,7 @@ impl Plugin for SimPlugin {
             .init_resource::<script::ScriptState>()
             .init_resource::<script::Pending>()
             .init_resource::<trigger::PhantomCache>()
+            .add_message::<animated::PlaySound>()
             .add_systems(Update, trigger::attach_zones)
             // The simulation steps at a fixed rate, independent of framerate.
             .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))

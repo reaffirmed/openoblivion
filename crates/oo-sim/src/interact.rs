@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 
 use crate::actor::Actor;
-use crate::animated::{AnimRequest, Door};
+use crate::animated::{AnimRequest, Door, PlaySound, SoundCue};
 use crate::cell::{LoadDoor, PendingTransition, PlacedRef, WorldData};
 use crate::dialogue::Conversation;
 use crate::inventory::{
@@ -84,6 +84,7 @@ pub(crate) fn activate(
     mut requests: ResMut<Pending>,
     targets: Query<(Entity, Target)>,
     mut players: Query<PlayerView, With<Player>>,
+    mut sounds: MessageWriter<PlaySound>,
 ) {
     let Some(world) = world else { return };
     let Ok((mut intent, looking, mut inventory, mut open, mut talk)) = players.single_mut() else {
@@ -123,12 +124,27 @@ pub(crate) fn activate(
             let has_key = by == PLAYER_REF && lock.key != 0 && inventory.count(lock.key) > 0;
             if !has_key {
                 if by == PLAYER_REF {
-                    let message = if lock.level >= 100 {
-                        "This requires a key."
+                    let level = lock.level;
+                    let name = inner_door
+                        .and_then(|Door(base)| world.doors.get(base))
+                        .map(|d| d.name.clone())
+                        .or_else(|| {
+                            container.and_then(|Container(base)| {
+                                world.containers.get(base).map(|c| c.name.clone())
+                            })
+                        })
+                        .filter(|n| !n.is_empty())
+                        .unwrap_or_else(|| "door".to_owned());
+                    state.messages.push(if level >= 100 {
+                        format!("This {name} is locked. It requires a key.")
                     } else {
-                        "Locked. Picking locks isn't implemented yet."
-                    };
-                    state.messages.push(message.to_owned());
+                        format!("This {name} is locked. Picking locks isn't implemented yet.")
+                    });
+                    requests.animations.push((placed.0, AnimRequest::Locked));
+                    sounds.write(PlaySound {
+                        source: placed.0,
+                        sound: SoundCue::DoorLocked,
+                    });
                 }
                 continue;
             }
@@ -141,6 +157,14 @@ pub(crate) fn activate(
             requests
                 .animations
                 .push((placed.0, AnimRequest::Open(!open.is_open())));
+            sounds.write(PlaySound {
+                source: placed.0,
+                sound: if open.is_open() {
+                    SoundCue::DoorClose
+                } else {
+                    SoundCue::DoorOpen
+                },
+            });
             continue;
         }
         // Only the player's activations do anything else yet.

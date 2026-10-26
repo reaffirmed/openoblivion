@@ -312,17 +312,27 @@ fn destination(
     ai: &Ai,
     here: Vec3,
     positions: &HashMap<u32, Vec3>,
-    cell: u32,
 ) -> Option<(Vec3, f32)> {
     let radius = (p.radius as f32).max(64.0);
     match p.location? {
         Location::NearReference(r) => positions.get(&r).map(|&pos| (pos, radius)),
         Location::NearEditorLocation => Some((ai.home, radius)),
-        Location::InCell(c) if c == cell => None,
+        // Already in the cell is already there. Another cell can't be walked
+        // to until exteriors and cross-cell paths exist.
         Location::NearCurrentLocation | Location::InCell(_) => Some((here, radius)),
         _ => None,
     }
 }
+
+/// Within `radius` across the floor, and roughly level with the goal:
+/// markers often sit above the floor an actor's feet are on.
+fn reached(here: Vec3, to: Vec3, radius: f32) -> bool {
+    let across = Vec2::new(here.x - to.x, here.z - to.z).length();
+    across <= radius && (here.y - to.y).abs() <= REACH_HEIGHT
+}
+
+/// How far above or below a goal still counts as at it.
+const REACH_HEIGHT: f32 = 128.0;
 
 type PlayerView = (&'static Transform, &'static Inventory);
 
@@ -373,7 +383,6 @@ pub(crate) fn run_ai(
     } else {
         HashMap::new()
     };
-    let cell_id = cell.as_ref().map_or(0, |c| c.form_id);
     let grid = cell
         .as_ref()
         .map(|c| (&c.path_points[..], &c.path_edges[..]));
@@ -407,13 +416,26 @@ pub(crate) fn run_ai(
             let pace = if run { RUN_SPEED } else { WALK_SPEED };
             match p.kind {
                 PackageKind::Travel | PackageKind::Escort if !ai.arrived => {
-                    if let Some((to, radius)) = destination(p, &ai, here, &positions, cell_id) {
+                    let target = destination(p, &ai, here, &positions);
+                    if target.is_none() {
+                        // Somewhere this can't find or reach yet: count it as
+                        // reached, so scripts waiting on it carry on.
+                        debug!(
+                            "{:08X}: package {:08X?} goes nowhere known; done",
+                            placed.0, ai.current
+                        );
+                        ai.arrived = true;
+                        if let Some(current) = ai.current {
+                            state.raise(placed.0, current, event::PACKAGE_DONE);
+                        }
+                    }
+                    if let Some((to, radius)) = target {
                         let waiting = p.kind == PackageKind::Escort
                             && package_target(p)
                                 .or(Some(PLAYER_REF))
                                 .and_then(|t| positions.get(&t))
                                 .is_some_and(|t| t.distance(here) > ESCORT_WAIT_DISTANCE);
-                        if here.distance(to) <= radius {
+                        if reached(here, to, radius) {
                             ai.arrived = true;
                             ai.path.clear();
                             if let Some(current) = ai.current {
@@ -438,8 +460,8 @@ pub(crate) fn run_ai(
                     ai.wander_in -= dt;
                     if ai.wander_in <= 0.0 && ai.path.is_empty() {
                         ai.wander_in = 6.0 + (state.next_random() % 600) as f32 / 100.0;
-                        let centre = destination(p, &ai, here, &positions, cell_id)
-                            .map_or(ai.home, |(c, _)| c);
+                        let centre =
+                            destination(p, &ai, here, &positions).map_or(ai.home, |(c, _)| c);
                         let radius = (p.radius as f32).max(128.0);
                         if let Some((points, _)) = grid {
                             let near: Vec<Vec3> = points
