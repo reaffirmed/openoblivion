@@ -316,7 +316,7 @@ fn object_scripts_catch_events() {
     let facts = facts();
     let mut state = ScriptState::default();
     let mut locals = Locals::default();
-    let mut run = |state: &mut ScriptState, locals: &mut Locals| {
+    let run = |state: &mut ScriptState, locals: &mut Locals| {
         let mut host = GameHost::new(&data, state, &facts, Some(LEVER));
         let outcome = host.run_script(LEVER_SCRIPT, locals, Event::GameMode);
         assert_eq!(outcome, Outcome::Finished);
