@@ -5,6 +5,7 @@
 
 pub mod actors;
 pub mod bsa;
+pub mod character;
 pub mod commands;
 pub mod dialogue;
 pub mod esm;

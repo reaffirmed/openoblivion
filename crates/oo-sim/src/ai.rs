@@ -30,7 +30,11 @@ const FOLLOW_DISTANCE: f32 = 160.0;
 /// An ambush springs when its target comes this close, if the package
 /// doesn't say.
 const AMBUSH_RADIUS: f32 = 500.0;
-/// How close an actor comes to start talking, if the package doesn't say.
+/// An ambusher further than this from its location goes back to it.
+const AMBUSH_HOME: f32 = 200.0;
+/// How far beyond its radius an ambusher may be drawn before it gives up.
+const AMBUSH_LEASH: f32 = 300.0;
+/// How close an actor comes to start talking.
 const GREET_DISTANCE: f32 = 100.0;
 /// An escort waits when the escorted falls this far behind.
 const ESCORT_WAIT_DISTANCE: f32 = 600.0;
@@ -391,6 +395,7 @@ pub(crate) fn run_ai(
     let facts = if due {
         gather_facts(
             &world,
+            &state,
             cell.as_deref(),
             actors.iter().map(|(r, a, t, _, _)| (r, a, t)),
             player,
@@ -402,7 +407,7 @@ pub(crate) fn run_ai(
         .as_ref()
         .map(|c| (&c.path_points[..], &c.path_edges[..]));
 
-    for (placed, actor, mut transform, mut ai, mut motion) in &mut actors {
+    for (placed, _, mut transform, mut ai, mut motion) in &mut actors {
         ai.reevaluate_in -= dt;
         if ai.reevaluate_in <= 0.0 {
             ai.reevaluate_in += REEVALUATE;
@@ -471,31 +476,32 @@ pub(crate) fn run_ai(
                 // Follow first goes to its place, then finishes once the one
                 // it follows comes within its distance; see
                 // `docs/reverse-engineering/ai-packages.md`.
-                PackageKind::Follow if !ai.finished => {
-                    let place = p
-                        .location
-                        .and_then(|_| destination(p, &ai, here, &positions));
-                    match place {
-                        Some((to, radius)) if !ai.arrived && !reached(here, to, radius) => {
-                            goal = Some(to);
-                            speed = pace;
+                // Follow keeps up with its target and is done once the
+                // follower stands within the radius of its location; see
+                // `docs/reverse-engineering/ai-packages.md`. Close enough to the
+                // target, it makes for the location itself so it gets there.
+                PackageKind::Follow if !ai.finished && p.location.is_some() => {
+                    let target = package_target(p).unwrap_or(PLAYER_REF);
+                    let keep = if p.target_count > 0 {
+                        p.target_count as f32
+                    } else {
+                        FOLLOW_DISTANCE
+                    };
+                    match destination(p, &ai, here, &positions) {
+                        Some((to, radius)) if reached(here, to, radius) => {
+                            ai.finished = true;
+                            if let Some(current) = ai.current {
+                                state.raise(placed.0, current, event::PACKAGE_DONE);
+                            }
                         }
-                        _ => {
-                            ai.arrived = true;
-                            let target = package_target(p).unwrap_or(PLAYER_REF);
-                            let within = if p.target_count > 0 {
-                                p.target_count as f32
-                            } else {
-                                FOLLOW_DISTANCE
-                            };
-                            if positions
+                        place => {
+                            let behind = positions
                                 .get(&target)
-                                .is_some_and(|t| t.distance(here) <= within)
-                            {
-                                ai.finished = true;
-                                if let Some(current) = ai.current {
-                                    state.raise(placed.0, current, event::PACKAGE_DONE);
-                                }
+                                .filter(|t| t.distance(here) > keep)
+                                .copied();
+                            goal = behind.or(place.map(|(to, _)| to));
+                            if goal.is_some() {
+                                speed = pace;
                             }
                         }
                     }
@@ -512,49 +518,31 @@ pub(crate) fn run_ai(
                 // Wait until the target comes within the radius of the place,
                 // then go up to it: an aggressive actor attacks, anyone else
                 // greets the player.
+                // Ambush: get to the location, wait there until the target comes
+                // within the radius of it, then walk up and activate the target,
+                // which for the player means starting a conversation. Dragged too
+                // far from the location, go back to waiting.
                 PackageKind::Ambush if !ai.finished => {
                     let target = package_target(p).unwrap_or(PLAYER_REF);
-                    let centre = destination(p, &ai, here, &positions).map_or(here, |(c, _)| c);
+                    let place = destination(p, &ai, here, &positions).map(|(c, _)| c);
                     let radius = if p.radius > 0 {
                         p.radius as f32
                     } else {
                         AMBUSH_RADIUS
                     };
-                    if let Some(&to) = positions.get(&target)
-                        && (to.distance(centre) <= radius || to.distance(here) <= radius)
-                    {
-                        let close = if p.target_count > 0 {
-                            p.target_count as f32
-                        } else {
-                            GREET_DISTANCE
-                        };
+                    let from_place = place.map_or(0.0, |c| c.distance(here));
+                    let sprung = positions.get(&target).copied().filter(|t| {
+                        place.is_none_or(|c| c.distance(*t) <= radius)
+                            && from_place <= radius + AMBUSH_LEASH
+                    });
+                    if let Some(to) = sprung {
                         let flat = Vec3::new(to.x - here.x, 0.0, to.z - here.z).length();
-                        if flat > close {
+                        if flat > GREET_DISTANCE {
                             goal = Some(to);
                             speed = pace;
                         } else {
                             ai.finished = true;
-                            let base = match *actor {
-                                Actor::Npc(b) | Actor::Creature(b) => b,
-                            };
-                            let aggression = world
-                                .actors
-                                .npcs
-                                .get(&base)
-                                .map(|n| n.stats.aggression)
-                                .or_else(|| {
-                                    world
-                                        .actors
-                                        .creatures
-                                        .get(&base)
-                                        .map(|c| c.stats.aggression)
-                                })
-                                .unwrap_or(0);
-                            if aggression > 50 {
-                                if state.fighting.insert(placed.0, target).is_none() {
-                                    state.raise(placed.0, target, event::START_COMBAT);
-                                }
-                            } else if target == PLAYER_REF {
+                            if target == PLAYER_REF {
                                 debug!("{:08X} greets the player", placed.0);
                                 pending.greetings.push(placed.0);
                             }
@@ -562,6 +550,11 @@ pub(crate) fn run_ai(
                                 state.raise(placed.0, current, event::PACKAGE_DONE);
                             }
                         }
+                    } else if let Some(c) = place
+                        && from_place > AMBUSH_HOME
+                    {
+                        goal = Some(c);
+                        speed = pace;
                     }
                 }
                 PackageKind::Wander => {

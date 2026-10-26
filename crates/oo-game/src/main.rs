@@ -5,6 +5,7 @@
 
 mod actor;
 mod audio;
+mod chargen_menu;
 mod dialog_menu;
 mod lighting;
 mod menu;
@@ -146,6 +147,7 @@ fn main() -> AppExit {
     .init_resource::<xml_ui::Hud>()
     .init_resource::<xml_menu::XmlScreens>()
     .init_resource::<dialog_menu::DialogScreen>()
+    .init_resource::<chargen_menu::ChargenScreen>()
     .add_systems(
         Startup,
         (
@@ -155,6 +157,7 @@ fn main() -> AppExit {
             xml_ui::setup_hud_overlay,
             xml_menu::setup_menu_overlay,
             dialog_menu::setup_dialog,
+            chargen_menu::setup_chargen,
         ),
     )
     .add_systems(
@@ -168,6 +171,7 @@ fn main() -> AppExit {
             )
                 .chain(),
             (
+                chargen_menu::update_chargen,
                 dialog_menu::update_dialog,
                 xml_menu::update_menu_overlay,
                 menu::menu_input,

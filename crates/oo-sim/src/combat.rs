@@ -164,13 +164,13 @@ fn level(stats: &Stats, player_level: i16) -> i16 {
 pub fn starting_vitals(gmst: &Settings, stats: &Stats, creature: bool, player: bool) -> Vitals {
     let a = |i: usize| f32::from(stats.attributes[i]);
     let health = if player {
-        (a(Stats::ENDURANCE) * setting(gmst, "fPCBaseHealthMult", 2.0)).round()
+        (a(Stats::ENDURANCE) * setting(gmst, "fPCBaseHealthMult", 2.0)).trunc()
     } else if !creature && stats.flags & Stats::FLAG_AUTO_CALC != 0 {
         // Specialization and the flag the RE notes mention aren't known yet,
         // so every level gets the base amount.
         let base = ((a(Stats::STRENGTH) + a(Stats::ENDURANCE))
             * setting(gmst, "fNPCAttributeHealthMult", 0.5))
-        .round();
+        .trunc();
         let level = f32::from(level(stats, 1));
         let mut h = base + setting(gmst, "iNPCBasePerLevelHealthMult", 4.0) * level;
         let low = setting(gmst, "iLowLevelNPCMaxLevel", 4.0);
@@ -178,7 +178,7 @@ pub fn starting_vitals(gmst: &Settings, stats: &Stats, creature: bool, player: b
             let m = setting(gmst, "fLowLevelNPCBaseHealthMult", 0.4);
             h *= m + (1.0 - m) * level / low;
         }
-        h.round()
+        h.trunc()
     } else {
         stats.health as f32
     };
@@ -187,7 +187,7 @@ pub fn starting_vitals(gmst: &Settings, stats: &Stats, creature: bool, player: b
     } else {
         setting(gmst, "fNPCBaseMagickaMult", 1.5)
     };
-    let magicka = (a(Stats::INTELLIGENCE) * (1.0 + mult)).round() + f32::from(stats.magicka);
+    let magicka = (a(Stats::INTELLIGENCE) * (1.0 + mult)).trunc() + f32::from(stats.magicka);
     // Maximum fatigue: the community formula, open in the RE notes.
     let fatigue = a(Stats::STRENGTH)
         + a(Stats::WILLPOWER)
@@ -286,6 +286,13 @@ pub(crate) fn run_combat(
 ) {
     let Some(world) = world else { return };
     let dt = time.delta_secs();
+    // The player's chosen character, once made, in place of the record's.
+    let player_stats = state.player_stats.clone();
+    let all: &WorldData = &world;
+    let records = |_: &WorldData, base: u32| match &player_stats {
+        Some(stats) if base == PLAYER_BASE => Some((stats, None)),
+        _ => records(all, base),
+    };
     let equipped: HashMap<u32, &[u32]> = equipment
         .iter()
         .filter_map(|(placed, e, player)| {

@@ -187,9 +187,21 @@ pub struct RaceInfo {
     /// The race whose voices this one uses (`VNAM`), `[male, female]`; 0 for
     /// its own.
     pub voice: [u32; 2],
+    /// `DESC`, shown in the race menu.
+    pub description: String,
+    /// Skill bonuses (`DATA`): actor value code and amount.
+    pub skill_bonuses: Vec<(u8, i8)>,
+    /// Starting attributes (`ATTR`), `[male, female]`, in [`Stats`] order.
+    pub attributes: [[u8; 8]; 2],
+    /// `DATA` flags; see [`RaceInfo::PLAYABLE`].
+    pub flags: u32,
+    /// Abilities and powers the race gives (`SPLO`).
+    pub spells: Vec<u32>,
 }
 
 impl RaceInfo {
+    pub const PLAYABLE: u32 = 0x1;
+
     pub const FACE_HEAD: u32 = 0;
     pub const FACE_EAR_MALE: u32 = 1;
     pub const FACE_EAR_FEMALE: u32 = 2;
@@ -421,7 +433,21 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
                                 f32::from_le_bytes(f.data[16..20].try_into().unwrap()),
                                 f32::from_le_bytes(f.data[20..24].try_into().unwrap()),
                             ];
+                            race.skill_bonuses = f.data[..14]
+                                .chunks(2)
+                                .filter(|c| c[0] != 0xFF && c[1] != 0)
+                                .map(|c| (c[0], c[1] as i8))
+                                .collect();
+                            if f.data.len() >= 36 {
+                                race.flags = u32_at(f.data, 32);
+                            }
                         }
+                        b"ATTR" if f.data.len() >= 16 => {
+                            race.attributes[0].copy_from_slice(&f.data[..8]);
+                            race.attributes[1].copy_from_slice(&f.data[8..16]);
+                        }
+                        b"DESC" => race.description = f.zstring(),
+                        b"SPLO" if f.data.len() >= 4 => race.spells.push(global(u32_at(f.data, 0))),
                         b"VNAM" if f.data.len() >= 8 => {
                             race.voice = [global(u32_at(f.data, 0)), global(u32_at(f.data, 4))];
                         }

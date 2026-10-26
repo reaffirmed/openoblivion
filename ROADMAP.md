@@ -121,7 +121,10 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
       weapon damage formula, reach and speed, equipped from the inventory, and
       blocking with fists, weapon or shield. Next: armour,
       attack and death animations, NPC dispositions, archery, magic
-- [ ] Character creation: race, birthsign, class
+- [ ] Character creation, progress: the race, birthsign and class screens open when
+      the tutorial's scripts ask, pause the game while up, and set the player's
+      race, sex, name, attributes, skills, health, magicka and fatigue (a text
+      screen for now). Next: the game's own menus, FaceGen faces, birthsign spells
 - [ ] Save and load
 
 ### References

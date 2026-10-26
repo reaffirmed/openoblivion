@@ -299,6 +299,7 @@ pub(crate) fn update_conversations(
         state.start(data);
         let facts = gather_facts(
             &world,
+            &state,
             cell.as_deref(),
             actors.iter(),
             Some((transform, &inventory)),

@@ -83,6 +83,8 @@ pub struct WorldData {
     lights: HashMap<u32, Light>,
     pub items: HashMap<u32, ItemInfo>,
     pub weapons: HashMap<u32, WeaponInfo>,
+    /// Classes and birthsigns.
+    pub characters: oo_formats::character::CharacterData,
     pub containers: HashMap<u32, ContainerInfo>,
     pub leveled_items: HashMap<u32, LeveledList>,
     pub actors: ActorData,
@@ -244,6 +246,7 @@ fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
         lights: lights(&order)?,
         items: items(&order)?,
         weapons: weapons(&order)?,
+        characters: oo_formats::character::character_data(&order)?,
         containers: containers(&order)?,
         leveled_items: leveled_items(&order)?,
         actors: actor_data(&order)?,

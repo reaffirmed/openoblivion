@@ -5,6 +5,9 @@
 # The run exits with an error if a check fails. Times are simulation seconds,
 # with room to spare: voiced lines set the pace.
 
+# The race menu comes up first (MQ01 stage 5); keep the defaults.
+t1.5 key Enter
+
 # Chargen moves the player into the cell and Valen starts taunting.
 t10 expect stage Charactergen >= 6
 

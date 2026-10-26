@@ -69,7 +69,7 @@ pub struct OpenContainer(pub Option<u32>);
 #[derive(Component, Debug, Default, Clone)]
 pub struct PlayerActions(pub Vec<PlayerAction>);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayerAction {
     /// Take `count` of an item from the open container.
     Take {
@@ -90,6 +90,14 @@ pub enum PlayerAction {
     Goodbye,
     /// Put on or take off an item, or ready or put away a weapon.
     Equip(u32),
+    /// Character creation: the race menu's name, race and sex.
+    ChooseRace {
+        name: String,
+        race: u32,
+        female: bool,
+    },
+    ChooseBirthsign(u32),
+    ChooseClass(u32),
 }
 
 /// The player's level, until there are levels.
@@ -195,6 +203,9 @@ pub(crate) fn handle_actions(
                 // `dialogue`, which runs first.
                 PlayerAction::CloseContainer
                 | PlayerAction::Equip(_)
+                | PlayerAction::ChooseRace { .. }
+                | PlayerAction::ChooseBirthsign(_)
+                | PlayerAction::ChooseClass(_)
                 | PlayerAction::Ask(_)
                 | PlayerAction::Goodbye => {}
             }

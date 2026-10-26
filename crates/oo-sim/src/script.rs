@@ -208,6 +208,13 @@ pub struct ScriptState {
     pub vitals: HashMap<u32, crate::combat::Vitals>,
     /// Who is fighting whom.
     pub fighting: HashMap<u32, u32>,
+    /// The player's name, race, sex, birthsign and class.
+    pub character: Option<crate::character::Character>,
+    /// The player's attributes and skills from those choices, once made.
+    pub player_stats: Option<oo_formats::actors::Stats>,
+    /// A character-creation menu is up (the client says so): the game is in
+    /// menu mode, so `GameMode` scripts, AI and fighting wait.
+    pub menu_open: bool,
     started: bool,
 }
 
@@ -290,6 +297,8 @@ pub struct ActorFacts {
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorldEffect {
     Enable(u32, bool),
+    /// Open a character-creation menu.
+    ShowMenu(crate::character::ChargenMenu),
     AddItem {
         to: u32,
         item: u32,
@@ -760,6 +769,15 @@ impl Host for GameHost<'_> {
             | "GetEquipped"
             | "IsInMyOwnedCell"
             | "GetCurrentAIProcedure" => 0.0,
+            "ShowRaceMenu" | "ShowBirthSignMenu" | "ShowClassMenu" => {
+                use crate::character::ChargenMenu;
+                self.effects.push(WorldEffect::ShowMenu(match command.name {
+                    "ShowRaceMenu" => ChargenMenu::Race,
+                    "ShowBirthSignMenu" => ChargenMenu::Birthsign,
+                    _ => ChargenMenu::Class,
+                }));
+                1.0
+            }
             "MoveTo" | "MoveToMarker" => {
                 let Some(who) = subject else {
                     return Err(format!("{} requires a reference", command.name));
@@ -1151,6 +1169,7 @@ pub(crate) fn run_object_scripts(
     let mut player = players.single_mut().ok();
     let facts = gather_facts(
         &world,
+        &state,
         cell.as_deref(),
         actors.iter(),
         player.as_ref().map(|(t, i)| (*t, &**i)),
@@ -1215,12 +1234,15 @@ pub struct Pending {
     pub animations: Vec<(u32, AnimRequest)>,
     /// Actors who came up to the player to talk, oldest first.
     pub greetings: Vec<u32>,
+    /// Character-creation menus scripts asked for, oldest first.
+    pub menus: Vec<crate::character::ChargenMenu>,
 }
 
 /// A snapshot of the actors in the loaded cell and the player, for scripts and
 /// conditions to ask about.
 pub(crate) fn gather_facts<'a>(
     world: &WorldData,
+    state: &ScriptState,
     cell: Option<&CurrentCell>,
     actors: impl Iterator<Item = (&'a PlacedRef, &'a Actor, &'a Transform)>,
     player: Option<(&Transform, &Inventory)>,
@@ -1260,7 +1282,18 @@ pub(crate) fn gather_facts<'a>(
     if let Some((transform, inventory)) = player {
         let mut f = npc_facts(PLAYER_BASE, transform.translation);
         f.items = inventory.0.iter().map(|s| (s.item, s.count)).collect();
+        if let Some(c) = &state.character {
+            f.race = c.race;
+            f.female = c.female;
+            f.class = c.class.or(f.class);
+        }
+        if let Some(stats) = &state.player_stats {
+            f.stats = stats.clone();
+        }
         out.insert(PLAYER_REF, f);
+    }
+    for (r, f) in &mut out {
+        f.dead |= state.vitals.get(r).is_some_and(|v| v.dead);
     }
     out
 }
@@ -1275,6 +1308,7 @@ pub(crate) fn apply_effects(
     let mut inventory = inventory;
     for e in effects {
         match e {
+            WorldEffect::ShowMenu(menu) => pending.menus.push(menu),
             WorldEffect::Enable(r, on) => {
                 changes.enabled.insert(r, on);
                 pending.resync = true;
@@ -1320,6 +1354,7 @@ pub(crate) fn run_quests(
     let mut player = players.single_mut().ok();
     let facts = gather_facts(
         &world,
+        &state,
         cell.as_deref(),
         actors.iter(),
         player.as_ref().map(|(t, i)| (*t, &**i)),

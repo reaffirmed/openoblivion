@@ -9,6 +9,7 @@ pub mod actor;
 pub mod ai;
 pub mod animated;
 pub mod cell;
+pub mod character;
 pub mod combat;
 pub mod data;
 pub mod dialogue;
@@ -79,12 +80,13 @@ impl Plugin for SimPlugin {
                     interact::update_looking_at,
                     interact::activate,
                     dialogue::update_conversations,
+                    character::apply_choices,
                     inventory::handle_actions,
-                    combat::run_combat,
-                    script::run_quests,
-                    trigger::update_triggers,
-                    script::run_object_scripts,
-                    ai::run_ai,
+                    combat::run_combat.run_if(character::in_game_mode),
+                    script::run_quests.run_if(character::in_game_mode),
+                    trigger::update_triggers.run_if(character::in_game_mode),
+                    script::run_object_scripts.run_if(character::in_game_mode),
+                    ai::run_ai.run_if(character::in_game_mode),
                     animated::animate_objects,
                     cell::resync_cell,
                     cell::apply_moves,

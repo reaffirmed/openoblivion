@@ -29,11 +29,13 @@ pub struct Menu {
     pub(crate) close_requested: bool,
     /// In a conversation (see `dialog_menu`), which takes the keys first.
     pub(crate) dialog: bool,
+    /// A character-creation screen is up (see `chargen_menu`).
+    pub(crate) chargen: bool,
 }
 
 impl Menu {
     pub fn is_open(&self) -> bool {
-        self.inventory || self.container || self.dialog
+        self.inventory || self.container || self.dialog || self.chargen
     }
 
     /// The inventory or a container is up.
@@ -117,7 +119,7 @@ pub(crate) fn menu_input(
         menu.row = 0;
     }
 
-    if menu.dialog {
+    if menu.dialog || menu.chargen {
         return;
     }
     let close = keys.just_pressed(KeyCode::Tab) || keys.just_pressed(KeyCode::Escape);
@@ -129,6 +131,7 @@ pub(crate) fn menu_input(
                 right: true,
                 xml: menu.xml,
                 dialog: menu.dialog,
+                chargen: menu.chargen,
                 ..default()
             };
         }
@@ -143,6 +146,7 @@ pub(crate) fn menu_input(
         *menu = Menu {
             xml: menu.xml,
             dialog: menu.dialog,
+            chargen: menu.chargen,
             ..default()
         };
         return;
