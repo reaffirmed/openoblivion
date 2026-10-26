@@ -69,7 +69,7 @@ a fraction of its functions read.
 | Combat and levelling formulas | 4 | melee, block, fatigue, regen, level-up done; hit flow, armour, magic open | [combat-and-levelling.md](combat-and-levelling.md) |
 | Menus | 5 | layout, scaling, entities done | [menu-layout.md](menu-layout.md) |
 | Actors and animation | 6 | not started | |
-| Cell loading | 7 | not started | |
+| Cell loading | 7 | exterior grid and re-centring done; buffers, LOD, unloading open | [cell-loading.md](cell-loading.md) |
 | Save format | 8 | all main record types decoded; about 89% of all saved records checked exact (cells not yet checked); high-level AI process data open | [save-format.md](save-format.md) |
 | Lighting | — | attenuation formula done; shader side open | [light-falloff.md](light-falloff.md) |
 
