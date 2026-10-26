@@ -57,7 +57,9 @@ impl Gait {
         match self {
             Self::Idle => &["idle.kf"],
             Self::Walk => &["walkforward.kf", "forward.kf"],
-            Self::Run => &["fastforward.kf", "runforward.kf", "forward.kf"],
+            // People run with walkfastforward.kf (weapon away); creatures
+            // with fastforward.kf.
+            Self::Run => &["walkfastforward.kf", "fastforward.kf", "forward.kf"],
         }
     }
 }
