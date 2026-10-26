@@ -190,6 +190,8 @@ pub struct ScriptState {
     pub activated: HashMap<u32, u32>,
     /// Scripts that failed to evaluate and won't run again this session.
     pub disabled: HashSet<u32>,
+    /// How many actors of each base form have died (`GetDeadCount`).
+    pub dead_counts: HashMap<u32, u32>,
     /// Lines actors said outside conversation, oldest first; the client
     /// shows and drains them.
     pub subtitles: Vec<Subtitle>,
@@ -746,7 +748,7 @@ impl Host for GameHost<'_> {
                 }
                 1.0
             }
-            "GetDeadCount" => 0.0,
+            "GetDeadCount" => f64::from(self.state.dead_counts.get(&form(0)).copied().unwrap_or(0)),
             "GetRandomPercent" => f64::from(self.state.next_random() % 100),
             "GetItemCount" => f64::from(facts.items.get(&form(0)).copied().unwrap_or(0)),
             "GetTalkedToPC" => flag(subject.is_some_and(|s| self.state.talked_to_pc.contains(&s))),
@@ -1052,7 +1054,11 @@ impl Host for GameHost<'_> {
         let source = args.first().and_then(Value::form).unwrap_or(0);
         let list = self.state.events.entry(this).or_default();
         match list.iter().find(|e| e.0 == source) {
-            Some(e) => e.1 & flag != 0,
+            Some(e) if e.1 & flag != 0 => {
+                info!("{this:08X}: event block {block} runs (source {source:08X})");
+                true
+            }
+            Some(_) => false,
             None => {
                 list.push((source, 0));
                 false
@@ -1174,6 +1180,19 @@ mod tests {
         assert!(!state.running(0x10));
         assert!(state.in_chargen);
     }
+
+    #[test]
+    fn counts_the_dead_by_base_form() {
+        let data = ScriptData::default();
+        let mut state = ScriptState::default();
+        state.dead_counts.insert(0x20, 3);
+        let facts = HashMap::new();
+        let mut host = GameHost::new(&data, &mut state, &facts, None);
+        let command = oo_formats::commands::by_name("GetDeadCount").unwrap();
+        let count = |host: &mut GameHost, base| host.call(None, command, &[Value::Form(base)]);
+        assert_eq!(count(&mut host, 0x20), Ok(3.0));
+        assert_eq!(count(&mut host, 0x21), Ok(0.0));
+    }
 }
 
 /// A reference whose base form has an object script.
@@ -1243,7 +1262,14 @@ pub(crate) fn run_object_scripts(
                 }
                 state.activated.remove(&placed.0);
             }
-            Outcome::Aborted(e) => debug!("{:08X}: {e}", placed.0),
+            Outcome::Aborted(e) => {
+                if state.unsupported.insert(format!("{script:08X} {e}")) {
+                    info!(
+                        "script {script:08X} on {:08X} stops this run: {e}",
+                        placed.0
+                    );
+                }
+            }
             Outcome::Disabled(e) => {
                 warn!("script {script:08X} on {:08X} stops: {e}", placed.0);
                 state.disabled.insert(*script);

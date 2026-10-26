@@ -706,7 +706,7 @@ pub(crate) fn run_combat(
             v.dead = true;
             v.killer = blow.attacker;
         }
-        debug!(
+        info!(
             "{:08X} hits {:08X} for {health:.1} ({:.1} left)",
             blow.attacker, blow.target, v.health
         );
@@ -735,7 +735,7 @@ pub(crate) fn run_combat(
     }
 
     // Whoever died this step, by a blow or a script's Kill, falls.
-    for (entity, placed, _, mut transform, _, _) in &mut actors {
+    for (entity, placed, actor, mut transform, _, _) in &mut actors {
         let Some(v) = state.vitals.get(&placed.0) else {
             continue;
         };
@@ -743,6 +743,11 @@ pub(crate) fn run_combat(
             continue;
         }
         let killer = v.killer;
+        let base = match *actor {
+            Actor::Npc(b) | Actor::Creature(b) => b,
+        };
+        info!("{:08X} dies (killer {killer:08X})", placed.0);
+        *state.dead_counts.entry(base).or_default() += 1;
         state.fighting.remove(&placed.0);
         state.raise(placed.0, killer, event::DEATH);
         commands.entity(entity).insert(Dead);
