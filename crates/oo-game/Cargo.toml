@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 oo-sim.workspace = true
+oo-formats.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 bevy.workspace = true

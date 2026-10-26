@@ -14,8 +14,8 @@ use bevy::prelude::*;
 use byroredux_core::math::coord::{euler_zup_to_quat_yup, zup_to_yup_pos};
 use oo_formats::load_order::LoadOrder;
 use oo_formats::world::{
-    Cell, form_id_by_editor_id, interior_cell, interior_cell_by_form_id, interior_cell_ids,
-    interior_cell_names, interior_reference_cells, model_paths,
+    Cell, CellLighting, Light, form_id_by_editor_id, interior_cell, interior_cell_by_form_id,
+    interior_cell_ids, interior_cell_names, interior_reference_cells, lights, model_paths,
 };
 
 use crate::player::{
@@ -65,6 +65,7 @@ pub struct WorldData {
     reference_cells: HashMap<u32, u32>,
     cell_names: HashMap<u32, String>,
     coc_marker: Option<u32>,
+    lights: HashMap<u32, Light>,
 }
 
 /// The interior cell that's loaded now.
@@ -73,7 +74,12 @@ pub struct CurrentCell {
     pub form_id: u32,
     pub editor_id: String,
     pub name: Option<String>,
+    pub lighting: Option<CellLighting>,
 }
+
+/// A reference that gives off light: a torch, a candle, a light with no mesh.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct LightSource(pub Light);
 
 /// Set to move the player to another cell at the end of this frame.
 #[derive(Resource, Debug, Default)]
@@ -149,6 +155,7 @@ fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
         cell_names: interior_cell_names(&order)?,
         // The marker the `coc` console command drops you at.
         coc_marker: form_id_by_editor_id(&order, "COCMarkerHeading")?,
+        lights: lights(&order)?,
         order,
     })
 }
@@ -213,6 +220,9 @@ fn spawn_cell(commands: &mut Commands, world: &WorldData, cell: &Cell) -> Option
             entity.insert(Model(model.clone()));
             placed.push(translation);
         }
+        if let Some(light) = world.lights.get(&r.base) {
+            entity.insert(LightSource(*light));
+        }
         if let Some(t) = &r.teleport {
             let destination = world.reference_cells.get(&t.door).copied();
             if let Some(cell) = destination {
@@ -258,6 +268,7 @@ fn spawn_cell(commands: &mut Commands, world: &WorldData, cell: &Cell) -> Option
         form_id: cell.form_id,
         editor_id: cell.editor_id.clone(),
         name: cell.name.clone(),
+        lighting: cell.lighting,
     });
     // Without a marker, start above the middle of everything and hope for a floor.
     // Per-axis median, not mean: real cells have strays (a loaf of bread 150 km

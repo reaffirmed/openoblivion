@@ -58,7 +58,8 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
 - [x] Load doors between interior cells
 - [x] Plugin load order and record overrides
 - [x] Fixed-timestep simulation, interpolated rendering
-- [ ] Cell lighting (`XCLL`, `LIGH` references, light meshes), fog
+- [x] Cell lighting (`XCLL` ambient, directional and fog; a point light per `LIGH` reference, with flicker and pulse). Brightness needs tuning against the original.
+- [ ] Lights at their mesh's attach point, shadows from the brightest lights
 - [ ] Doors that open (animated `DOOR` references), not just load doors
 - [ ] Dynamic clutter (Havok bodies Oblivion simulates, like the prison's chains)
 

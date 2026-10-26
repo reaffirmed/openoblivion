@@ -4553,6 +4553,7 @@ dependencies = [
  "byroredux-core",
  "byroredux-nif",
  "clap",
+ "oo-formats",
  "oo-sim",
 ]
 

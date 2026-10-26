@@ -6,8 +6,8 @@ use common::{field, group, record, zstr};
 use oo_formats::esm::{Plugin, Tag, flags};
 use oo_formats::load_order::LoadOrder;
 use oo_formats::world::{
-    Teleport, form_id_by_editor_id, interior_cell, interior_cell_by_form_id, interior_cell_ids,
-    interior_cell_names, interior_reference_cells, model_paths,
+    CellLighting, Light, Teleport, form_id_by_editor_id, interior_cell, interior_cell_by_form_id,
+    interior_cell_ids, interior_cell_names, interior_reference_cells, lights, model_paths,
 };
 
 fn refr(
@@ -74,6 +74,15 @@ fn cell(
     let mut fields = vec![field(b"EDID", &zstr(edid))];
     if edid == "TestTavern" {
         fields.push(field(b"FULL", &zstr("The Test Tavern")));
+        let mut xcll = vec![10, 20, 30, 0, 200, 190, 180, 0, 1, 2, 3, 0];
+        for v in [100.0f32, 5000.0] {
+            xcll.extend(v.to_le_bytes());
+        }
+        xcll.extend(45i32.to_le_bytes());
+        xcll.extend((-30i32).to_le_bytes());
+        xcll.extend(1.0f32.to_le_bytes());
+        xcll.extend(9000.0f32.to_le_bytes());
+        fields.push(field(b"XCLL", &xcll));
     }
     let mut out = vec![record(b"CELL", 0, form_id, &fields)];
     if !children.is_empty() {
@@ -133,7 +142,25 @@ fn master() -> Plugin {
             &[group(&0i32.to_le_bytes(), 3, &subblock)],
         )],
     );
-    Plugin::from_bytes([header, stats, cells].concat()).unwrap()
+    let mut light = (-1i32).to_le_bytes().to_vec();
+    light.extend(256u32.to_le_bytes());
+    light.extend([255, 160, 64, 0]);
+    light.extend((Light::DYNAMIC | Light::FLICKER).to_le_bytes());
+    light.extend(1.0f32.to_le_bytes());
+    light.extend(90.0f32.to_le_bytes());
+    light.extend(5u32.to_le_bytes());
+    light.extend(0.5f32.to_le_bytes());
+    let lights = group(
+        b"LIGH",
+        0,
+        &[record(
+            b"LIGH",
+            0,
+            0x20,
+            &[field(b"EDID", &zstr("Torch")), field(b"DATA", &light)],
+        )],
+    );
+    Plugin::from_bytes([header, stats, lights, cells].concat()).unwrap()
 }
 
 #[test]
@@ -357,4 +384,38 @@ fn later_plugins_override_and_extend_earlier_ones() {
 #[test]
 fn missing_master_is_an_error() {
     assert!(LoadOrder::new(vec![("Mod.esp".into(), esp())]).is_err());
+}
+
+#[test]
+fn reads_cell_lighting_and_lights() {
+    let p = plugin();
+    let lighting = interior_cell(&p, "TestTavern")
+        .unwrap()
+        .unwrap()
+        .lighting
+        .unwrap();
+    assert_eq!(
+        lighting,
+        CellLighting {
+            ambient: [10, 20, 30],
+            directional: [200, 190, 180],
+            fog: [1, 2, 3],
+            fog_near: 100.0,
+            fog_far: 5000.0,
+            directional_rotation: [45, -30],
+            directional_fade: 1.0,
+            fog_clip: 9000.0,
+        }
+    );
+    assert!(
+        interior_cell(&p, "LastCell")
+            .unwrap()
+            .unwrap()
+            .lighting
+            .is_none()
+    );
+
+    let torch = lights(&p).unwrap()[&0x20];
+    assert_eq!((torch.radius, torch.color), (256, [255, 160, 64]));
+    assert_eq!(torch.flags, Light::DYNAMIC | Light::FLICKER);
 }

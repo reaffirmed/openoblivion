@@ -3,6 +3,7 @@
 //! Loads one interior cell from your Data directory and lets you walk around it.
 //! The world itself lives in `oo-sim`; this crate only draws it and takes input.
 
+mod lighting;
 mod model;
 
 use std::path::PathBuf;
@@ -38,6 +39,12 @@ struct Args {
     /// Editor ID of the interior cell to load (`oo-inspect esm-cells` lists them).
     #[arg(long)]
     cell: Option<String>,
+    /// Multiplies the brightness of lights (point and directional), for tuning.
+    #[arg(long, default_value_t = 1.0)]
+    light_scale: f32,
+    /// Multiplies the brightness of cells' ambient light, for tuning.
+    #[arg(long, default_value_t = 1.0)]
+    ambient_scale: f32,
     /// Turn off vsync to run as fast as the GPU allows.
     #[arg(long)]
     no_vsync: bool,
@@ -93,6 +100,10 @@ fn main() {
         ..default()
     })
     .init_resource::<ModelCache>()
+    .insert_resource(lighting::LightingTuning {
+        light_scale: args.light_scale,
+        ambient_scale: args.ambient_scale,
+    })
     .insert_resource(GlobalAmbientLight {
         brightness: 400.0,
         ..default()
@@ -106,6 +117,11 @@ fn main() {
             (player_input, follow_player).chain(),
             debug_keys,
             update_hud,
+            (
+                lighting::apply_cell_lighting,
+                lighting::attach_lights,
+                lighting::animate_lights,
+            ),
         ),
     )
     .add_systems(
@@ -164,7 +180,9 @@ fn take_screenshot(mut commands: Commands, mut frames: Local<u32>, target: Res<S
 }
 
 fn setup_scene(mut commands: Commands) {
+    // Replaced by the cell's own directional light once a cell with lighting loads.
     commands.spawn((
+        lighting::CellDirectionalLight,
         DirectionalLight {
             shadow_maps_enabled: true,
             ..default()

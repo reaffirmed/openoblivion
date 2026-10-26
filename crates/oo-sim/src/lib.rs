@@ -15,7 +15,9 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 
-pub use cell::{BaseForm, CellMember, CurrentCell, LoadDoor, Model, PlacedRef, SpawnPoint};
+pub use cell::{
+    BaseForm, CellMember, CurrentCell, LightSource, LoadDoor, Model, PlacedRef, SpawnPoint,
+};
 pub use data::GameData;
 pub use interact::LookingAt;
 pub use player::{EYE_HEIGHT, Player, PlayerIntent, PlayerMotion, StepPositions};

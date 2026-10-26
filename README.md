@@ -55,8 +55,9 @@ first, then by file date. `--no-vsync` uncaps the framerate.
 
 Controls follow Oblivion's defaults: click to capture the mouse (Escape releases it),
 WASD to move, Shift to run (Caps Lock toggles always-run), E to jump, Space to activate.
-Debug keys: N toggles noclip, F3 shows collision shapes. Interior lighting isn't
-implemented yet, so cells are lit by a flat ambient light.
+Debug keys: N toggles noclip, F3 shows collision shapes. Lighting comes from each cell's
+`XCLL` and its light references; `--light-scale` and `--ambient-scale` adjust brightness
+while it's being tuned.
 
 For testing without a person at the keyboard, `--screenshot shot.png` saves one frame
 once the cell has loaded and quits, and `--camera=x,y,z,yaw,pitch` (engine units, Y up,

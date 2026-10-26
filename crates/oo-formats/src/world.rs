@@ -26,6 +26,106 @@ pub struct Reference {
     pub teleport: Option<Teleport>,
 }
 
+/// An interior cell's lighting and fog (`XCLL`). Colours are 0..=255 RGB.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CellLighting {
+    pub ambient: [u8; 3],
+    pub directional: [u8; 3],
+    pub fog: [u8; 3],
+    pub fog_near: f32,
+    pub fog_far: f32,
+    /// Directional light rotation around X and Z, in degrees.
+    pub directional_rotation: [i32; 2],
+    pub directional_fade: f32,
+    pub fog_clip: f32,
+}
+
+impl CellLighting {
+    fn parse(d: &[u8]) -> Option<Self> {
+        if d.len() < 36 {
+            return None;
+        }
+        let rgb = |at: usize| [d[at], d[at + 1], d[at + 2]];
+        Some(Self {
+            ambient: rgb(0),
+            directional: rgb(4),
+            fog: rgb(8),
+            fog_near: f32_at(d, 12),
+            fog_far: f32_at(d, 16),
+            directional_rotation: [u32_at(d, 20) as i32, u32_at(d, 24) as i32],
+            directional_fade: f32_at(d, 28),
+            fog_clip: f32_at(d, 32),
+        })
+    }
+}
+
+/// A light's base record (`LIGH` `DATA`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Light {
+    pub radius: u32,
+    pub color: [u8; 3],
+    pub flags: u32,
+    pub falloff_exponent: f32,
+    pub fov: f32,
+}
+
+impl Light {
+    pub const DYNAMIC: u32 = 0x1;
+    pub const CAN_CARRY: u32 = 0x2;
+    pub const NEGATIVE: u32 = 0x4;
+    pub const FLICKER: u32 = 0x8;
+    pub const OFF_BY_DEFAULT: u32 = 0x20;
+    pub const FLICKER_SLOW: u32 = 0x40;
+    pub const PULSE: u32 = 0x80;
+    pub const PULSE_SLOW: u32 = 0x100;
+    pub const SPOT: u32 = 0x200;
+
+    fn parse(d: &[u8]) -> Option<Self> {
+        if d.len() < 16 {
+            return None;
+        }
+        Some(Self {
+            radius: u32_at(d, 4),
+            color: [d[8], d[9], d[10]],
+            flags: u32_at(d, 12),
+            falloff_exponent: if d.len() >= 20 { f32_at(d, 16) } else { 1.0 },
+            fov: if d.len() >= 24 { f32_at(d, 20) } else { 90.0 },
+        })
+    }
+}
+
+/// Every light base record (`LIGH`), by global form ID. Later plugins win.
+pub fn lights(order: &LoadOrder) -> Result<HashMap<u32, Light>> {
+    let mut out = HashMap::new();
+    for (index, _, plugin) in order.plugins() {
+        for node in plugin.top_level() {
+            let Node::Group(g) = node? else { continue };
+            if g.record_type() != Some(Tag(*b"LIGH")) {
+                continue;
+            }
+            for node in g.children() {
+                let Node::Record(r) = node? else { continue };
+                let id = order.global(index, r.form_id);
+                let fields = r.fields()?;
+                match fields
+                    .iter()
+                    .flatten()
+                    .find(|f| f.tag.0 == *b"DATA")
+                    .and_then(|f| Light::parse(f.data))
+                {
+                    Some(light) if !r.is_deleted() => {
+                        out.insert(id, light);
+                    }
+                    _ => {
+                        out.remove(&id);
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// A load door's destination (`XTEL`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Teleport {
@@ -41,6 +141,8 @@ pub struct Cell {
     pub editor_id: String,
     /// The in-game name (`FULL`), e.g. "Imperial Prison". Not every cell has one.
     pub name: Option<String>,
+    /// Interior lighting (`XCLL`), if the cell sets it.
+    pub lighting: Option<CellLighting>,
     pub references: Vec<Reference>,
 }
 
@@ -185,10 +287,17 @@ pub fn interior_cell_by_form_id(order: &LoadOrder, form_id: u32) -> Result<Optio
                 return Ok(false);
             }
             let (editor_id, name) = cell_names(cell)?;
+            let fields = cell.fields()?;
+            let lighting = fields
+                .iter()
+                .flatten()
+                .find(|f| f.tag.0 == *b"XCLL")
+                .and_then(|f| CellLighting::parse(f.data));
             found = Some(Cell {
                 form_id,
                 editor_id: editor_id.unwrap_or_default(),
                 name,
+                lighting,
                 references: Vec::new(),
             });
             if let Some(children) = children {
