@@ -225,6 +225,9 @@ pub struct ScriptState {
     /// A character-creation menu is up (the client says so): the game is in
     /// menu mode, so `GameMode` scripts, AI and fighting wait.
     pub menu_open: bool,
+    /// Where every loaded reference stands, markers and statics included,
+    /// for `GetDistance` on references that aren't actors.
+    pub positions: HashMap<u32, Vec3>,
     started: bool,
 }
 
@@ -438,6 +441,16 @@ impl<'a> GameHost<'a> {
         reference.and_then(|r| self.facts.get(&r))
     }
 
+    /// Where a reference stands: an actor's or the player's from their facts,
+    /// anything else loaded from its placement.
+    fn position(&self, reference: Option<u32>) -> Option<Vec3> {
+        let r = reference?;
+        self.facts
+            .get(&r)
+            .map(|f| f.position)
+            .or_else(|| self.state.positions.get(&r).copied())
+    }
+
     /// A script variable by name, on a quest's script or on a reference's.
     fn variable(&self, owner: u32, name: &str) -> f64 {
         let (script, locals) = if let Some(q) = self.data.dialogue.quests.get(&owner) {
@@ -630,9 +643,9 @@ impl Host for GameHost<'_> {
                 self.facts(Some(form(0)))
                     .is_some_and(|other| other.cell == facts.cell),
             ),
-            "GetDistance" => match self.facts(Some(form(0))) {
-                Some(other) => f64::from(facts.position.distance(other.position)),
-                None => f64::from(f32::MAX),
+            "GetDistance" => match (self.position(subject), self.position(Some(form(0)))) {
+                (Some(here), Some(there)) => f64::from(here.distance(there)),
+                _ => f64::from(f32::MAX),
             },
             // Until disposition is modelled: everyone is neutral.
             "GetDisposition" => 50.0,
@@ -1410,4 +1423,15 @@ pub(crate) fn run_quests(
     // The client shows and drains these; without one, don't let them pile up.
     let excess = state.messages.len().saturating_sub(16);
     state.messages.drain(..excess);
+}
+
+/// Records where every loaded reference stands, for scripts.
+pub(crate) fn track_positions(
+    mut state: ResMut<ScriptState>,
+    placed: Query<(&PlacedRef, &Transform), Without<crate::player::Player>>,
+) {
+    state.positions.clear();
+    for (r, t) in &placed {
+        state.positions.insert(r.0, t.translation);
+    }
 }

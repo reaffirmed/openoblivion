@@ -85,6 +85,7 @@ impl Plugin for SimPlugin {
                     inventory::handle_actions,
                     combat::fly_arrows.run_if(character::in_game_mode),
                     combat::run_combat.run_if(character::in_game_mode),
+                    script::track_positions,
                     script::run_quests.run_if(character::in_game_mode),
                     trigger::update_triggers.run_if(character::in_game_mode),
                     script::run_object_scripts.run_if(character::in_game_mode),
