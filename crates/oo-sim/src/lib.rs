@@ -69,7 +69,13 @@ impl Plugin for SimPlugin {
             .init_resource::<trigger::PhantomCache>()
             .init_resource::<combat::ArrowHits>()
             .add_message::<animated::PlaySound>()
-            .add_systems(Update, (trigger::attach_zones, combat::attach_fighters))
+            // Setting up what a cell load spawned happens at the start of each
+            // step, not once per frame: a frame can run several steps, and the
+            // ones after a load mustn't run without floors, zones or fighters.
+            .add_systems(
+                FixedPreUpdate,
+                (trigger::attach_zones, combat::attach_fighters),
+            )
             // The simulation steps at a fixed rate, independent of framerate.
             .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
             .add_systems(Startup, cell::load_world)
