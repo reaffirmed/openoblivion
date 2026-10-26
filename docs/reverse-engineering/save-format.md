@@ -55,6 +55,43 @@ lock, script variables…; most of the record), for a 16-bit-counted block of
 animation/state data, and for a 32-bit value present only in newer save versions. Naming
 every bit is the next step.
 
+### Per-type layouts found so far
+
+Parts appear in this order, each only when its flag bit is set.
+
+**`INFO` (dialogue response):** in every one of the 126,492 `INFO` records in the 93 saves
+the change flags are exactly `0x10000000` and the data is empty: the record itself is the
+marker (very likely "this response has been said", which *Say Once* and `GetTalkedToPC`-style
+checks need). Its save routine only knows the common bit `0x1`.
+
+**`QUST`:**
+
+| Bit | Data |
+|-----|------|
+| `0x1` | form flags (u32) |
+| `0x4` | quest flags (u8: running, completed…) |
+| `0x10000000` | stages: u8 count, then per stage: u8 stage index, u8 stage state, u8 log-entry count, then per entry: u8 entry state, u32 entry value (a date stamp, likely) |
+| `0x8000000` | the quest script's variables (same block as reference script variables) |
+
+**`CELL`:**
+
+| Bit | Data |
+|-----|------|
+| `0x8000000` | u32, written **before** the form flags (meaning open) |
+| `0x1` | form flags (u32) |
+| `0x8` | u8 cell flags (a mix of two flag bytes) |
+| `0x10000000` | a block written by a cell-owned object (open) |
+| `0x10` | full name: u8 length, text (no terminator) |
+| `0x20` | owner: u32 form index |
+| `0x1000000` | another cell block (open; likely map/seen data) |
+
+The game can wrap each record in a debugging marker block (`BLOK` + u16 size) in a debug
+mode; normal saves don't use it (the reader above accounts for every byte without it).
+
+**Checked against the saves:** all 28,040 `QUST` records parse with this layout; the 797
+without script variables end exactly at their declared size, and the rest end inside it
+with the script-variable block filling the remainder.
+
 ## Evidence
 
 | Fact | Source | Confidence |
@@ -63,6 +100,8 @@ every bit is the next step.
 | Field meanings in the headers | Public save-format documentation (UESP) plus the values seen (names, levels, locations match the file names) | confirmed |
 | Change-record header and the meaning of the form-ID table | Same reader; every record's size accounts exactly | confirmed |
 | Common flag bit 0 = form flags | Executable: the base form save routine | confirmed |
+| `QUST` and `CELL` layouts | Executable: their save routines; `QUST` also checked on all saves | confirmed (`CELL` not yet checked on saves) |
+| `INFO` marker | All saves | confirmed (its meaning: likely) |
 
 ## Open
 
