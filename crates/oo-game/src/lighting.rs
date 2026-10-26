@@ -23,7 +23,17 @@ const AMBIENT_BRIGHTNESS: f32 = 750.0;
 /// Illuminance, in lux, of the cell's directional light at full white.
 const DIRECTIONAL_LUX: f32 = 450.0;
 /// Illuminance, in lux, a light gives at half its radius at full white.
-const POINT_LUX_AT_HALF_RADIUS: f32 = 750.0;
+const POINT_LUX_AT_HALF_RADIUS: f32 = 660.0;
+/// Bevy's point-light range, as a multiple of the light's `LIGH` radius.
+///
+/// Oblivion's lights fall off roughly linearly to nothing at their radius; Bevy's
+/// are inverse-square times a window that reaches zero at `range`. No range makes
+/// those match. Normalised to agree at half the radius, inverse-square is 3x too
+/// bright at a quarter of it whatever the range, so the near field needs a custom
+/// falloff. A shorter range only makes it worse, cutting the tail off before the
+/// radius. 1.25 matches the tail best: 0.18, 0.09 and 0.05 of full at 0.75, 0.9 and
+/// 1.0 radius, against linear's 0.25, 0.10 and 0.
+const RANGE_PER_RADIUS: f32 = 1.25;
 
 /// The light that stands in for the cell's `XCLL` directional light.
 #[derive(Component)]
@@ -111,11 +121,14 @@ pub fn attach_lights(
         }
         // Bevy works in world units; ours are 1/70 m, so scale the 1/d² falloff to match.
         intensity *= UNITS_PER_METRE * UNITS_PER_METRE;
+        // Undo Bevy's range window at half the radius, so the constant above holds there.
+        let window = 1.0 - (0.5 / RANGE_PER_RADIUS).powi(4);
+        intensity /= window * window;
         commands.entity(entity).insert((
             PointLight {
                 color: rgb(light.color),
                 intensity,
-                range: radius,
+                range: radius * RANGE_PER_RADIUS,
                 radius: 2.0,
                 shadow_maps_enabled: false,
                 ..default()
