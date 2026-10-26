@@ -26,10 +26,17 @@ pub struct Menu {
     pub(crate) xml: bool,
     /// A click on a close button, handled with the next input.
     pub(crate) close_requested: bool,
+    /// In a conversation (see `dialog_menu`), which takes the keys first.
+    pub(crate) dialog: bool,
 }
 
 impl Menu {
     pub fn is_open(&self) -> bool {
+        self.inventory || self.container || self.dialog
+    }
+
+    /// The inventory or a container is up.
+    pub fn screen_open(&self) -> bool {
         self.inventory || self.container
     }
 }
@@ -109,6 +116,9 @@ pub(crate) fn menu_input(
         menu.row = 0;
     }
 
+    if menu.dialog {
+        return;
+    }
     let close = keys.just_pressed(KeyCode::Tab) || keys.just_pressed(KeyCode::Escape);
     if !menu.is_open() {
         if keys.just_pressed(KeyCode::Tab) {
@@ -117,6 +127,7 @@ pub(crate) fn menu_input(
                 inventory: true,
                 right: true,
                 xml: menu.xml,
+                dialog: menu.dialog,
                 ..default()
             };
         }
@@ -130,6 +141,7 @@ pub(crate) fn menu_input(
         }
         *menu = Menu {
             xml: menu.xml,
+            dialog: menu.dialog,
             ..default()
         };
         return;
@@ -229,7 +241,7 @@ pub(crate) fn update_menu(
         return;
     };
     // The placeholder text panel, when the game's own menus aren't available.
-    let shown = menu.is_open() && !menu.xml;
+    let shown = menu.screen_open() && !menu.xml;
     visibility.set_if_neq(if shown {
         Visibility::Inherited
     } else {

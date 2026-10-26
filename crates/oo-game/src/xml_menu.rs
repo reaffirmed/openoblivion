@@ -107,7 +107,7 @@ impl XmlMenu {
     /// Makes sure there are `n` list rows, cloned from `template` under
     /// `parent` and named `{prefix}{index}`. Rows are never removed; spare
     /// ones are hidden.
-    fn ensure_rows(
+    pub(crate) fn ensure_rows(
         &mut self,
         n: usize,
         template: &str,
@@ -131,6 +131,10 @@ impl XmlMenu {
             self.rows += 1;
         }
         Ok(())
+    }
+
+    pub(crate) fn rows(&self) -> usize {
+        self.rows
     }
 
     pub fn set_screen(&mut self, screen: ScreenTraits, textures: TextureSet) {
@@ -257,9 +261,13 @@ pub fn setup_menu_overlay(
     mut images: ResMut<Assets<Image>>,
 ) {
     screens.image = images.add(blank_image(UVec2::ONE));
-    commands.spawn((
-        MenuOverlay,
-        ImageNode::new(screens.image.clone()),
+    commands.spawn((MenuOverlay, overlay_node(screens.image.clone())));
+}
+
+/// A full-window image over the HUD, hidden until a menu draws into it.
+pub(crate) fn overlay_node(image: Handle<Image>) -> impl Bundle {
+    (
+        ImageNode::new(image),
         Node {
             position_type: PositionType::Absolute,
             width: percent(100),
@@ -269,7 +277,7 @@ pub fn setup_menu_overlay(
         Visibility::Hidden,
         // Over the HUD.
         GlobalZIndex(1),
-    ));
+    )
 }
 
 /// Inventory list template, its parent, and the row name prefix; container
@@ -403,7 +411,7 @@ pub fn update_menu_overlay(
         }
     }
     menu.xml = screens.inventory.is_some();
-    let open_now = menu.is_open() && menu.xml;
+    let open_now = menu.screen_open() && menu.xml;
     visibility.set_if_neq(if open_now {
         Visibility::Inherited
     } else {

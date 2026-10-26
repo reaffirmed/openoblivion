@@ -4,6 +4,7 @@
 //! The world itself lives in `oo-sim`; this crate only draws it and takes input.
 
 mod actor;
+mod dialog_menu;
 mod lighting;
 mod menu;
 mod model;
@@ -140,6 +141,7 @@ fn main() {
     .init_resource::<menu::Menu>()
     .init_resource::<xml_ui::Hud>()
     .init_resource::<xml_menu::XmlScreens>()
+    .init_resource::<dialog_menu::DialogScreen>()
     .add_systems(
         Startup,
         (
@@ -148,6 +150,7 @@ fn main() {
             menu::setup_menu,
             xml_ui::setup_hud_overlay,
             xml_menu::setup_menu_overlay,
+            dialog_menu::setup_dialog,
         ),
     )
     .add_systems(
@@ -156,6 +159,7 @@ fn main() {
             model::attach_models,
             (actor::attach_actors, actor::animate_actors).chain(),
             (
+                dialog_menu::update_dialog,
                 xml_menu::update_menu_overlay,
                 menu::menu_input,
                 grab_cursor,
