@@ -68,7 +68,7 @@ a fraction of its functions read.
 | AI packages | 3 | package selection and schedules done; package behaviour open | [ai-packages.md](ai-packages.md) |
 | Combat and levelling formulas | 4 | melee, block, fatigue, regen, level-up done; hit flow, armour, magic open | [combat-and-levelling.md](combat-and-levelling.md) |
 | Menus | 5 | layout, scaling, entities done | [menu-layout.md](menu-layout.md) |
-| Actors and animation | 6 | not started | |
+| Actors and animation | 6 | anim-group codes and idle selection done; movement animation, blending open | [actors-animation.md](actors-animation.md) |
 | Cell loading | 7 | exterior grid and re-centring done; buffers, LOD, unloading open | [cell-loading.md](cell-loading.md) |
 | Save format | 8 | all main record types decoded; about 89% of all saved records checked exact (cells not yet checked); high-level AI process data open | [save-format.md](save-format.md) |
 | Lighting | — | attenuation formula done; shader side open | [light-falloff.md](light-falloff.md) |

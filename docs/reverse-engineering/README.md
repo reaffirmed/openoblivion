@@ -57,4 +57,5 @@ addresses. Nothing from there is committed; only the distilled fact moves here.
 | [save-format.md](save-format.md) | Layout of .ess save files and change records | partly done |
 | [new-game.md](new-game.md) | What a new game does; why chargen NPCs greet | done |
 | [cell-loading.md](cell-loading.md) | Which exterior cells are loaded and when the grid moves | partly done |
+| [actors-animation.md](actors-animation.md) | Animation groups and how idle animations are picked | partly done |
 | [light-falloff.md](light-falloff.md) | How a LIGH radius becomes attenuation | formula known; shader use open |
