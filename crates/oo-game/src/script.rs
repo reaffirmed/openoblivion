@@ -28,9 +28,13 @@
 //! t40 expect actor 0002ABCD near 200 0 30 100
 //! t50 expect health player >= 20           # or a reference in hex
 //! t50 expect dead 0002ABCD                 # or alive
+//! t52 where 00032A18                       # log an actor's position
+//! t53 face 700 120                         # turn the player towards x z
+//! t54 goto 700 120                         # walk there after earlier gotos (20 s each)
 //! t60 quit
 //! ```
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use bevy::input::InputSystems;
@@ -44,7 +48,12 @@ use bevy::window::PrimaryWindow;
 enum Action {
     Key(KeyCode),
     Hold(KeyCode, f32),
-    Where,
+    /// The player, or a placed reference.
+    Where(Option<u32>),
+    /// Turn the player towards a point on the ground (x, z).
+    Face(Vec2),
+    /// Walk the player to a point on the ground (x, z).
+    Goto(Vec2),
     Move(f64, f64),
     Click,
     Wheel(f32),
@@ -111,6 +120,19 @@ pub struct Script {
     held_click: bool,
     /// Seconds the right button stays down.
     blocking: f32,
+    /// Where `goto` steps are walking the player, in order, and the seconds
+    /// left to reach the first.
+    goto: VecDeque<(Vec2, f32)>,
+}
+
+/// How long `goto` keeps walking, and how close counts as there.
+const GOTO_SECONDS: f32 = 20.0;
+const GOTO_REACHED: f32 = 40.0;
+
+/// The yaw that looks from `from` towards `to` on the ground (0 looks down -Z).
+fn yaw_towards(from: Vec3, to: Vec2) -> f32 {
+    let d = to - from.xz();
+    (-d.x).atan2(-d.y)
 }
 
 pub struct ScriptPlugin(pub PathBuf);
@@ -129,6 +151,7 @@ impl Plugin for ScriptPlugin {
                     holding: Vec::new(),
                     held_click: false,
                     blocking: 0.0,
+                    goto: VecDeque::new(),
                 })
                 .add_systems(PreUpdate, run_script.after(InputSystems));
             }
@@ -152,13 +175,28 @@ fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
             Some(seconds) => When::Seconds(seconds.parse()?),
             None => When::Frame(when.parse()?),
         };
-        let action = match words.next().ok_or_else(bad)? {
+        let verb = words.next().ok_or_else(bad)?;
+        let action = match verb {
             "key" => Action::Key(key_code(words.next().ok_or_else(bad)?).ok_or_else(bad)?),
             "hold" => Action::Hold(
                 key_code(words.next().ok_or_else(bad)?).ok_or_else(bad)?,
                 words.next().ok_or_else(bad)?.parse()?,
             ),
-            "where" => Action::Where,
+            "where" => Action::Where(match words.next() {
+                Some(r) => Some(u32::from_str_radix(r, 16).map_err(|_| bad())?),
+                None => None,
+            }),
+            "face" | "goto" => {
+                let at = Vec2::new(
+                    words.next().ok_or_else(bad)?.parse()?,
+                    words.next().ok_or_else(bad)?.parse()?,
+                );
+                if verb == "face" {
+                    Action::Face(at)
+                } else {
+                    Action::Goto(at)
+                }
+            }
             "move" => Action::Move(
                 words.next().ok_or_else(bad)?.parse()?,
                 words.next().ok_or_else(bad)?.parse()?,
@@ -284,6 +322,7 @@ fn run_script(
     actors: Query<(&oo_sim::PlacedRef, &Transform), Without<oo_sim::Player>>,
     world: Option<Res<oo_sim::cell::WorldData>>,
     state: Res<oo_sim::script::ScriptState>,
+    mut intents: Query<&mut oo_sim::PlayerIntent, With<oo_sim::Player>>,
 ) {
     script.frame += 1;
     for key in std::mem::take(&mut script.held_keys) {
@@ -307,6 +346,28 @@ fn run_script(
         script.blocking -= dt;
         if script.blocking <= 0.0 {
             mouse.release(MouseButton::Right);
+        }
+    }
+    if let Some(&(to, left)) = script.goto.front()
+        && let Ok(at) = player.single()
+    {
+        let distance = at.translation.xz().distance(to);
+        if distance <= GOTO_REACHED || left <= 0.0 {
+            script.goto.pop_front();
+            if script.goto.is_empty() {
+                keys.release(KeyCode::KeyW);
+            }
+            if distance <= GOTO_REACHED {
+                info!("script: reached {to}");
+            } else {
+                warn!("script: gave up walking to {to}, {distance:.0} units short");
+            }
+        } else {
+            if let Ok(mut intent) = intents.single_mut() {
+                intent.yaw = yaw_towards(at.translation, to);
+            }
+            keys.press(KeyCode::KeyW);
+            script.goto[0].1 = left - dt;
         }
     }
     let frame = script.frame;
@@ -333,11 +394,21 @@ fn run_script(
                 keys.press(key);
                 script.holding.push((key, seconds));
             }
-            Action::Where => {
+            Action::Where(None) => {
                 if let Ok(t) = player.single() {
                     info!("script frame {frame}: player at {}", t.translation);
                 }
             }
+            Action::Where(Some(r)) => match actors.iter().find(|(p, _)| p.0 == r) {
+                Some((_, t)) => info!("script frame {frame}: {r:08X} at {}", t.translation),
+                None => info!("script frame {frame}: {r:08X} isn't loaded"),
+            },
+            Action::Face(to) => {
+                if let (Ok(at), Ok(mut intent)) = (player.single(), intents.single_mut()) {
+                    intent.yaw = yaw_towards(at.translation, to);
+                }
+            }
+            Action::Goto(to) => script.goto.push_back((to, GOTO_SECONDS)),
             Action::Move(x, y) => {
                 if let Ok((_, mut w)) = window.single_mut() {
                     w.set_physical_cursor_position(Some(DVec2::new(x, y)));
