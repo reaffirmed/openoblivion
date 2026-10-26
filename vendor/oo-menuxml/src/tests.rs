@@ -2050,3 +2050,55 @@ fn profiles_pin_corpus_facts() {
         assert!(profile.font_paths.len() >= 8);
     }
 }
+
+/// `&xbox;` inside a switch-case `copy` picks the PC case (`_filename_1`), as
+/// the dialogue menu's Goodbye button does.
+#[test]
+fn platform_entity_picks_the_pc_case() {
+    let mut s = src(&[]);
+    let doc = parse_document(
+        r#"<menu name="M"><image name="bye"><filename><copy>&xbox;</copy><copy src="me()" trait="_filename_"/></filename><_filename_1>pc.dds</_filename_1><_filename_2>xbox.dds</_filename_2></image></menu>"#,
+        &mut s,
+    );
+    let strings = HashMap::new();
+    let overrides = Overrides::new();
+    let mut eval = EvalState::new(&doc, ScreenTraits::new(1280.0, 720.0), &strings, &overrides);
+    let bye = doc.name_index["bye"];
+    assert_eq!(eval.trait_value(bye, "filename"), Scalar::Str("pc.dds".into()));
+}
+
+/// The dialogue subtitle: `dialog_text_layout` shows while `dialog_topics`
+/// is hidden by an override.
+#[test]
+fn dialogue_subtitle_shows_while_topics_are_hidden() {
+    let mut s = src(&[]);
+    let doc = parse_document(
+        r#"<menu name="DialogMenu"><locus>&true;</locus>
+        <rect name="dialog_topics"><visible>0</visible><locus>&true;</locus></rect>
+        <rect name="dialog_text_layout"><alpha>0</alpha><locus>&true;</locus>
+            <visible><copy src="dialog_topics" trait="visible"/><eq>0</eq></visible>
+            <width><copy src="screen()" trait="width"/></width>
+            <height><copy src="screen()" trait="height"/></height>
+            <text name="dialog_text"><font>2</font><justify>&left;</justify>
+                <string><copy src="strings()" trait="_havenogreeting"/></string>
+                <x><copy src="screen()" trait="width"/><div>2</div></x>
+                <y>600</y></text>
+        </rect></menu>"#,
+        &mut s,
+    );
+    let strings = HashMap::new();
+    let mut overrides = Overrides::new();
+    overrides.insert(("dialog_topics".into(), "visible".into()), Scalar::Num(0.0));
+    overrides.insert(("dialog_text".into(), "string".into()), Scalar::Str("Hello".into()));
+    let mut eval = EvalState::new(&doc, ScreenTraits::new(1280.0, 720.0), &strings, &overrides);
+    eval.resolve_all();
+    let items = build_draw_list(&doc, &mut eval);
+    let texts: Vec<_> = items
+        .iter()
+        .filter_map(|i| match i {
+            crate::layout::DrawItem::Text { string, .. } => Some(string.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, vec!["Hello".to_string()]);
+}

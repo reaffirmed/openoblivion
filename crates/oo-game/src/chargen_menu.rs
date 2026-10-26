@@ -460,6 +460,7 @@ pub fn update_chargen(
     let mut choose = keys.just_pressed(KeyCode::Enter);
     if open == ChargenMenu::Race && keys.just_pressed(KeyCode::Escape) {
         screen.race_list = false;
+        screen.scroll = 0;
     }
     // Everything this screen uses stays out of movement and other menus.
     for key in [
@@ -493,8 +494,12 @@ pub fn update_chargen(
             match hovered {
                 Some(Hover::Row(i)) => {
                     screen.row = i;
-                    // Picking a race goes back to the main page.
-                    screen.race_list = false;
+                    // Picking a race goes back to the main page, which
+                    // doesn't scroll.
+                    if screen.race_list {
+                        screen.race_list = false;
+                        screen.scroll = 0;
+                    }
                 }
                 Some(Hover::RaceChoice) => {
                     screen.race_list = true;
@@ -527,9 +532,9 @@ pub fn update_chargen(
                     (screen.row + 1).min(last)
                 };
             } else if lines > 0.0 {
-                scroll = scroll.saturating_sub(1);
+                scroll = scroll.saturating_sub(lines.round().max(1.0) as usize);
             } else {
-                scroll += 1;
+                scroll += (-lines).round().max(1.0) as usize;
             }
         }
         if (up || down) && screen.row < scroll {
@@ -538,6 +543,10 @@ pub fn update_chargen(
             scroll = screen.row + 1 - visible;
         }
         screen.scroll = scroll.min(list.len().saturating_sub(visible));
+        // The race screen's main page has two rows and never scrolls.
+        if open == ChargenMenu::Race && !screen.race_list {
+            screen.scroll = 0;
+        }
     } else {
         wheel.clear();
     }

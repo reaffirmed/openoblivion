@@ -515,7 +515,12 @@ impl MenuRenderer {
         filename: &str,
         _zoom: f32,
     ) -> Option<Arc<Rgba8>> {
-        let normalized = filename.trim().replace('/', "\\");
+        // Some vanilla paths start with a separator (`\Menus\Shared\…`).
+        let normalized = filename
+            .trim()
+            .replace('/', "\\")
+            .trim_start_matches('\\')
+            .to_owned();
         let cache_key = normalized.to_lowercase();
         if let Some(cached) = self.tex_cache.get(&cache_key) {
             return cached.clone();
