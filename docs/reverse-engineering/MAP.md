@@ -63,7 +63,7 @@ a fraction of its functions read.
 
 | Subsystem | Roadmap order | Status | Notes |
 |-----------|--------------:|--------|-------|
-| Script VM and command semantics | 1 | command table done; VM not started | [script-commands.md](script-commands.md) |
+| Script VM and command semantics | 1 | format fully decoded; runner, branches, Set, errors documented; evaluator and event tests open | [script-commands.md](script-commands.md), [script-vm.md](script-vm.md) |
 | Dialogue and quest conditions | 2 | not started | |
 | AI packages | 3 | not started | |
 | Combat and levelling formulas | 4 | not started | |
@@ -73,4 +73,4 @@ a fraction of its functions read.
 | Save format | 8 | not started | |
 | Lighting | — | attenuation formula done; shader side open | [light-falloff.md](light-falloff.md) |
 
-Functions studied so far: about 30 of roughly 9,500 game-code functions (0.3%).
+Functions studied so far: about 40 of roughly 9,500 game-code functions (0.4%); one roadmap subsystem (script VM) mostly documented.

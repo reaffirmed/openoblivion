@@ -49,4 +49,5 @@ addresses. Nothing from there is committed; only the distilled fact moves here.
 | [MAP.md](MAP.md) | What is in the executable, by subsystem, and how much is covered | survey done |
 | [menu-layout.md](menu-layout.md) | Virtual screen size, safe zone, menu scaling, `Menus`/`Menus80`/`Menus50`, XML entities | mostly settled |
 | [script-commands.md](script-commands.md) | Script command names, opcodes, parameter types | done |
+| [script-vm.md](script-vm.md) | Compiled script format and how scripts run | mostly done |
 | [light-falloff.md](light-falloff.md) | How a LIGH radius becomes attenuation | formula known; shader use open |
