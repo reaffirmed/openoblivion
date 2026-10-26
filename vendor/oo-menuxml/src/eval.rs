@@ -211,6 +211,17 @@ impl<'a> EvalState<'a> {
                 self.depth -= 1;
                 Scalar::Num(if key == "width" { w } else { h })
             }
+            // A text tile starts dark brown; other tiles white
+            // (docs/reverse-engineering/menu-layout.md).
+            None if self.doc.tiles[tile].kind == TileKind::Text
+                && matches!(key.as_str(), "red" | "green" | "blue") =>
+            {
+                Scalar::Num(match key.as_str() {
+                    "red" => 117.0,
+                    "green" => 59.0,
+                    _ => 33.0,
+                })
+            }
             None => default_trait_value(&key),
             Some(RawTrait::Num(n)) => Scalar::Num(n),
             Some(RawTrait::Str(s)) => Scalar::Str(expand_class_entity(&s)),
