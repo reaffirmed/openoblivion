@@ -6,6 +6,7 @@
 //! rendering, input and audio out of this crate.
 
 pub mod actor;
+pub mod ai;
 pub mod cell;
 pub mod data;
 pub mod dialogue;
@@ -70,6 +71,7 @@ impl Plugin for SimPlugin {
                     dialogue::update_conversations,
                     inventory::handle_actions,
                     script::run_quests,
+                    ai::run_ai,
                     cell::resync_cell,
                     cell::apply_transition,
                 )

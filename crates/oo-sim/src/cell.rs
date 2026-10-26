@@ -25,12 +25,14 @@ use oo_formats::world::{
 use crate::actor::{
     Actor, Equipment, choose_equipment, creature_appearance, npc_appearance, npc_inventory,
 };
+use crate::ai::{Ai, Locomotion};
 use crate::inventory::{Container, Item, PLAYER_LEVEL, WorldChanges};
 use crate::player::{
     PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent, PlayerMotion, StepPositions,
 };
 use crate::script::ScriptData;
 use crate::{GameData, WorldConfig};
+use oo_formats::packages::{Package, packages};
 
 /// A reference placed in the world. Its form ID is stable across machines
 /// that have the same plugins, which makes it a natural network ID.
@@ -80,6 +82,7 @@ pub struct WorldData {
     pub leveled_items: HashMap<u32, LeveledList>,
     pub actors: ActorData,
     pub scripting: ScriptData,
+    pub packages: HashMap<u32, Package>,
 }
 
 /// The interior cell that's loaded now.
@@ -89,6 +92,9 @@ pub struct CurrentCell {
     pub editor_id: String,
     pub name: Option<String>,
     pub lighting: Option<CellLighting>,
+    /// The path grid's points, in world space, and their connections.
+    pub path_points: Vec<Vec3>,
+    pub path_edges: Vec<Vec<u16>>,
 }
 
 /// A reference that gives off light: a torch, a candle, a light with no mesh.
@@ -179,6 +185,7 @@ fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
         leveled_items: leveled_items(&order)?,
         actors: actor_data(&order)?,
         scripting: ScriptData::load(&order)?,
+        packages: packages(&order)?,
         order,
     })
 }
@@ -251,7 +258,18 @@ fn spawn_actor(entity: &mut EntityCommands, world: &WorldData, r: &Reference) {
         );
         return;
     };
-    entity.insert((actor, Equipment(equipment)));
+    let packages = match actor {
+        Actor::Npc(b) => data.npcs.get(&b).map(|n| n.packages.clone()),
+        Actor::Creature(b) => data.creatures.get(&b).map(|c| c.packages.clone()),
+    }
+    .unwrap_or_default();
+    let home = Vec3::from(zup_to_yup_pos(r.position));
+    entity.insert((
+        actor,
+        Equipment(equipment),
+        Ai::new(packages, home, r.form_id),
+        Locomotion::default(),
+    ));
     if let Some(appearance) = appearance {
         entity.insert(appearance);
     }
@@ -329,6 +347,16 @@ fn spawn_cell(
         editor_id: cell.editor_id.clone(),
         name: cell.name.clone(),
         lighting: cell.lighting,
+        path_points: cell.path_grid.as_ref().map_or(Vec::new(), |g| {
+            g.points
+                .iter()
+                .map(|&p| Vec3::from(zup_to_yup_pos(p)))
+                .collect()
+        }),
+        path_edges: cell
+            .path_grid
+            .as_ref()
+            .map_or(Vec::new(), |g| g.edges.clone()),
     });
     // Without a marker, start above the middle of everything and hope for a floor.
     // Per-axis median, not mean: real cells have strays (a loaf of bread 150 km
