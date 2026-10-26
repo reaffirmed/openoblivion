@@ -34,6 +34,47 @@ pub struct WorldChanges {
     /// Actors that have gone to another cell than the one they were placed
     /// in, or moved within it while it wasn't loaded: where they are now.
     pub relocated: HashMap<u32, Relocation>,
+    /// References made at run time, by their runtime ID (see
+    /// [`crate::identity`]). Where they are now; one that's gone for good is
+    /// taken out rather than marked removed.
+    pub created: HashMap<u32, Created>,
+}
+
+/// A reference made at run time: what it is and where (Y-up).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Created {
+    pub base: u32,
+    pub cell: u32,
+    pub position: bevy::math::Vec3,
+    pub rotation: bevy::math::Quat,
+    pub scale: f32,
+}
+
+impl WorldChanges {
+    /// Makes a new reference to `created.base`, which appears when its cell
+    /// loads (or, in the loaded cell, once the cell next brings itself in
+    /// line: set [`crate::script::Pending::resync`]). `None` once runtime IDs
+    /// have run out.
+    pub fn create(
+        &mut self,
+        ids: &mut crate::identity::RuntimeIds,
+        created: Created,
+    ) -> Option<u32> {
+        let id = ids.allocate()?;
+        self.created.insert(id, created);
+        Some(id)
+    }
+
+    /// Takes a reference out of the world for good.
+    pub fn remove(&mut self, reference: u32) {
+        if crate::identity::is_runtime(reference) {
+            self.created.remove(&reference);
+            self.relocated.remove(&reference);
+            self.enabled.remove(&reference);
+        } else {
+            self.removed.insert(reference);
+        }
+    }
 }
 
 /// Where a reference is now: its cell and its place there (Y-up).
@@ -146,7 +187,7 @@ pub(crate) fn pick_up(
     item: u32,
 ) {
     inventory.add(item, 1);
-    changes.removed.insert(reference);
+    changes.remove(reference);
     commands.entity(entity).despawn();
 }
 

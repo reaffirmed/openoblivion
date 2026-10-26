@@ -4629,8 +4629,13 @@ dependencies = [
  "byroredux-core",
  "byroredux-nif",
  "clap",
+ "crc32fast",
+ "flate2",
  "oo-formats",
  "oo-script",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

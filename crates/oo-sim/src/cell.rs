@@ -28,7 +28,7 @@ use crate::actor::{
     Actor, Equipment, choose_equipment, creature_appearance, npc_appearance, npc_inventory,
 };
 use crate::ai::{Ai, Locomotion};
-use crate::inventory::{Container, Item, PLAYER_LEVEL, WorldChanges};
+use crate::inventory::{Container, Item, PLAYER_LEVEL, Relocation, WorldChanges};
 use crate::player::{
     PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent, PlayerMotion, StepPositions,
 };
@@ -371,7 +371,7 @@ fn spawn_actor(entity: &mut EntityCommands, world: &WorldData, r: &Reference) {
 
 /// Spawns a cell's references and returns where a player arriving without a
 /// destination (no load door) should stand.
-fn spawn_cell(
+pub(crate) fn spawn_cell(
     commands: &mut Commands,
     world: &WorldData,
     changes: &WorldChanges,
@@ -418,6 +418,9 @@ fn spawn_cell(
         doors += usize::from(spawned.load_door);
     }
     spawn_visitors(commands, world, changes, cell.form_id);
+    for (id, at) in created_here(changes, cell.form_id) {
+        spawn_created(commands, world, changes, id, at);
+    }
     let marker = spawn.is_some();
     // Oblivion.esm has no COCMarkerHeading (that's a later games' convention), so
     // most cells have no marker. The next best place is where the game itself puts
@@ -498,6 +501,62 @@ fn spawn_visitors(commands: &mut Commands, world: &WorldData, changes: &WorldCha
             spawn_reference_at(commands, world, r, Some(moved));
         }
     }
+}
+
+/// The references made at run time that are in cell `here` and enabled,
+/// with where they stand.
+fn created_here(changes: &WorldChanges, here: u32) -> Vec<(u32, Relocation)> {
+    let mut out: Vec<_> = changes
+        .created
+        .iter()
+        .filter(|(id, _)| changes.enabled.get(id) != Some(&false))
+        .map(|(&id, c)| {
+            let at = changes.relocated.get(&id).copied().unwrap_or(Relocation {
+                cell: c.cell,
+                position: c.position,
+                rotation: c.rotation,
+            });
+            (id, at)
+        })
+        .filter(|(_, at)| at.cell == here)
+        .collect();
+    out.sort_by_key(|(id, _)| *id);
+    out
+}
+
+/// Spawns a reference made at run time, as if a plugin had placed it.
+fn spawn_created(
+    commands: &mut Commands,
+    world: &WorldData,
+    changes: &WorldChanges,
+    id: u32,
+    at: Relocation,
+) {
+    let Some(c) = changes.created.get(&id) else {
+        return;
+    };
+    let tag = if world.actors.npcs.contains_key(&c.base) {
+        *b"ACHR"
+    } else if world.actors.creatures.contains_key(&c.base) {
+        *b"ACRE"
+    } else {
+        *b"REFR"
+    };
+    let r = Reference {
+        tag: oo_formats::esm::Tag(tag),
+        form_id: id,
+        base: c.base,
+        position: [0.0; 3],
+        rotation: [0.0; 3],
+        scale: c.scale,
+        teleport: None,
+        initially_disabled: false,
+        enable_parent: None,
+        lock: None,
+        owner: 0,
+        open_by_default: false,
+    };
+    spawn_reference_at(commands, world, &r, Some(&at));
 }
 
 /// What spawning one reference found out, for picking a spawn point.
@@ -726,6 +785,18 @@ pub(crate) fn resync_cell(
                 spawn_reference_at(&mut commands, &world, r, moved);
             }
             _ => {}
+        }
+    }
+    // References made at run time: new ones appear, gone or disabled ones go.
+    let created = created_here(&changes, current.form_id);
+    for (id, at) in &created {
+        if !present.contains_key(id) {
+            spawn_created(&mut commands, &world, &changes, *id, *at);
+        }
+    }
+    for (&id, &e) in &present {
+        if crate::identity::is_runtime(id) && !created.iter().any(|(c, _)| *c == id) {
+            commands.entity(e).despawn();
         }
     }
 }

@@ -259,7 +259,7 @@ pub struct ScriptState {
     /// Where every loaded reference stands, markers and statics included,
     /// for `GetDistance` on references that aren't actors.
     pub positions: HashMap<u32, Vec3>,
-    started: bool,
+    pub(crate) started: bool,
 }
 
 impl ScriptState {

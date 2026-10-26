@@ -14,10 +14,12 @@ pub mod combat;
 pub mod data;
 pub mod dialogue;
 pub mod faction;
+pub mod identity;
 pub mod interact;
 pub mod inventory;
 pub mod physics;
 pub mod player;
+pub mod save;
 pub mod script;
 pub mod trigger;
 pub mod voice;
@@ -32,9 +34,10 @@ pub use cell::{
 };
 pub use data::GameData;
 pub use dialogue::Conversation;
+pub use identity::RuntimeIds;
 pub use interact::LookingAt;
 pub use inventory::{
-    Container, Inventory, Item, OpenContainer, PlayerAction, PlayerActions, WorldChanges,
+    Container, Created, Inventory, Item, OpenContainer, PlayerAction, PlayerActions, WorldChanges,
 };
 pub use player::{EYE_HEIGHT, Player, PlayerIntent, PlayerMotion, StepPositions};
 pub use script::ScriptState;
@@ -64,6 +67,9 @@ impl Plugin for SimPlugin {
             .add_plugins((physics::PhysicsPlugin, player::PlayerPlugin))
             .init_resource::<cell::PendingTransition>()
             .init_resource::<WorldChanges>()
+            .init_resource::<identity::RuntimeIds>()
+            .init_resource::<save::SaveRequests>()
+            .init_resource::<save::SaveOutcomes>()
             .init_resource::<script::ScriptState>()
             .init_resource::<script::Pending>()
             .init_resource::<trigger::PhantomCache>()
@@ -100,6 +106,12 @@ impl Plugin for SimPlugin {
                 )
                     .chain()
                     .after(bevy_rapier3d::prelude::PhysicsSet::Writeback),
+            )
+            // Saves and loads at the end of a step, once everything it does
+            // has settled.
+            .add_systems(
+                FixedUpdate,
+                save::handle_requests.after(cell::apply_transition),
             );
     }
 }
