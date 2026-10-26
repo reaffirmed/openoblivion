@@ -255,3 +255,59 @@ fn the_prison_gate_stops_the_player() {
         "went through the gate: {end}"
     );
 }
+
+/// A floor that climbs 70 units over 165 along -X (about 23°, like the
+/// prison cell's towards its gate), as a grid of triangles that share no
+/// vertices, the way a level mesh's collision can be built.
+fn build_ramp(app: &mut App) {
+    const CELL: f32 = 15.0;
+    let height = |x: f32| (-x).clamp(0.0, 165.0) * 70.0 / 165.0;
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let mut x = 150.0;
+    while x > -300.0 {
+        let mut z = -150.0;
+        while z < 150.0 {
+            let corner = |dx: f32, dz: f32| Vec3::new(x + dx, height(x + dx), z + dz);
+            let quad = [
+                corner(0.0, 0.0),
+                corner(-CELL, 0.0),
+                corner(-CELL, CELL),
+                corner(0.0, CELL),
+            ];
+            for tri in [[0, 2, 1], [0, 3, 2]] {
+                let base = vertices.len() as u32;
+                vertices.extend(tri.map(|i| quad[i]));
+                indices.push([base, base + 1, base + 2]);
+            }
+            z += CELL;
+        }
+        x -= CELL;
+    }
+    let collider = oo_sim::physics::trimesh_collider(vertices, indices).unwrap();
+    app.world_mut()
+        .spawn((RigidBody::Fixed, collider, Transform::default()));
+}
+
+#[test]
+fn the_player_walks_up_a_tiled_slope() {
+    let mut app = app();
+    run(&mut app, 1);
+    build_ramp(&mut app);
+    let player = app
+        .world_mut()
+        .query_filtered::<Entity, With<Player>>()
+        .single(app.world())
+        .unwrap();
+    app.world_mut()
+        .entity_mut(player)
+        .get_mut::<Transform>()
+        .unwrap()
+        .translation = Vec3::new(100.0, PLAYER_HALF_HEIGHT + PLAYER_RADIUS + 2.0, 7.0);
+    run(&mut app, 60);
+    let end = walk(&mut app, player, std::f32::consts::FRAC_PI_2, 200);
+    let motion = *app.world().entity(player).get::<PlayerMotion>().unwrap();
+    println!("slope: {end}, {} steps up", motion.steps_up);
+    assert!(end.x < -200.0, "stuck on the slope: {end}");
+    assert_eq!(motion.steps_up, 0, "climbed the slope by stepping up");
+}

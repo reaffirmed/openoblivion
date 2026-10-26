@@ -111,10 +111,15 @@ fn to_collider(shape: &CollisionShape) -> Option<Collider> {
         } => Collider::cylinder(*half_height, *radius),
         CollisionShape::ConvexHull { vertices } => Collider::convex_hull(vertices)?,
         CollisionShape::TriMesh { vertices, indices } => {
-            Collider::trimesh(vertices.clone(), indices.clone()).ok()?
+            trimesh_collider(vertices.clone(), indices.clone())?
         }
         CollisionShape::Compound { .. } => unreachable!("flatten splits compounds"),
     })
+}
+
+/// A level mesh's collider.
+pub fn trimesh_collider(vertices: Vec<Vec3>, indices: Vec<[u32; 3]>) -> Option<Collider> {
+    Collider::trimesh(vertices, indices).ok()
 }
 
 /// Gives every newly spawned [`Model`] entity its collision shapes, as fixed bodies.

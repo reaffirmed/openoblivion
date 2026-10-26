@@ -88,6 +88,8 @@ fn record_position(mut players: Query<(&Transform, &mut StepPositions)>) {
 pub struct PlayerMotion {
     pub vertical_speed: f32,
     pub grounded: bool,
+    /// How many times the player has stepped up by hand (see `step_up`).
+    pub steps_up: u32,
 }
 
 pub struct PlayerPlugin;
@@ -224,8 +226,21 @@ pub fn move_player(
                 to.y - transform.translation.y,
                 model_of(&models, onto)
             );
+            // What stopped the move: a wall, a riser, or a seam in a floor.
+            for hit in output.iter().flat_map(|o| &o.collisions) {
+                if let Some(d) = hit.hit.details {
+                    debug!(
+                        "  blocked by {} part {} at {:.1} normal {:.2}",
+                        model_of(&models, hit.entity),
+                        hit.hit.subshape1,
+                        d.witness1,
+                        d.normal1
+                    );
+                }
+            }
             transform.translation = to;
             controller.translation = None;
+            motion.steps_up += 1;
             continue;
         }
         controller.translation = Some(velocity * dt);
