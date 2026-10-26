@@ -105,6 +105,26 @@ carry extra physics data (below).
 The order of parts 3 and 4 relative to each other isn't pinned down (both are fixed-size).
 A `0x2` record sometimes carries physics data after the moved block (the 174 exceptions).
 
+**`NPC_` (NPC base record).** Checked on all saves: **159,880 of 159,906 (99.98%)** decode
+exactly.
+
+| Order | Bit | Data |
+|------:|-----|------|
+| 1 | `0x1` | form flags (u32) |
+| 2 | `0x8` | 8 attribute values (u8 each) |
+| 3 | `0x10` | base data, 16 bytes (the `ACBS` block: flags, magicka, fatigue, barter gold, level, calc min/max) |
+| 4 | `0x40` | factions: u16 count, per entry u32 faction + u8 rank |
+| 5 | `0x20` | spells: u16 count, u32 each (spells, then levelled spells) |
+| 6 | `0x100` | AI data: aggression, confidence, energy, responsibility (u8 each) |
+| 7 | `0x4` | u32 (base health, likely) |
+| 8 | `0x10000000` | a block written by another component, 17 bytes in 773 of 799 cases (open) |
+| 9 | `0x80` | full name: u8 length, text |
+| 10 | `0x200` | 21 skill values (u8 each) |
+| 11 | `0x400` | class: u32 form index |
+
+Nearly all vanilla NPC records in a save are `0x21C` (health, attributes, base data,
+skills): the game stores levelled NPC stats it computed when the NPC was first loaded.
+
 **Extra-data list:** u16 count, then per entry a u8 extra type and its payload. An entry is
 written only when its gating flag is set on the record (inventory stacks are written as if
 `0x20` were set). Form references are u32 form indices. Type names follow the public OBSE
@@ -173,11 +193,12 @@ with the script-variable block filling the remainder.
 | `QUST` and `CELL` layouts | Executable: their save routines; `QUST` also checked on all saves | confirmed (`CELL` not yet checked on saves) |
 | `INFO` marker | All saves | confirmed (its meaning: likely) |
 | `REFR` layout and extra-data payloads | Executable: the reference, inventory, extra-data and script-variable save routines; then a decoder run over all 932,274 reference records (99.98% exact) | confirmed; bit meanings marked "likely" or open where noted |
+| `NPC_` layout | Executable: the NPC, actor-base, actor-base-data, spell-list and AI-data save routines; decoder over all 159,906 records (99.98% exact) | confirmed |
 
 ## Open
 
-1. Per-type layouts still to do: `ACHR`/`ACRE` (references plus actor state), `NPC_`, and
-   the two open `CELL` blocks.
+1. Per-type layouts still to do: `ACHR`/`ACRE` (references plus actor state) and the two
+   open `CELL` blocks.
 2. Contents of the eight size-prefixed blobs (processes, weather, quick keys…).
 3. How the game applies change records on load (order, what happens to records whose form
    no longer exists).
