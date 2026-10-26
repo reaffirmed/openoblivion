@@ -150,6 +150,85 @@ run(script, event):
   0**, so that script never runs again in this session.
 - A script can't run another script synchronously; a nested run is refused with an error.
 
+## Event blocks
+
+Each scripted reference (and quest) owns an **event list**: its variables plus a small
+table of `(source, flags)` entries, where *source* is a form (an actor, an item, a
+package…) or none. The game sets flag bits on that table when things happen; a block
+test only reads them:
+
+- A block with a filter argument (`OnAdd player`, `OnHit SomeActor`) looks up the entry
+  for exactly that source; a block without one looks up the "no source" entry. If no entry
+  for that source exists yet, the test **creates one** and fails, so a filtered block
+  starts listening the first time it is evaluated and can only catch events after that.
+- After every run that finishes without an error, **all** flags on all entries are
+  cleared, whether or not a block used them. So an event triggers its block on the next
+  run only, and is lost if no matching block was evaluated in that run.
+- Tests need a reference with an event list; without one they never match.
+
+| Block | Flag | Filter |
+|-------|------|--------|
+| `OnAdd` | `0x1` | container (optional) |
+| `OnEquip`, `OnActorEquip` | `0x2` | container / item |
+| `OnDrop` | `0x4` | container (optional) |
+| `OnUnequip`, `OnActorUnequip` | `0x8` | container / item |
+| `OnDeath` | `0x10` | actor (optional) |
+| `OnMurder` | `0x20` | actor (optional) |
+| `OnKnockout` | `0x40` | none |
+| `OnHit` | `0x80` | actor (optional) |
+| `OnHitWith` | `0x100` | item |
+| `OnPackageStart` / `Done` / `Change` | `0x200` / `0x400` / `0x800` | package |
+| `OnLoad` | `0x1000` | none |
+| `OnMagicEffectHit` | `0x2000` | magic effect (optional) |
+| `OnSell` | `0x4000` | actor (optional) |
+| `OnStartCombat` | `0x8000` | actor (optional) |
+| `OnAlarm` crime type 0/1, 2, 3, 4, 5, 6 | `0x10000`, `0x20000`, `0x40000`, `0x80000`, `0x100000`, `0x200000` | actor (optional) |
+| `OnTrigger` / `OnTriggerActor` / `OnTriggerMob` | `0x10000000` / `0x20000000` / `0x40000000` | reference (optional) |
+| `OnReset` | `0x80000000` | none |
+
+Blocks that work differently:
+
+- `GameMode` always matches. `MenuMode` matches while in menu mode, optionally only for
+  the given menu number.
+- `OnActivate` reads the reference's own "activated" state (not the flag table), then
+  clears it. Its optional actor argument is parsed but, in this build, **not checked**
+  (likely; worth confirming in game).
+- `ScriptEffectStart` / `ScriptEffectFinish` match on the running magic effect's
+  "just started" / "just finished" markers; `ScriptEffectUpdate` matches while the effect
+  is active. They only mean something in a script run by a script effect.
+- `OnYield` never matches.
+- `OnAlarmVictim` computes its flag from the crime type with a different formula (not
+  yet decoded).
+
+## Expression evaluation
+
+The evaluator walks the postfix tokens with a value stack. Every value is **typed**,
+either a 32-bit integer or a double:
+
+- a numeric literal written without a decimal point is an **integer**; with one, a double;
+- variables (local, global, `ref.var`) and command results are **doubles**.
+
+Binary operators pop the right operand, then the left:
+
+| Operator | int ∘ int | any double involved |
+|----------|-----------|---------------------|
+| `+ - *` | integer result (32-bit wrap) | double result |
+| `/` | **integer division** (truncating) | double division |
+| `%` | integer remainder | both sides truncated to integers, integer remainder (as a double) |
+| `== != < <= > >=` | integer 1/0 | exact double comparison, integer 1/0 (no epsilon) |
+| `&&`, `\|\|` | integer 1/0 from "non-zero" tests | same |
+| `~` (unary minus) | keeps the operand's type | |
+
+So `5 / 2` in source (two integer literals) gives 2, while `myFloat / 2` gives 2.5.
+Both sides of `&&`/`||` are always evaluated (no short-circuit): a failing command on
+either side fails the whole expression.
+
+**Errors** (each makes the containing `Set`/`If`/`ElseIf` fail, which disables the
+script, see above): division or remainder by zero; a variable or command operand that
+can't be evaluated (for example a function called on a `ref` variable that is empty);
+a malformed stack. This is the mechanism behind the familiar "script stops working
+after calling a function on a null reference".
+
 ## Evidence
 
 | Fact | Source | Confidence |
@@ -160,14 +239,15 @@ run(script, event):
 | Run loop, Return, skip handling, quest delay | Executable: the script runner | confirmed |
 | If-stack, Set targets, truncation, error handling | Executable: the statement executor | confirmed (truncation: likely, via the C conversion routine) |
 | Default quest delay 5 s | Executable: the default value of the delay setting | confirmed |
+| Typed int/double values, operator table, error cases | Executable: the expression evaluator | confirmed |
+| Event flag table, listening on first evaluation, special blocks | Executable: the 31 block-type tests and the event-list lookup | confirmed |
 
 ## Open
 
-1. **Expression evaluator details**: are `==`/`!=` exact on doubles; division by zero;
-   what a command returns into an expression when it fails; `&&`/`||` short-circuit
-   (in postfix both sides are already evaluated, so probably not).
-2. **Event tests per block type**: exactly when `OnAdd`, `OnEquip`, `OnTrigger*`,
-   `OnLoad`, `OnReset` fire, and how `MenuMode <n>` matches menus.
+1. (Settled: see Expression evaluation.)
+2. **Who sets the event flags and when** (block tests are settled above): e.g. does
+   `OnLoad` fire on every cell attach, `OnReset` on cell reset; how `MenuMode <n>` numbers
+   map to menus; the `OnAlarmVictim` flag formula.
 3. **Scheduling**: which references' object scripts get a `GameMode` run each frame
    (loaded cells only? actors in high process only?), and the order quest, object and
    magic-effect scripts run in.
