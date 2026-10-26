@@ -10,6 +10,7 @@ mod dialog_menu;
 mod lighting;
 mod menu;
 mod model;
+mod saves;
 mod script;
 mod xml_menu;
 mod xml_ui;
@@ -94,6 +95,13 @@ struct Args {
     /// Leave NPCs and creatures in their skeleton's bind pose instead of animating them.
     #[arg(long)]
     bind_pose: bool,
+    /// Load this save once the game has started. F5 quicksaves and F9
+    /// quickloads.
+    #[arg(long)]
+    load: Option<PathBuf>,
+    /// Where saves go.
+    #[arg(long, default_value = "saves")]
+    saves: PathBuf,
 }
 
 /// Where `--camera` puts the player's eyes, if it was given.
@@ -136,6 +144,10 @@ fn main() -> AppExit {
         data_dir: args.data,
         cell: args.cell,
     }))
+    .add_plugins(saves::SavesPlugin {
+        dir: args.saves,
+        load: args.load,
+    })
     .add_plugins(RapierDebugRenderPlugin {
         enabled: args.show_collision,
         ..default()
