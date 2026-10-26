@@ -28,7 +28,7 @@ pub struct Part {
 pub struct ModelCache {
     models: HashMap<String, Option<Vec<Part>>>,
     textures: HashMap<String, Option<Handle<Image>>>,
-    pool: StringPool,
+    pub(crate) pool: StringPool,
 }
 
 impl ModelCache {
@@ -59,25 +59,14 @@ impl ModelCache {
         materials: &mut Assets<StandardMaterial>,
         images: &mut Assets<Image>,
     ) -> Option<Vec<Part>> {
-        let path = format!("meshes\\{model}");
-        let Some(bytes) = data.read(&path) else {
-            warn!("missing model {path}");
-            return None;
-        };
-        let scene = match byroredux_nif::parse_nif(&bytes) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("couldn't parse {path}: {e}");
-                return None;
-            }
-        };
+        let scene = read_nif(model, data)?;
         let imported = import_nif(&scene, &mut self.pool);
         let mut parts = Vec::with_capacity(imported.len());
         for m in &imported {
             if m.positions.is_empty() || m.indices.is_empty() {
                 continue;
             }
-            let material = self.material(m, data, images);
+            let material = self.material(m, None, data, images);
             parts.push(Part {
                 mesh: meshes.add(to_bevy_mesh(m)),
                 material: materials.add(material),
@@ -91,18 +80,24 @@ impl ModelCache {
         Some(parts)
     }
 
-    fn material(
+    /// A mesh's material, optionally with another base texture (an actor's skin,
+    /// eyes or hair).
+    pub(crate) fn material(
         &mut self,
         m: &ImportedMesh,
+        texture_override: Option<&str>,
         data: &GameData,
         images: &mut Assets<Image>,
     ) -> StandardMaterial {
         let mat = &m.material;
-        let texture = mat
-            .textures
-            .base_color
-            .and_then(|sym| self.pool.resolve(sym).map(str::to_owned))
-            .and_then(|path| self.texture(&path, data, images));
+        let texture = texture_override
+            .and_then(|path| self.texture(path, data, images))
+            .or_else(|| {
+                mat.textures
+                    .base_color
+                    .and_then(|sym| self.pool.resolve(sym).map(str::to_owned))
+                    .and_then(|path| self.texture(&path, data, images))
+            });
 
         let alpha_mode = if mat.alpha_test {
             AlphaMode::Mask(mat.alpha_threshold)
@@ -168,7 +163,23 @@ impl ModelCache {
     }
 }
 
-fn to_bevy_mesh(m: &ImportedMesh) -> Mesh {
+/// Reads and parses a NIF by its path relative to `meshes\`, warning if it can't.
+pub(crate) fn read_nif(model: &str, data: &GameData) -> Option<byroredux_nif::scene::NifScene> {
+    let path = format!("meshes\\{model}");
+    let Some(bytes) = data.read(&path) else {
+        warn!("missing model {path}");
+        return None;
+    };
+    match byroredux_nif::parse_nif(&bytes) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            warn!("couldn't parse {path}: {e}");
+            None
+        }
+    }
+}
+
+pub(crate) fn to_bevy_mesh(m: &ImportedMesh) -> Mesh {
     // ByroRedux's Z-up to Y-up conversion already leaves triangles counter-clockwise,
     // which is what Bevy treats as front-facing. Swapping them again turns every
     // room inside out (checked against the tutorial prison, ImperialDungeon01).

@@ -3,6 +3,7 @@
 //! Loads one interior cell from your Data directory and lets you walk around it.
 //! The world itself lives in `oo-sim`; this crate only draws it and takes input.
 
+mod actor;
 mod lighting;
 mod menu;
 mod model;
@@ -17,8 +18,8 @@ use bevy_rapier3d::render::{DebugRenderContext, RapierDebugRenderPlugin};
 use clap::Parser;
 use oo_sim::cell::WorldData;
 use oo_sim::{
-    Container, CurrentCell, EYE_HEIGHT, Item, LoadDoor, LookingAt, Player, PlayerIntent, SimPlugin,
-    StepPositions, UNITS_PER_METRE, WorldConfig,
+    Actor, Container, CurrentCell, EYE_HEIGHT, Item, LoadDoor, LookingAt, Player, PlayerIntent,
+    SimPlugin, StepPositions, UNITS_PER_METRE, WorldConfig,
 };
 
 use crate::model::ModelCache;
@@ -64,6 +65,9 @@ struct Args {
     /// Start with collision shapes shown, as if F3 had been pressed.
     #[arg(long)]
     show_collision: bool,
+    /// Leave NPCs and creatures in their skeleton's bind pose instead of animating them.
+    #[arg(long)]
+    bind_pose: bool,
 }
 
 /// Where `--camera` puts the player's eyes, if it was given.
@@ -107,6 +111,8 @@ fn main() {
         ..default()
     })
     .init_resource::<ModelCache>()
+    .init_resource::<actor::ActorCache>()
+    .insert_resource(actor::BindPoseOnly(args.bind_pose))
     .insert_resource(lighting::LightingTuning {
         light_scale: args.light_scale,
         ambient_scale: args.ambient_scale,
@@ -121,6 +127,7 @@ fn main() {
         Update,
         (
             model::attach_models,
+            (actor::attach_actors, actor::animate_actors).chain(),
             (menu::menu_input, grab_cursor, player_input, follow_player).chain(),
             debug_keys,
             (update_hud, update_cell_label, menu::update_menu),
@@ -352,7 +359,7 @@ struct Crosshair;
 fn update_hud(
     players: Query<&LookingAt, With<Player>>,
     doors: Query<&LoadDoor>,
-    targets: Query<(Option<&Item>, Option<&Container>)>,
+    targets: Query<(Option<&Item>, Option<&Container>, Option<&Actor>)>,
     world: Option<Res<WorldData>>,
     menu: Res<menu::Menu>,
     mut prompt: Query<&mut Text, With<ActivatePrompt>>,
@@ -375,11 +382,18 @@ fn update_hud(
                 }
                 let world = world.as_ref()?;
                 match targets.get(e).ok()? {
-                    (Some(Item(base)), _) => {
+                    (Some(Item(base)), _, _) => {
                         Some(format!("[Space] Take {}", world.items.get(base)?.name))
                     }
-                    (_, Some(Container(base))) => {
+                    (_, Some(Container(base)), _) => {
                         Some(format!("[Space] Open {}", world.containers.get(base)?.name))
+                    }
+                    // Nothing to say to anyone until there's dialogue; just a name.
+                    (_, _, Some(Actor::Npc(base))) => {
+                        Some(world.actors.npcs.get(base)?.name.clone())
+                    }
+                    (_, _, Some(Actor::Creature(base))) => {
+                        Some(world.actors.creatures.get(base)?.name.clone())
                     }
                     _ => None,
                 }
