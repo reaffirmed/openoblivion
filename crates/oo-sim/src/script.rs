@@ -209,6 +209,13 @@ pub struct ScriptState {
     pub disabled: HashSet<u32>,
     /// How many actors of each base form have died (`GetDeadCount`).
     pub dead_counts: HashMap<u32, u32>,
+    /// Faction reactions scripts set (`SetFactionReaction`), replacing the
+    /// records', by (faction, other faction).
+    pub faction_reactions: HashMap<(u32, u32), i32>,
+    /// What `ModFactionReaction` added on top since.
+    pub faction_reaction_mods: HashMap<(u32, u32), i32>,
+    /// Aggression scripts set, by reference.
+    pub aggression: HashMap<u32, f32>,
     /// Lines actors said outside conversation, oldest first; the client
     /// shows and drains them.
     pub subtitles: Vec<Subtitle>,
@@ -537,13 +544,14 @@ impl<'a> GameHost<'a> {
                 .iter()
                 .find(|e| conditions_pass(&e.conditions, this, Some(PLAYER_REF), self));
             if let Some(entry) = entry {
+                info!("{} stage {} runs", q.editor_id, stage.index);
                 if !entry.log.is_empty() {
                     debug!("journal: {}", entry.log);
                 }
                 if let Some(code) = &entry.result {
                     let outcome = self.run_result(code);
                     if !matches!(outcome, Outcome::Finished | Outcome::Returned) {
-                        debug!("{} stage {}: {outcome:?}", q.editor_id, stage.index);
+                        info!("{} stage {}: {outcome:?}", q.editor_id, stage.index);
                     }
                 }
             }
@@ -686,12 +694,34 @@ impl Host for GameHost<'_> {
                         if base { max } else { now }
                     }),
                     12..=32 => f32::from(stats.skills[code - 12]),
-                    33 => f32::from(stats.aggression),
+                    33 => subject
+                        .and_then(|r| self.state.aggression.get(&r).copied())
+                        .unwrap_or(f32::from(stats.aggression)),
                     34 => f32::from(stats.confidence),
                     35 => f32::from(stats.energy),
                     36 => f32::from(stats.responsibility),
                     _ => 0.0,
                 })
+            }
+            "SetActorValue" | "ModActorValue" | "ForceActorValue"
+                if arg_number(args, 0) as usize == 33 =>
+            {
+                let amount = arg_number(args, 1) as f32;
+                if let Some(r) = subject {
+                    let now = self
+                        .state
+                        .aggression
+                        .get(&r)
+                        .copied()
+                        .unwrap_or(f32::from(facts.stats.aggression));
+                    let value = match command.name {
+                        "ModActorValue" => now + amount,
+                        _ => amount,
+                    };
+                    info!("{r:08X} aggression {value}");
+                    self.state.aggression.insert(r, value);
+                }
+                1.0
             }
             "SetActorValue" | "ModActorValue" | "ForceActorValue" => {
                 let code = arg_number(args, 0) as usize;
@@ -724,6 +754,40 @@ impl Host for GameHost<'_> {
                     debug!("{} on actor value {code} has no effect yet", command.name);
                 }
                 1.0
+            }
+            "SetFactionReaction" => {
+                let pair = (form(0), form(1));
+                self.state
+                    .faction_reactions
+                    .insert(pair, arg_number(args, 2) as i32);
+                self.state.faction_reaction_mods.remove(&pair);
+                1.0
+            }
+            "ModFactionReaction" => {
+                *self
+                    .state
+                    .faction_reaction_mods
+                    .entry((form(0), form(1)))
+                    .or_default() += arg_number(args, 2) as i32;
+                1.0
+            }
+            // Only what scripts set; the records' reactions aren't reachable
+            // from here.
+            "GetFactionReaction" => {
+                let pair = (form(0), form(1));
+                f64::from(
+                    self.state
+                        .faction_reactions
+                        .get(&pair)
+                        .copied()
+                        .unwrap_or(0)
+                        + self
+                            .state
+                            .faction_reaction_mods
+                            .get(&pair)
+                            .copied()
+                            .unwrap_or(0),
+                )
             }
             "IsInCombat" => flag(subject.is_some_and(|r| self.state.fighting.contains_key(&r))),
             "GetCombatTarget" => f64::from(
@@ -920,6 +984,10 @@ impl Host for GameHost<'_> {
                 let Some((_, info)) =
                     crate::dialogue::answer(self.data, self.state, self.facts, topic, speaker)
                 else {
+                    let why = crate::dialogue::explain_no_line(
+                        self.data, self.state, self.facts, topic, speaker,
+                    );
+                    info!("{speaker:08X} has nothing to {}: {why}", command.name);
                     return Ok(0.0);
                 };
                 let effects =

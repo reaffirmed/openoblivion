@@ -283,10 +283,13 @@ pub struct ActorData {
     pub hairs: HashMap<u32, HairInfo>,
     pub eyes: HashMap<u32, EyesInfo>,
     pub wearables: HashMap<u32, WearableInfo>,
+    /// Each faction's reactions to other factions (`FACT` `XNAM`: faction,
+    /// modifier), which add to members' dispositions.
+    pub faction_reactions: HashMap<u32, Vec<(u32, i32)>>,
 }
 
-const TYPES: [&[u8; 4]; 7] = [
-    b"NPC_", b"CREA", b"RACE", b"HAIR", b"EYES", b"ARMO", b"CLOT",
+const TYPES: [&[u8; 4]; 8] = [
+    b"NPC_", b"CREA", b"RACE", b"HAIR", b"EYES", b"ARMO", b"CLOT", b"FACT",
 ];
 
 pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
@@ -301,6 +304,7 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
             out.hairs.remove(&id);
             out.eyes.remove(&id);
             out.wearables.remove(&id);
+            out.faction_reactions.remove(&id);
             return Ok(());
         }
         let fields = r.fields()?;
@@ -346,6 +350,14 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
         let editor_id = string(b"EDID").unwrap_or_default();
         let name = string(b"FULL").unwrap_or_else(|| editor_id.clone());
         match &r.tag.0 {
+            b"FACT" => {
+                let reactions = fields
+                    .iter()
+                    .filter(|f| f.tag.0 == *b"XNAM" && f.data.len() >= 8)
+                    .map(|f| (global(u32_at(f.data, 0)), u32_at(f.data, 4) as i32))
+                    .collect();
+                out.faction_reactions.insert(id, reactions);
+            }
             b"NPC_" => {
                 let acbs = fields.iter().find(|f| f.tag.0 == *b"ACBS");
                 let hair_color = fields

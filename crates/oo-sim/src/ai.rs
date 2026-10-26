@@ -6,7 +6,7 @@
 //! follow and accompany keep near the target, wander strolls between nearby
 //! path points, and everything else stands still.
 
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use bevy::prelude::*;
 use oo_formats::packages::{Location, Package, PackageKind, Schedule, Target};
@@ -392,6 +392,11 @@ pub(crate) fn run_ai(
         );
     }
 
+    let actor_refs: HashSet<u32> = actors
+        .iter()
+        .map(|(r, ..)| r.0)
+        .chain([PLAYER_REF])
+        .collect();
     for (placed, _, _, mut ai, _) in &mut actors {
         if state.evaluate.remove(&placed.0) {
             ai.reevaluate_in = 0.0;
@@ -608,6 +613,44 @@ pub(crate) fn run_ai(
                                 ai.finished = true;
                                 if let Some(current) = ai.current {
                                     state.raise(placed.0, current, event::PACKAGE_DONE);
+                                }
+                            }
+                        }
+                    }
+                }
+                // Find aimed at an actor: travel to the package's place, walk
+                // up to the actor and activate it (talk), then wait. It never
+                // attacks; see "Find with an actor target" in
+                // `docs/reverse-engineering/ai-packages.md`.
+                PackageKind::Find
+                    if !ai.finished
+                        && package_target(p).is_some_and(|t| actor_refs.contains(&t)) =>
+                {
+                    let target = package_target(p).unwrap_or(PLAYER_REF);
+                    let place = if ai.arrived {
+                        None
+                    } else {
+                        destination(p, &ai, here, &positions)
+                    };
+                    match place {
+                        Some((to, radius)) if !reached(here, to, radius) => {
+                            goal = Some(to);
+                            speed = pace;
+                        }
+                        _ => {
+                            ai.arrived = true;
+                            if let Some(&to) = positions.get(&target) {
+                                let flat = Vec3::new(to.x - here.x, 0.0, to.z - here.z).length();
+                                if flat > GREET_DISTANCE {
+                                    goal = Some(to);
+                                    speed = pace;
+                                } else {
+                                    ai.finished = true;
+                                    if target == PLAYER_REF {
+                                        pending.greetings.push(placed.0);
+                                    } else {
+                                        info!("{:08X} activates {target:08X}", placed.0);
+                                    }
                                 }
                             }
                         }

@@ -13,6 +13,7 @@ pub mod character;
 pub mod combat;
 pub mod data;
 pub mod dialogue;
+pub mod faction;
 pub mod interact;
 pub mod inventory;
 pub mod physics;

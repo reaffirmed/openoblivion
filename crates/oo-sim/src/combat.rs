@@ -1,9 +1,9 @@
-//! Health, magicka and fatigue, and fighting: punches, blocks, creatures that
+//! Health, magicka and fatigue, and fighting: punches, blocks, actors that
 //! attack on sight, and death.
 //!
 //! The arithmetic follows `docs/reverse-engineering/combat-and-levelling.md`.
-//! Where that is still open (maximum fatigue, who attacks whom) the
-//! rules here are the community-documented ones and say so.
+//! Where that is still open (maximum fatigue, detection) the rules here are
+//! the community-documented ones and say so.
 
 use std::collections::HashMap;
 
@@ -113,9 +113,23 @@ const ACTOR_SWING: f32 = 1.4;
 /// How far a hostile actor notices the player, in units (community value for
 /// a lit room; detection isn't modelled yet).
 const NOTICE_DISTANCE: f32 = 1500.0;
-/// Disposition everyone has towards everyone until dispositions exist. An
-/// actor attacks someone it likes less than its aggression.
-const DISPOSITION: u8 = 50;
+
+/// The fight score: an actor that notices another starts combat with it when
+/// this is above 0; see "Starting combat on sight" in
+/// `docs/reverse-engineering/combat-and-levelling.md`. The friend term
+/// (the target fighting someone the actor likes) is left out for now.
+pub fn fight_score(gmst: &Settings, aggression: f32, disposition: i32, distance: f32) -> i32 {
+    if aggression <= 0.0 {
+        return 0;
+    }
+    let s = |name, vanilla| setting(gmst, name, vanilla);
+    let score = aggression * s("fFightAggrMult", 1.0)
+        + s("fFightAggrBase", -55.0)
+        + disposition as f32 * s("fFightDispMult", -1.0)
+        + s("fFightDispBase", 50.0)
+        + (distance * s("fFightDistanceMult", -0.005) + s("fFightDistanceBase", 1.0)).max(0.0);
+    (score.trunc() as i32).min(100)
+}
 
 /// The game settings (`GMST`) by lower-case editor ID.
 pub type Settings = HashMap<String, Setting>;
@@ -556,6 +570,27 @@ pub(crate) fn run_combat(
         .chain(player_feet.map(|p| (PLAYER_REF, p)))
         .collect();
     let position = |r: u32| positions.iter().find(|p| p.0 == r).map(|p| p.1);
+    // Who can be noticed: the living and awake, with their base forms.
+    let noticeable: Vec<(u32, u32, Vec3)> = actors
+        .iter()
+        .map(|a| {
+            let base = match *a.2 {
+                Actor::Npc(b) | Actor::Creature(b) => b,
+            };
+            (a.1.0, base, a.3.translation)
+        })
+        .chain(
+            player_feet
+                .filter(|_| player_alive)
+                .map(|p| (PLAYER_REF, PLAYER_BASE, p)),
+        )
+        .filter(|(r, _, _)| {
+            state
+                .vitals
+                .get(r)
+                .is_none_or(|v| !v.dead && v.unconscious <= 0.0)
+        })
+        .collect();
     for (entity, placed, actor, mut transform, mut fighter, knocked) in &mut actors {
         let base = match *actor {
             Actor::Npc(b) | Actor::Creature(b) => b,
@@ -593,17 +628,31 @@ pub(crate) fn run_combat(
         {
             state.fighting.remove(&placed.0);
         }
-        // Only creatures pick fights on their own for now: NPCs' dispositions
-        // and factions decide theirs, and those aren't modelled yet.
-        if !state.fighting.contains_key(&placed.0)
-            && player_alive
-            && matches!(actor, Actor::Creature(_))
-            && stats.aggression > DISPOSITION
-            && position(PLAYER_REF).is_some_and(|p| p.distance(here) <= NOTICE_DISTANCE)
-        {
-            debug!("{:08X} attacks the player", placed.0);
-            state.fighting.insert(placed.0, PLAYER_REF);
-            state.raise(placed.0, PLAYER_REF, event::START_COMBAT);
+        // Attack on sight: the nearest noticed actor with a fight score
+        // above 0. Noticing is being within NOTICE_DISTANCE until detection
+        // exists. This runs whatever the package.
+        if !state.fighting.contains_key(&placed.0) {
+            let aggression = state
+                .aggression
+                .get(&placed.0)
+                .copied()
+                .unwrap_or(f32::from(stats.aggression));
+            let target = noticeable
+                .iter()
+                .filter(|(r, _, _)| *r != placed.0)
+                .map(|&(r, other, at)| (r, other, at.distance(here)))
+                .filter(|&(_, _, d)| d <= NOTICE_DISTANCE)
+                .filter(|&(_, other, d)| {
+                    let (disposition, _) =
+                        crate::faction::disposition(&world.actors, &state, base, other);
+                    fight_score(&world.settings, aggression, disposition, d) > 0
+                })
+                .min_by(|a, b| a.2.total_cmp(&b.2));
+            if let Some((target, _, _)) = target {
+                info!("{:08X} attacks {target:08X} on sight", placed.0);
+                state.fighting.insert(placed.0, target);
+                state.raise(placed.0, target, event::START_COMBAT);
+            }
         }
         let target = state.fighting.get(&placed.0).copied();
         let mut chase = None;
@@ -832,6 +881,19 @@ pub(crate) fn fly_arrows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fight_scores_from_the_tutorial() {
+        let gmst = Settings::new();
+        // Assassins (aggression 50) towards a Blade at disposition 0 attack;
+        // at a neutral 50 they don't.
+        assert_eq!(fight_score(&gmst, 50.0, 0, 0.0), 46);
+        assert_eq!(fight_score(&gmst, 50.0, 50, 300.0), -5);
+        // Aggression 5 fights only at disposition 0 and close.
+        assert_eq!(fight_score(&gmst, 5.0, 0, 100.0), 0);
+        assert!(fight_score(&gmst, 5.0, 0, 0.0) > 0);
+        assert_eq!(fight_score(&gmst, 0.0, 0, 0.0), 0);
+    }
 
     fn world() -> Settings {
         Settings::default()
