@@ -82,6 +82,36 @@ call, which is how an `OnActivate` block passes activation through to the defaul
 behaviour. Which references count as "script-handled" (presumably: has a script with an
 `OnActivate` block) is likely but not yet confirmed.
 
+## Trigger zones (`OnTrigger`, `OnTriggerActor`, `OnTriggerMob`)
+
+A trigger zone is a reference whose model holds a Havok **phantom** (in vanilla a
+`bhkSimpleShapePhantom` around a transformed box, scaled with the reference). The game does
+not test bounds itself; it asks Havok which bodies overlap the phantom, every update:
+
+```
+for each enabled trigger reference with 3D:
+    if its phantom is a shape phantom:  ask Havok for the bodies penetrating the shape
+                                        (exact shape overlap)
+    if it is an AABB phantom:           use Havok's list of overlapping bodies
+                                        (broadphase box overlap)
+    for each overlapping body, once per owning reference R:
+        record OnTrigger      (source R) on the trigger's event list
+        if R is a mobile object:              also OnTriggerMob   (source R)
+            if R is an actor and not dead:    also OnTriggerActor (source R)
+        the first R this update becomes the trigger's "action ref" (GetActionRef)
+        if none of these events had a listener for R: drop R's body from the phantom's
+            overlap set (stop reporting it)
+```
+
+The events follow the usual event-list rules (see [script-vm.md](script-vm.md)): a block
+`OnTrigger player` only reacts to the player because only that source is being listened
+for, and the flags are cleared after each script run, so the block fires on **every update
+the actor stays inside**, not just on entry.
+
+Shape sizes are therefore whatever Havok uses: box shapes store **half-extents**, in Havok
+units (the NIF's collision data, scaled by the reference's scale), converted to game units
+by the usual Havok-to-game scale.
+
 ## Evidence
 
 | Fact | Source | Confidence |
@@ -91,6 +121,7 @@ behaviour. Which references count as "script-handled" (presumably: has a script 
 | `SetDoorDefaultOpen` marker and flag interplay | Executable: the command handler and the "is open" test | confirmed (flag naming: likely) |
 | `PlayGroup` sequence lookup, other sequences stopped except Idle, error messages | Executable: the command handler | confirmed |
 | Blend time `flags × 0.1 s` | Executable: the blend call's argument | likely |
+| Trigger detection through Havok phantom overlaps, event bits, action ref | Executable: the per-update trigger routine | confirmed (the "drop body" step: likely) |
 | Activation routine, script hand-off, nesting limit | Executable: the shared activation routine and the `Activate` command | confirmed (what makes a ref script-handled: likely) |
 
 ## Open

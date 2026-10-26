@@ -65,15 +65,29 @@ also jitter their position by up to about `fFlickerMovement` units.
 | Colour /255, negative flag, dimmer from fade | Executable: the routine that creates a reference's point light | confirmed |
 | Stock values | `Oblivion.ini` on the test PC | confirmed for this install |
 | `bOutQuadInLin` keyed on interior/exterior | Executable plus setting name | likely |
+| INI terms not affecting the image | Real-game render comparison (PC test session) | confirmed for that scene |
+| Shader light constants: object-space position + scaled radius, no attenuation terms | Executable: shader constant registration and fill | confirmed (w being the radius: likely) |
+
+## What the shaders actually get
+
+**Observed:** on the real game (1.2.0416, 1280×720), the cell outside the prison after
+character generation renders essentially the same with `fQuadraticValue = 4` and the default
+16 (mean luminance 33.79 vs 33.83). So the attenuation terms above don't reach what is
+drawn there; they are Gamebryo light properties that Oblivion's own shaders ignore.
+
+**Executable:** the shader constant setup passes up to three point lights per draw as
+`PointLightPos0..2`: the light's position transformed into the object's space (xyz) and,
+in w, one per-light value divided by the object's scale, i.e. a **radius** converted into
+object space. Colours go separately (`DiffuseColor0..2`). No constant, linear or quadratic
+term is passed. So the falloff curve is computed inside the shader packages from the
+distance and that radius.
 
 ## Open
 
-1. **Do the shaders use these terms?** Oblivion draws almost everything with its own
-   shader packages, which receive point-light positions as constants. Whether they apply
-   the three Gamebryo terms above, or derive their own falloff from the radius (and
-   clamp at 1), needs a look at how the renderer fills the light constants. A quick
-   observation test settles it too: set `fQuadraticValue` to 4 in the INI and see whether
-   lit areas in the game brighten.
+1. **The curve itself.** Settled that the shaders use their own falloff from the radius;
+   the formula lives in the shader bytecode (`Data\Shaders\shaderpackage*.sdp`). Reading
+   it needs a small Direct3D 9 shader disassembler, or matching renders. Also which value
+   exactly the radius is (the `LIGH` radius, or that times a light-LOD factor).
 2. Is there a hard cutoff at the radius (or at `fLightLOD1/2` = 1000/1500 for distant
    lights), and how is a light chosen when more than the shader limit touch an object?
 3. Exact flicker and pulse curves (speeds, ranges), for later.
