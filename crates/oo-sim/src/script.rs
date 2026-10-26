@@ -14,6 +14,11 @@ use oo_formats::load_order::LoadOrder;
 use oo_formats::scripts::{Script, ScriptCode, ScriptKind, scripts};
 use oo_script::{Host, Locals, Outcome, Statement, Value, conditions_pass, decode, run};
 
+use crate::actor::Actor;
+use crate::cell::{CurrentCell, PlacedRef, WorldData};
+use crate::inventory::{Inventory, WorldChanges};
+use crate::player::Player;
+
 /// The player's base form and reference, fixed by `Oblivion.esm`.
 pub const PLAYER_BASE: u32 = 0x0000_0007;
 pub const PLAYER_REF: u32 = 0x0000_0014;
@@ -120,7 +125,7 @@ impl ScriptState {
         self.quests.get(&quest).map_or(0, |q| q.stage)
     }
 
-    fn next_random(&mut self) -> u32 {
+    pub(crate) fn next_random(&mut self) -> u32 {
         // xorshift32; any non-zero seed works.
         let mut x = if self.random == 0 {
             0x9E37_79B9
@@ -405,8 +410,14 @@ impl Host for GameHost<'_> {
             "GetGlobalValue" => f64::from(self.global(form(0))),
             "GetLevel" => f64::from(facts.level),
             "GetIsPlayableRace" => 1.0,
-            "GetPlayerInSEWorld" | "IsGuard" | "GetIsCurrentPackage" | "GetCrimeGold"
-            | "GetPCExpelled" | "GetPCFactionMurder" | "GetPCFactionAttack" | "GetPCFactionSteal"
+            "GetPlayerInSEWorld"
+            | "IsGuard"
+            | "GetIsCurrentPackage"
+            | "GetCrimeGold"
+            | "GetPCExpelled"
+            | "GetPCFactionMurder"
+            | "GetPCFactionAttack"
+            | "GetPCFactionSteal"
             | "GetPCFactionSubmitAuthority" => 0.0,
             "GetSecondsPassed" => f64::from(QUEST_DELAY),
             "GetDisabled" => 0.0,
@@ -442,7 +453,11 @@ impl Host for GameHost<'_> {
             }
             "AddItem" | "RemoveItem" => {
                 let count = arg_number(args, 1) as i32;
-                let count = if command.name == "AddItem" { count } else { -count };
+                let count = if command.name == "AddItem" {
+                    count
+                } else {
+                    -count
+                };
                 self.effects.push(WorldEffect::AddItem {
                     to: subject.unwrap_or(PLAYER_REF),
                     item: form(0),
@@ -566,4 +581,116 @@ mod tests {
         assert_eq!(format_message("%.0f gold, 100%%", &[12.6]), "13 gold, 100%");
         assert_eq!(format_message("%g left", &[2.5]), "2.5 left");
     }
+}
+
+/// Set when scripts enabled or disabled something, so the loaded cell is
+/// brought in line (see `cell::resync_cell`).
+#[derive(Resource, Debug, Default)]
+pub struct ResyncCell(pub bool);
+
+/// A snapshot of the actors in the loaded cell and the player, for scripts and
+/// conditions to ask about.
+pub(crate) fn gather_facts<'a>(
+    world: &WorldData,
+    cell: Option<&CurrentCell>,
+    actors: impl Iterator<Item = (&'a PlacedRef, &'a Actor, &'a Transform)>,
+    player: Option<(&Transform, &Inventory)>,
+) -> HashMap<u32, ActorFacts> {
+    let cell = cell.map_or(0, |c| c.form_id);
+    let npc_facts = |base: u32, position: Vec3| {
+        let mut f = ActorFacts {
+            base,
+            cell,
+            position,
+            ..default()
+        };
+        if let Some(npc) = world.actors.npcs.get(&base) {
+            f.female = npc.female;
+            f.race = npc.race;
+            f.class = npc.class;
+            f.factions = npc.factions.clone();
+            f.level = npc.level;
+            f.script = npc.script;
+        } else if let Some(c) = world.actors.creatures.get(&base) {
+            f.factions = c.factions.clone();
+            f.script = c.script;
+        }
+        f
+    };
+    let mut out: HashMap<u32, ActorFacts> = actors
+        .map(|(placed, actor, transform)| {
+            let base = match *actor {
+                Actor::Npc(b) | Actor::Creature(b) => b,
+            };
+            (placed.0, npc_facts(base, transform.translation))
+        })
+        .collect();
+    if let Some((transform, inventory)) = player {
+        let mut f = npc_facts(PLAYER_BASE, transform.translation);
+        f.items = inventory.0.iter().map(|s| (s.item, s.count)).collect();
+        out.insert(PLAYER_REF, f);
+    }
+    out
+}
+
+/// Applies what a script did to the world.
+pub(crate) fn apply_effects(
+    effects: Vec<WorldEffect>,
+    changes: &mut WorldChanges,
+    resync: &mut ResyncCell,
+    inventory: Option<&mut Inventory>,
+) {
+    let mut inventory = inventory;
+    for e in effects {
+        match e {
+            WorldEffect::Enable(r, on) => {
+                changes.enabled.insert(r, on);
+                resync.0 = true;
+            }
+            WorldEffect::AddItem {
+                to: PLAYER_REF,
+                item,
+                count,
+            } => {
+                if let Some(inv) = inventory.as_deref_mut() {
+                    inv.add(item, count);
+                }
+            }
+            WorldEffect::AddItem { to, .. } => {
+                debug!("AddItem on {to:08X}: only the player's inventory is kept so far");
+            }
+        }
+    }
+}
+
+/// Runs quest scripts on their timers.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_quests(
+    time: Res<Time>,
+    world: Option<Res<WorldData>>,
+    cell: Option<Res<CurrentCell>>,
+    mut state: ResMut<ScriptState>,
+    mut changes: ResMut<WorldChanges>,
+    mut resync: ResMut<ResyncCell>,
+    actors: Query<(&PlacedRef, &Actor, &Transform)>,
+    mut players: Query<(&Transform, &mut Inventory), With<Player>>,
+) {
+    let Some(world) = world else { return };
+    let mut player = players.single_mut().ok();
+    let facts = gather_facts(
+        &world,
+        cell.as_deref(),
+        actors.iter(),
+        player.as_ref().map(|(t, i)| (*t, &**i)),
+    );
+    let effects = tick_quests(&world.scripting, &mut state, &facts, time.delta_secs());
+    apply_effects(
+        effects,
+        &mut changes,
+        &mut resync,
+        player.as_mut().map(|(_, i)| &mut **i),
+    );
+    // The client shows and drains these; without one, don't let them pile up.
+    let excess = state.messages.len().saturating_sub(16);
+    state.messages.drain(..excess);
 }

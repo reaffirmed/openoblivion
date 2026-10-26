@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 oo-formats.workspace = true
+oo-script.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 bevy = { workspace = true, default-features = false, features = ["std", "bevy_log"] }

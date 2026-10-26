@@ -112,6 +112,7 @@ pub fn spawn_player(mut commands: Commands, spawn: Option<Res<SpawnPoint>>) {
         Inventory::default(),
         OpenContainer::default(),
         PlayerActions::default(),
+        crate::dialogue::Conversation::default(),
         StepPositions::at(centre),
         Transform::from_translation(centre),
         RigidBody::KinematicPositionBased,

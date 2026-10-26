@@ -3,7 +3,9 @@
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 
+use crate::actor::Actor;
 use crate::cell::{LoadDoor, PendingTransition, PlacedRef, WorldData};
+use crate::dialogue::Conversation;
 use crate::inventory::{
     Container, Inventory, Item, OpenContainer, WorldChanges, container_contents, pick_up,
 };
@@ -48,29 +50,42 @@ pub(crate) fn update_looking_at(
     }
 }
 
+/// What activating a reference can do with it.
+type Target = (
+    &'static PlacedRef,
+    Option<&'static Item>,
+    Option<&'static Container>,
+    Option<&'static Actor>,
+);
+
 pub(crate) fn activate(
     mut commands: Commands,
     mut pending: ResMut<PendingTransition>,
     world: Option<Res<WorldData>>,
     mut changes: ResMut<WorldChanges>,
     doors: Query<&LoadDoor>,
-    targets: Query<(&PlacedRef, Option<&Item>, Option<&Container>)>,
+    targets: Query<Target>,
     mut players: Query<
         (
             &mut PlayerIntent,
             &LookingAt,
             &mut Inventory,
             &mut OpenContainer,
+            &mut Conversation,
         ),
         With<Player>,
     >,
 ) {
-    for (mut intent, looking, mut inventory, mut open) in &mut players {
+    for (mut intent, looking, mut inventory, mut open, mut talk) in &mut players {
         if !std::mem::take(&mut intent.activate) {
             continue;
         }
         let Some(target) = looking.0 else { continue };
-        if let Ok((placed, item, container)) = targets.get(target) {
+        if let Ok((placed, item, container, actor)) = targets.get(target) {
+            if let Some(Actor::Npc(_)) = actor {
+                talk.request = Some(placed.0);
+                continue;
+            }
             if let Some(Item(base)) = item {
                 pick_up(
                     &mut commands,

@@ -8,10 +8,12 @@
 pub mod actor;
 pub mod cell;
 pub mod data;
+pub mod dialogue;
 pub mod interact;
 pub mod inventory;
 pub mod physics;
 pub mod player;
+pub mod script;
 
 use std::path::PathBuf;
 
@@ -22,11 +24,13 @@ pub use cell::{
     BaseForm, CellMember, CurrentCell, LightSource, LoadDoor, Model, PlacedRef, SpawnPoint,
 };
 pub use data::GameData;
+pub use dialogue::Conversation;
 pub use interact::LookingAt;
 pub use inventory::{
     Container, Inventory, Item, OpenContainer, PlayerAction, PlayerActions, WorldChanges,
 };
 pub use player::{EYE_HEIGHT, Player, PlayerIntent, PlayerMotion, StepPositions};
+pub use script::ScriptState;
 
 /// Bethesda units per metre.
 pub const UNITS_PER_METRE: f32 = 70.0;
@@ -53,6 +57,8 @@ impl Plugin for SimPlugin {
             .add_plugins((physics::PhysicsPlugin, player::PlayerPlugin))
             .init_resource::<cell::PendingTransition>()
             .init_resource::<WorldChanges>()
+            .init_resource::<script::ScriptState>()
+            .init_resource::<script::ResyncCell>()
             // The simulation steps at a fixed rate, independent of framerate.
             .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
             .add_systems(Startup, cell::load_world)
@@ -61,7 +67,10 @@ impl Plugin for SimPlugin {
                 (
                     interact::update_looking_at,
                     interact::activate,
+                    dialogue::update_conversations,
                     inventory::handle_actions,
+                    script::run_quests,
+                    cell::resync_cell,
                     cell::apply_transition,
                 )
                     .chain()

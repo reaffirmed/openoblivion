@@ -29,6 +29,7 @@ use crate::inventory::{Container, Item, PLAYER_LEVEL, WorldChanges};
 use crate::player::{
     PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent, PlayerMotion, StepPositions,
 };
+use crate::script::ScriptData;
 use crate::{GameData, WorldConfig};
 
 /// A reference placed in the world. Its form ID is stable across machines
@@ -78,6 +79,7 @@ pub struct WorldData {
     pub containers: HashMap<u32, ContainerInfo>,
     pub leveled_items: HashMap<u32, LeveledList>,
     pub actors: ActorData,
+    pub scripting: ScriptData,
 }
 
 /// The interior cell that's loaded now.
@@ -176,6 +178,7 @@ fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
         containers: containers(&order)?,
         leveled_items: leveled_items(&order)?,
         actors: actor_data(&order)?,
+        scripting: ScriptData::load(&order)?,
         order,
     })
 }
@@ -285,82 +288,15 @@ fn spawn_cell(
             disabled += 1;
             continue;
         }
-        let translation = Vec3::from(zup_to_yup_pos(r.position));
-        let [rx, ry, rz] = r.rotation;
-        let transform = Transform {
-            translation,
-            rotation: euler_zup_to_quat_yup(rx, ry, rz),
-            scale: Vec3::splat(r.scale),
-        };
-        if Some(r.base) == world.coc_marker {
-            spawn = Some(SpawnPoint {
-                position: translation,
-                yaw: heading_to_yaw(rz),
-            });
+        let spawned = spawn_reference(commands, world, r);
+        if spawned.has_model {
+            placed.push(spawned.translation);
         }
-        let mut entity = commands.spawn((
-            transform,
-            PlacedRef(r.form_id),
-            BaseForm(r.base),
-            CellMember,
-        ));
-        // Markers have no model to draw. Actors don't get a Model either: an
-        // NPC's or creature's MODL is its skeleton.nif, which has no visible
-        // mesh but does carry a ragdoll, and as a static model that ragdoll is
-        // an invisible T-shaped wall. They get an Appearance instead.
-        let actor = matches!(&r.tag.0, b"ACHR" | b"ACRE");
-        if let Some(model) = world
-            .models
-            .get(&r.base)
-            .filter(|m| !actor && !is_marker_model(m))
-        {
-            debug!(
-                "{:08X} at {:?} rot {:?}: {model}",
-                r.form_id, r.position, r.rotation
-            );
-            entity.insert(Model(model.clone()));
-            placed.push(translation);
+        spawn = spawn.or(spawned.coc_marker);
+        if let Some(exit) = spawned.exit {
+            exits.push(exit);
         }
-        if world.items.contains_key(&r.base) {
-            entity.insert(Item(r.base));
-        }
-        if actor {
-            spawn_actor(&mut entity, world, r);
-        }
-        if world.containers.contains_key(&r.base) {
-            entity.insert(Container(r.base));
-        }
-        if let Some(light) = world.lights.get(&r.base) {
-            debug!(
-                "light {:08X} at {:?}: radius {}, colour {:?}, flags {:#x}, falloff {}, fov {}",
-                r.form_id,
-                r.position,
-                light.radius,
-                light.color,
-                light.flags,
-                light.falloff_exponent,
-                light.fov
-            );
-            entity.insert(LightSource(*light));
-        }
-        if let Some(t) = &r.teleport {
-            let destination = world.reference_cells.get(&t.door).copied();
-            if let Some(cell) = destination {
-                exits.push((cell, t.door));
-            }
-            let label = destination
-                .and_then(|c| world.cell_names.get(&c).cloned())
-                .unwrap_or_else(|| "outside".to_owned());
-            entity.insert(LoadDoor {
-                cell: destination,
-                label,
-                arrival: SpawnPoint {
-                    position: Vec3::from(zup_to_yup_pos(t.position)),
-                    yaw: heading_to_yaw(t.rotation[2]),
-                },
-            });
-            doors += 1;
-        }
+        doors += usize::from(spawned.load_door);
     }
     let marker = spawn.is_some();
     // Oblivion.esm has no COCMarkerHeading (that's a later games' convention), so
@@ -412,6 +348,102 @@ fn spawn_cell(
             yaw: 0.0,
         })
     })
+}
+
+/// What spawning one reference found out, for picking a spawn point.
+#[derive(Default)]
+struct Spawned {
+    translation: Vec3,
+    has_model: bool,
+    coc_marker: Option<SpawnPoint>,
+    /// A load door to another interior: (that cell, the door there).
+    exit: Option<(u32, u32)>,
+    load_door: bool,
+}
+
+/// Spawns one reference with everything its base form calls for.
+fn spawn_reference(commands: &mut Commands, world: &WorldData, r: &Reference) -> Spawned {
+    let translation = Vec3::from(zup_to_yup_pos(r.position));
+    let [rx, ry, rz] = r.rotation;
+    let transform = Transform {
+        translation,
+        rotation: euler_zup_to_quat_yup(rx, ry, rz),
+        scale: Vec3::splat(r.scale),
+    };
+    let mut out = Spawned {
+        translation,
+        ..default()
+    };
+    if Some(r.base) == world.coc_marker {
+        out.coc_marker = Some(SpawnPoint {
+            position: translation,
+            yaw: heading_to_yaw(rz),
+        });
+    }
+    let mut entity = commands.spawn((
+        transform,
+        PlacedRef(r.form_id),
+        BaseForm(r.base),
+        CellMember,
+    ));
+    // Markers have no model to draw. Actors don't get a Model either: an
+    // NPC's or creature's MODL is its skeleton.nif, which has no visible
+    // mesh but does carry a ragdoll, and as a static model that ragdoll is
+    // an invisible T-shaped wall. They get an Appearance instead.
+    let actor = matches!(&r.tag.0, b"ACHR" | b"ACRE");
+    if let Some(model) = world
+        .models
+        .get(&r.base)
+        .filter(|m| !actor && !is_marker_model(m))
+    {
+        debug!(
+            "{:08X} at {:?} rot {:?}: {model}",
+            r.form_id, r.position, r.rotation
+        );
+        entity.insert(Model(model.clone()));
+        out.has_model = true;
+    }
+    if world.items.contains_key(&r.base) {
+        entity.insert(Item(r.base));
+    }
+    if actor {
+        spawn_actor(&mut entity, world, r);
+    }
+    if world.containers.contains_key(&r.base) {
+        entity.insert(Container(r.base));
+    }
+    if let Some(light) = world.lights.get(&r.base) {
+        debug!(
+            "light {:08X} at {:?}: radius {}, colour {:?}, flags {:#x}, falloff {}, fov {}",
+            r.form_id,
+            r.position,
+            light.radius,
+            light.color,
+            light.flags,
+            light.falloff_exponent,
+            light.fov
+        );
+        entity.insert(LightSource(*light));
+    }
+    if let Some(t) = &r.teleport {
+        let destination = world.reference_cells.get(&t.door).copied();
+        if let Some(cell) = destination {
+            out.exit = Some((cell, t.door));
+        }
+        let label = destination
+            .and_then(|c| world.cell_names.get(&c).cloned())
+            .unwrap_or_else(|| "outside".to_owned());
+        entity.insert(LoadDoor {
+            cell: destination,
+            label,
+            arrival: SpawnPoint {
+                position: Vec3::from(zup_to_yup_pos(t.position)),
+                yaw: heading_to_yaw(t.rotation[2]),
+            },
+        });
+        out.load_door = true;
+    }
+    out
 }
 
 /// Where a door in cell `other` drops you when you go through it, if it's a load door.
@@ -472,5 +504,44 @@ pub(crate) fn apply_transition(
         intent.yaw = arrival.yaw;
         intent.pitch = 0.0;
         *motion = PlayerMotion::default();
+    }
+}
+
+/// Brings the loaded cell in line after scripts enabled or disabled things:
+/// despawns what's now disabled (with whatever follows it as enable parent)
+/// and spawns what's now enabled.
+pub(crate) fn resync_cell(
+    mut commands: Commands,
+    mut resync: ResMut<crate::script::ResyncCell>,
+    world: Option<Res<WorldData>>,
+    current: Option<Res<CurrentCell>>,
+    changes: Res<WorldChanges>,
+    spawned: Query<(Entity, &PlacedRef), With<CellMember>>,
+) {
+    if !std::mem::take(&mut resync.0) {
+        return;
+    }
+    let (Some(world), Some(current)) = (world, current) else {
+        return;
+    };
+    let cell = match interior_cell_by_form_id(&world.order, current.form_id) {
+        Ok(Some(c)) => c,
+        _ => return,
+    };
+    let by_id: HashMap<u32, &Reference> = cell.references.iter().map(|r| (r.form_id, r)).collect();
+    let present: HashMap<u32, Entity> = spawned.iter().map(|(e, r)| (r.0, e)).collect();
+    for r in &cell.references {
+        let wanted = !changes.removed.contains(&r.form_id) && is_enabled(r, &by_id, &changes);
+        match (wanted, present.get(&r.form_id)) {
+            (false, Some(&e)) => {
+                debug!("disabling {:08X}", r.form_id);
+                commands.entity(e).despawn();
+            }
+            (true, None) => {
+                debug!("enabling {:08X}", r.form_id);
+                spawn_reference(&mut commands, &world, r);
+            }
+            _ => {}
+        }
     }
 }

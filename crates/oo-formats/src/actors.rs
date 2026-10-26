@@ -27,6 +27,8 @@ pub struct NpcInfo {
     pub class: Option<u32>,
     /// Faction memberships and rank (`SNAM`).
     pub factions: Vec<(u32, i8)>,
+    /// The object script its references run (`SCRI`).
+    pub script: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -38,6 +40,7 @@ pub struct CreatureInfo {
     pub body_models: Vec<String>,
     pub inventory: Vec<Stack>,
     pub factions: Vec<(u32, i8)>,
+    pub script: Option<u32>,
 }
 
 /// One piece of a race's head (`NAM0` section) or body (`NAM1`).
@@ -217,6 +220,7 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
                         inventory: inventory(),
                         class: form(b"CNAM"),
                         factions: factions(),
+                        script: form(b"SCRI"),
                     },
                 );
             }
@@ -237,6 +241,7 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
                         body_models,
                         inventory: inventory(),
                         factions: factions(),
+                        script: form(b"SCRI"),
                     },
                 );
             }

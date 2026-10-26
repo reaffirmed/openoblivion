@@ -83,6 +83,10 @@ pub enum PlayerAction {
         count: i32,
     },
     CloseContainer,
+    /// Ask the actor the player is talking to about a topic.
+    Ask(u32),
+    /// End the conversation.
+    Goodbye,
 }
 
 /// The player's level, until there are levels.
@@ -170,7 +174,8 @@ pub(crate) fn handle_actions(
                         add_stack(contents, item, n);
                     }
                 }
-                PlayerAction::CloseContainer => unreachable!(),
+                // Closing is handled above; talking by `dialogue`, which runs first.
+                PlayerAction::CloseContainer | PlayerAction::Ask(_) | PlayerAction::Goodbye => {}
             }
         }
     }
