@@ -308,3 +308,74 @@ fn decodes_crime_type_arguments() {
     assert_eq!(call.command.name, "GetCrimeKnown");
     assert_eq!(call.args.len(), 3);
 }
+
+/// A host whose run belongs to reference `ME`, with one other reference's
+/// variables.
+#[derive(Default)]
+struct Owned {
+    other: HashMap<u16, f64>,
+}
+
+const ME: u32 = 0x300;
+const OTHER: u32 = 0x301;
+
+impl Host for Owned {
+    fn call(&mut self, _: Option<u32>, c: &Command, _: &[Value]) -> Result<f64, String> {
+        Err(format!("{} not supported", c.name))
+    }
+
+    fn begin(&mut self, block: u16, _args: &[Value]) -> bool {
+        block == 0
+    }
+
+    fn global(&self, _: u32) -> f32 {
+        0.0
+    }
+
+    fn set_global(&mut self, _: u32, _: f32) {}
+
+    fn remote(&self, form: u32, index: u16) -> Option<f64> {
+        (form == OTHER).then(|| self.other.get(&index).copied().unwrap_or(0.0))
+    }
+
+    fn set_remote(&mut self, form: u32, index: u16, value: f64) {
+        assert_eq!(form, OTHER, "the run's own variables went through the host");
+        self.other.insert(index, value);
+    }
+
+    fn own(&self) -> Option<u32> {
+        Some(ME)
+    }
+}
+
+#[test]
+fn naming_its_own_reference_sets_the_runs_variables() {
+    let remote = |reference: u16, index: u16| {
+        let mut v = vec![b'r'];
+        v.extend(reference.to_le_bytes());
+        v.extend(var(b's', index));
+        v
+    };
+    // set MeRef.talk to 2; set OtherRef.talk to MeRef.talk + 1
+    let code = [
+        stmt(0x1D, &[]),
+        block(
+            0,
+            &[
+                set(remote(1, 1), expr(&[b"2"])),
+                set(remote(2, 1), expr(&[&remote(1, 1), b"1", b"+"])),
+            ],
+        ),
+    ]
+    .concat();
+    let statements = decode(&code).unwrap();
+    let refs = [ScriptRef::Form(ME), ScriptRef::Form(OTHER)];
+    let mut locals = Locals::default();
+    let mut host = Owned::default();
+    assert_eq!(
+        run(&statements, &refs, &mut locals, &mut host),
+        Outcome::Finished
+    );
+    assert_eq!(locals.get(1), 2.0);
+    assert_eq!(host.other[&1], 3.0);
+}

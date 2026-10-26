@@ -59,6 +59,12 @@ pub trait Host {
     /// A variable of the script on another reference or quest.
     fn remote(&self, form: u32, index: u16) -> Option<f64>;
     fn set_remote(&mut self, form: u32, index: u16, value: f64);
+
+    /// The reference or quest whose variables this run holds, if any, so
+    /// that `ref.var` naming it reads and writes the run's own variables.
+    fn own(&self) -> Option<u32> {
+        None
+    }
 }
 
 /// A script instance's variables, by `SLSD` index. Reference variables hold
@@ -174,10 +180,14 @@ impl<H: Host + ?Sized> Run<'_, H> {
             Var::Global(r) => f64::from(self.host.global(self.reference(r))),
             Var::Remote {
                 reference, index, ..
-            } => self
-                .host
-                .remote(self.reference(reference), index)
-                .unwrap_or(0.0),
+            } => {
+                let form = self.reference(reference);
+                if self.host.own() == Some(form) {
+                    self.locals.get(index)
+                } else {
+                    self.host.remote(form, index).unwrap_or(0.0)
+                }
+            }
         }
     }
 
@@ -200,8 +210,12 @@ impl<H: Host + ?Sized> Run<'_, H> {
                 integer,
             } => {
                 let form = self.reference(reference);
-                self.host
-                    .set_remote(form, index, if integer { int(value) } else { value });
+                let value = if integer { int(value) } else { value };
+                if self.host.own() == Some(form) {
+                    self.locals.0.insert(index, value);
+                } else {
+                    self.host.set_remote(form, index, value);
+                }
             }
         }
     }

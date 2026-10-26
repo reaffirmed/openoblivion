@@ -984,10 +984,16 @@ impl Host for GameHost<'_> {
                 let Some((_, info)) =
                     crate::dialogue::answer(self.data, self.state, self.facts, topic, speaker)
                 else {
-                    let why = crate::dialogue::explain_no_line(
-                        self.data, self.state, self.facts, topic, speaker,
-                    );
-                    info!("{speaker:08X} has nothing to {}: {why}", command.name);
+                    if self
+                        .state
+                        .unsupported
+                        .insert(format!("no line {speaker:08X} {topic:08X}"))
+                    {
+                        let why = crate::dialogue::explain_no_line(
+                            self.data, self.state, self.facts, topic, speaker,
+                        );
+                        info!("{speaker:08X} has nothing to {}: {why}", command.name);
+                    }
                     return Ok(0.0);
                 };
                 let effects =
@@ -1004,6 +1010,7 @@ impl Host for GameHost<'_> {
                     None => (Vec::new(), None),
                 };
                 let seconds = voiced.unwrap_or_else(|| crate::dialogue::speaking_time(&text));
+                info!("{speaker:08X} {} {info:08X}: {text}", command.name);
                 self.state.subtitles.push(Subtitle {
                     speaker,
                     text,
@@ -1163,6 +1170,11 @@ impl Host for GameHost<'_> {
 
     fn set_global(&mut self, form: u32, value: f32) {
         self.state.globals.insert(form, value);
+    }
+
+    fn own(&self) -> Option<u32> {
+        // Result scripts have no variables of their own.
+        self.this.filter(|_| self.event != Event::Result)
     }
 
     fn remote(&self, form: u32, index: u16) -> Option<f64> {
@@ -1342,18 +1354,28 @@ pub(crate) fn run_object_scripts(
         if state.disabled.contains(script) {
             continue;
         }
-        let mut locals = state.objects.remove(&placed.0).unwrap_or_default();
-        let mut host = GameHost::new(data, &mut state, &facts, Some(placed.0));
-        if let (Some(v), Some(f)) = (&voices, &files) {
-            host.voice = Some(VoiceLookup {
+        let voice = || match (&voices, &files) {
+            (Some(v), Some(f)) => Some(VoiceLookup {
                 voices: v,
                 world: &world,
                 files: f,
-            });
-        }
+            }),
+            _ => None,
+        };
+        let mut locals = state.objects.remove(&placed.0).unwrap_or_default();
+        let mut host = GameHost::new(data, &mut state, &facts, Some(placed.0));
+        host.voice = voice();
         // Object scripts run every step.
         host.seconds_passed = time.delta_secs();
         let outcome = host.run_script(*script, &mut locals, Event::GameMode);
+        let stages = std::mem::take(&mut host.stages);
+        effects.append(&mut host.effects);
+        // Put the variables back before stage results run, as those can set
+        // them (`set SomeRef.talk to 2`).
+        state.objects.insert(placed.0, locals);
+        let mut host = GameHost::new(data, &mut state, &facts, Some(placed.0));
+        host.voice = voice();
+        host.stages = stages;
         host.apply_stages();
         effects.append(&mut host.effects);
         match outcome {
@@ -1379,7 +1401,6 @@ pub(crate) fn run_object_scripts(
                 state.disabled.insert(*script);
             }
         }
-        state.objects.insert(placed.0, locals);
     }
     apply_effects(
         effects,
