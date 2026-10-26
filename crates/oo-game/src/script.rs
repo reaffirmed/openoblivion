@@ -31,6 +31,8 @@
 //! t52 where 00032A18                       # log an actor's position
 //! t53 face 700 120                         # turn the player towards x z
 //! t54 goto 700 120                         # walk there after earlier gotos (20 s each)
+//! t55 follow 00032A17 150                   # keep within 150 units of an actor
+//! t58 follow off
 //! t60 quit
 //! ```
 
@@ -54,6 +56,8 @@ enum Action {
     Face(Vec2),
     /// Walk the player to a point on the ground (x, z).
     Goto(Vec2),
+    /// Keep walking after an actor while it is farther than the distance.
+    Follow(Option<(u32, f32)>),
     Move(f64, f64),
     Click,
     Wheel(f32),
@@ -123,6 +127,10 @@ pub struct Script {
     /// Where `goto` steps are walking the player, in order, and the seconds
     /// left to reach the first.
     goto: VecDeque<(Vec2, f32)>,
+    /// The actor `follow` walks after, and how close is close enough.
+    follow: Option<(u32, f32)>,
+    /// Whether the followed actor was missing last frame, so it is logged once.
+    follow_lost: bool,
 }
 
 /// How long `goto` keeps walking, and how close counts as there.
@@ -152,6 +160,8 @@ impl Plugin for ScriptPlugin {
                     held_click: false,
                     blocking: 0.0,
                     goto: VecDeque::new(),
+                    follow: None,
+                    follow_lost: false,
                 })
                 .add_systems(PreUpdate, run_script.after(InputSystems));
             }
@@ -197,6 +207,13 @@ fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
                     Action::Goto(at)
                 }
             }
+            "follow" => Action::Follow(match words.next().ok_or_else(bad)? {
+                "off" => None,
+                r => Some((
+                    u32::from_str_radix(r, 16).map_err(|_| bad())?,
+                    words.next().map_or(Ok(150.0), str::parse)?,
+                )),
+            }),
             "move" => Action::Move(
                 words.next().ok_or_else(bad)?.parse()?,
                 words.next().ok_or_else(bad)?.parse()?,
@@ -369,6 +386,29 @@ fn run_script(
             keys.press(KeyCode::KeyW);
             script.goto[0].1 = left - dt;
         }
+    } else if let Some((r, near)) = script.follow
+        && let Ok(at) = player.single()
+    {
+        match actors.iter().find(|(p, _)| p.0 == r) {
+            Some((_, t)) => {
+                script.follow_lost = false;
+                let to = t.translation.xz();
+                if at.translation.xz().distance(to) > near {
+                    if let Ok(mut intent) = intents.single_mut() {
+                        intent.yaw = yaw_towards(at.translation, to);
+                    }
+                    keys.press(KeyCode::KeyW);
+                } else {
+                    keys.release(KeyCode::KeyW);
+                }
+            }
+            None => {
+                if !std::mem::replace(&mut script.follow_lost, true) {
+                    keys.release(KeyCode::KeyW);
+                    warn!("script: lost {r:08X}, it isn't loaded");
+                }
+            }
+        }
     }
     let frame = script.frame;
     let now = fixed.elapsed_secs();
@@ -409,6 +449,13 @@ fn run_script(
                 }
             }
             Action::Goto(to) => script.goto.push_back((to, GOTO_SECONDS)),
+            Action::Follow(f) => {
+                script.follow = f;
+                script.follow_lost = false;
+                if f.is_none() {
+                    keys.release(KeyCode::KeyW);
+                }
+            }
             Action::Move(x, y) => {
                 if let Ok((_, mut w)) = window.single_mut() {
                     w.set_physical_cursor_position(Some(DVec2::new(x, y)));
