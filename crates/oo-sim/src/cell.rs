@@ -574,6 +574,9 @@ fn spawn_reference_at(
     if actor {
         entity.insert(crate::ai::StepPose::at(&transform));
         spawn_actor(&mut entity, world, r);
+        if let Some(a) = at {
+            entity.insert(crate::ai::CatchUp { since: a.since });
+        }
     }
     if world.containers.contains_key(&r.base) {
         entity.insert(Container(r.base));
@@ -834,6 +837,7 @@ pub(crate) fn apply_moves(
                     cell,
                     position,
                     rotation,
+                    since: crate::ai::game_hours(&world.scripting, &state),
                 },
             );
         }

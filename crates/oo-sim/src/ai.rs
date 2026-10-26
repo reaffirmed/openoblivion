@@ -161,6 +161,28 @@ fn global_value(data: &ScriptData, state: &ScriptState, name: &str) -> Option<(u
     Some((id, v))
 }
 
+/// Game hours since the game began, from the day count and the hour.
+pub fn game_hours(data: &ScriptData, state: &ScriptState) -> f64 {
+    let get = |n| global_value(data, state, n).map_or(0.0, |(_, v)| f64::from(v));
+    get("gamedayspassed") * 24.0 + get("gamehour")
+}
+
+/// Real seconds for a span of game hours, at the game's time scale.
+fn real_seconds(data: &ScriptData, state: &ScriptState, hours: f64) -> f32 {
+    let scale = global_value(data, state, "timescale").map_or(30.0, |(_, v)| v);
+    (hours * 3600.0 / f64::from(scale.max(1e-3))) as f32
+}
+
+/// An actor that has just been loaded where it was left, on its way
+/// somewhere while the player wasn't near: its first walk goes as far as it
+/// would have gone since (`docs/reverse-engineering/ai-packages.md`, travel
+/// while the player isn't nearby).
+#[derive(Component, Debug, Clone, Copy)]
+pub struct CatchUp {
+    /// Game hours when it was left there.
+    pub since: f64,
+}
+
 /// Reads the clock from the globals.
 pub fn clock(data: &ScriptData, state: &ScriptState) -> Clock {
     let get = |n| global_value(data, state, n).map_or(0.0, |(_, v)| v);
@@ -360,21 +382,29 @@ const DOOR_DISTANCE: f32 = 96.0;
 /// How far above or below a goal still counts as at it.
 const REACH_HEIGHT: f32 = 128.0;
 
+/// An actor as packages move it.
+type Walker<'a> = (
+    &'a PlacedRef,
+    &'a Actor,
+    &'a mut Transform,
+    &'a mut Ai,
+    &'a mut Locomotion,
+    Option<(Entity, &'a CatchUp)>,
+);
+
 type PlayerView = (&'static Transform, &'static Inventory);
 
 /// Picks packages and moves actors along.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_ai(
+    mut commands: Commands,
     time: Res<Time>,
     world: Option<Res<WorldData>>,
     cell: Option<Res<CurrentCell>>,
     mut state: ResMut<ScriptState>,
     mut pending: ResMut<Pending>,
     refs: Query<(&PlacedRef, &Transform), Without<Ai>>,
-    mut actors: Query<
-        (&PlacedRef, &Actor, &mut Transform, &mut Ai, &mut Locomotion),
-        Without<crate::combat::Dead>,
-    >,
+    mut actors: Query<Walker, Without<crate::combat::Dead>>,
     players: Query<PlayerView, (With<Player>, Without<Ai>)>,
     doors: Query<(&Transform, &crate::cell::LoadDoor), Without<Ai>>,
     changes: Res<crate::inventory::WorldChanges>,
@@ -392,13 +422,14 @@ pub(crate) fn run_ai(
     };
     let data = &world.scripting;
     advance_clock(data, &mut state, dt);
+    let now_hours = game_hours(data, &state);
 
     // Everyone's position, for package locations and targets. The player's
     // is their feet.
     let player = players.single().ok();
     let mut positions: HashMap<u32, Vec3> =
         refs.iter().map(|(r, t)| (r.0, t.translation)).collect();
-    positions.extend(actors.iter().map(|(r, _, t, _, _)| (r.0, t.translation)));
+    positions.extend(actors.iter().map(|(r, _, t, ..)| (r.0, t.translation)));
     if let Some((t, _)) = player {
         positions.insert(
             PLAYER_REF,
@@ -411,20 +442,20 @@ pub(crate) fn run_ai(
         .map(|(r, ..)| r.0)
         .chain([PLAYER_REF])
         .collect();
-    for (placed, _, _, mut ai, _) in &mut actors {
+    for (placed, _, _, mut ai, ..) in &mut actors {
         if state.evaluate.remove(&placed.0) {
             ai.reevaluate_in = 0.0;
         }
     }
     let due = actors
         .iter()
-        .any(|(_, _, _, ai, _)| ai.reevaluate_in - dt <= 0.0);
+        .any(|(_, _, _, ai, ..)| ai.reevaluate_in - dt <= 0.0);
     let facts = if due {
         gather_facts(
             &world,
             &state,
             cell.as_deref(),
-            actors.iter().map(|(r, a, t, _, _)| (r, a, t)),
+            actors.iter().map(|(r, a, t, ..)| (r, a, t)),
             player,
         )
     } else {
@@ -434,9 +465,10 @@ pub(crate) fn run_ai(
         .as_ref()
         .map(|c| (&c.path_points[..], &c.path_edges[..]));
 
-    for (placed, _, mut transform, mut ai, mut motion) in &mut actors {
+    for (placed, _, mut transform, mut ai, mut motion, catch_up) in &mut actors {
         ai.reevaluate_in -= dt;
-        if ai.reevaluate_in <= 0.0 {
+        let evaluated = ai.reevaluate_in <= 0.0;
+        if evaluated {
             ai.reevaluate_in += REEVALUATE;
             let list = ai.packages.clone();
             let picked = pick_package(data, &world.packages, &mut state, &facts, &list, placed.0);
@@ -515,6 +547,7 @@ pub(crate) fn run_ai(
                                     cell: away,
                                     position: d.arrival.position,
                                     rotation: Quat::from_rotation_y(d.arrival.yaw),
+                                    since: now_hours,
                                 },
                             ));
                         }
@@ -777,9 +810,18 @@ pub(crate) fn run_ai(
             ai.goal = None;
         }
 
-        // Walk.
+        // Walk. Once its package is picked, an actor just loaded where it
+        // was left also walks as far as it would have since.
         let mut moved = 0.0;
         let mut budget = speed * dt;
+        if evaluated && let Some((entity, c)) = catch_up {
+            commands.entity(entity).remove::<CatchUp>();
+            if speed > 0.0 && !ai.path.is_empty() {
+                let seconds = real_seconds(data, &state, (now_hours - c.since).max(0.0));
+                info!("{:08X} catches up {seconds:.0} s along its way", placed.0);
+                budget += speed * seconds;
+            }
+        }
         while budget > 0.0
             && let Some(&next) = ai.path.first()
         {

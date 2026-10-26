@@ -104,6 +104,12 @@ const DOOR: u32 = 0x11;
 const LOCKPICK: u32 = 0x20;
 const CHEST: u32 = 0x21;
 const COINS: u32 = 0x22;
+const TRAVELLER: u32 = 0x40;
+const TRAVEL: u32 = 0x41;
+/// A cell no door leads to, with an NPC on its way across it.
+const HALL: u32 = 0x300;
+const HALL_NPC: u32 = 0x301;
+const HALL_FAR_END: u32 = 0x302;
 
 fn write_data_dir() -> PathBuf {
     let mut hedr = floats(&[1.0]);
@@ -172,6 +178,40 @@ fn write_data_dir() -> PathBuf {
         )],
     );
 
+    let u32s = |v: &[u32]| -> Vec<u8> { v.iter().flat_map(|x| x.to_le_bytes()).collect() };
+    let mut pkdt = 0u32.to_le_bytes().to_vec();
+    pkdt.extend([6, 0, 0, 0]);
+    let mut psdt = vec![0xFF, 0xFF, 0, 0xFF];
+    psdt.extend(0i32.to_le_bytes());
+    let packs = group(
+        *b"PACK",
+        0,
+        &[record(
+            b"PACK",
+            0,
+            TRAVEL,
+            &[
+                field(b"EDID", &zstr("TravelToTheFarEnd")),
+                field(b"PKDT", &pkdt),
+                field(b"PLDT", &u32s(&[0, HALL_FAR_END, 64])),
+                field(b"PSDT", &psdt),
+            ],
+        )],
+    );
+    let npcs = group(
+        *b"NPC_",
+        0,
+        &[record(
+            b"NPC_",
+            0,
+            TRAVELLER,
+            &[
+                field(b"EDID", &zstr("Traveller")),
+                field(b"PKID", &u32s(&[TRAVEL])),
+            ],
+        )],
+    );
+
     let mut cells = cell(
         0x100,
         "TestPrisonCell",
@@ -223,6 +263,17 @@ fn write_data_dir() -> PathBuf {
             refr(0x202, WALL, [500.0, 900.0, 70.0], 0.0, None),
         ],
     ));
+    let mut traveller = refr(HALL_NPC, TRAVELLER, [0.0, 0.0, 0.0], 0.0, None);
+    traveller[0..4].copy_from_slice(b"ACHR");
+    cells.extend(cell(
+        HALL,
+        "TestHall",
+        "Hall",
+        vec![
+            traveller,
+            refr(HALL_FAR_END, WALL, [3000.0, 0.0, 0.0], 0.0, None),
+        ],
+    ));
     let cells = group(
         *b"CELL",
         0,
@@ -236,7 +287,7 @@ fn write_data_dir() -> PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("Oblivion.esm"),
-        [header, stats, doors, items, chests, cells].concat(),
+        [header, stats, doors, items, chests, packs, npcs, cells].concat(),
     )
     .unwrap();
     dir
@@ -579,5 +630,58 @@ fn player_falls_onto_a_floor_walks_and_is_stopped_by_a_wall() {
         t.translation.z > -300.0 + 15.0,
         "should stop at the wall, z = {}",
         t.translation.z
+    );
+}
+
+/// Where the hall's NPC is after the player has been in the hall `seconds`.
+fn traveller_after(app: &mut App, seconds: f32) -> Vec3 {
+    app.world_mut()
+        .resource_mut::<oo_sim::cell::PendingTransition>()
+        .0 = Some((
+        HALL,
+        oo_sim::SpawnPoint {
+            position: Vec3::new(0.0, 0.0, 500.0),
+            yaw: 0.0,
+        },
+    ));
+    for _ in 0..(seconds / 0.02) as u32 {
+        app.update();
+    }
+    assert_eq!(app.world().resource::<CurrentCell>().form_id, HALL);
+    app.world_mut()
+        .query::<(&PlacedRef, &Transform)>()
+        .iter(app.world())
+        .find(|(r, _)| r.0 == HALL_NPC)
+        .unwrap()
+        .1
+        .translation
+}
+
+#[test]
+fn an_npc_left_on_its_way_has_gone_on_when_the_player_comes() {
+    // Seen only now: it walks from its place.
+    let mut sim = app(write_data_dir());
+    let fresh = traveller_after(&mut sim, 2.0);
+    assert!(fresh.x < 400.0, "a fresh NPC walked too far: {fresh}");
+
+    // Left there an hour ago (two minutes at the time scale): it has walked
+    // on since, and is at the far end.
+    let mut sim = app(write_data_dir());
+    sim.world_mut()
+        .resource_mut::<oo_sim::WorldChanges>()
+        .relocated
+        .insert(
+            HALL_NPC,
+            oo_sim::inventory::Relocation {
+                cell: HALL,
+                position: Vec3::ZERO,
+                rotation: Quat::IDENTITY,
+                since: -1.0,
+            },
+        );
+    let caught_up = traveller_after(&mut sim, 2.0);
+    assert!(
+        caught_up.distance(Vec3::new(3000.0, 0.0, 0.0)) < 100.0,
+        "it didn't catch up: {caught_up}"
     );
 }

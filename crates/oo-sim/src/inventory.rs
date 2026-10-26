@@ -42,6 +42,10 @@ pub struct Relocation {
     pub cell: u32,
     pub position: bevy::math::Vec3,
     pub rotation: bevy::math::Quat,
+    /// When it got there, in game hours since the game began (see
+    /// [`crate::ai::game_hours`]): an actor on its way somewhere carries on
+    /// from there by the time that has passed since.
+    pub since: f64,
 }
 
 /// What a player carries.
