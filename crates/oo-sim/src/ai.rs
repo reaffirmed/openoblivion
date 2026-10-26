@@ -16,7 +16,7 @@ use crate::actor::Actor;
 use crate::cell::{CurrentCell, PlacedRef, WorldData};
 use crate::inventory::Inventory;
 use crate::player::{PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player};
-use crate::script::{GameHost, PLAYER_REF, ScriptData, ScriptState, gather_facts};
+use crate::script::{GameHost, PLAYER_REF, ScriptData, ScriptState, event, gather_facts};
 
 /// Bethesda units per second.
 pub const WALK_SPEED: f32 = 110.0;
@@ -337,6 +337,12 @@ pub(crate) fn run_ai(
             let picked = pick_package(data, &world.packages, &mut state, &facts, &list, placed.0);
             if picked != ai.current {
                 debug!("{:08X} picked package {:08X?}", placed.0, picked);
+                if let Some(old) = ai.current {
+                    state.raise(placed.0, old, event::PACKAGE_CHANGE);
+                }
+                if let Some(new) = picked {
+                    state.raise(placed.0, new, event::PACKAGE_START);
+                }
                 ai.current = picked;
                 ai.arrived = false;
                 ai.path.clear();
@@ -361,6 +367,9 @@ pub(crate) fn run_ai(
                         if here.distance(to) <= radius {
                             ai.arrived = true;
                             ai.path.clear();
+                            if let Some(current) = ai.current {
+                                state.raise(placed.0, current, event::PACKAGE_DONE);
+                            }
                         } else if !waiting {
                             goal = Some(to);
                             speed = pace;

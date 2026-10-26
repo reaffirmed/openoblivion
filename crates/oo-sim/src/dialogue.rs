@@ -11,8 +11,8 @@ use crate::cell::{CurrentCell, PlacedRef, WorldData};
 use crate::inventory::{Inventory, PlayerAction, PlayerActions, WorldChanges};
 use crate::player::Player;
 use crate::script::{
-    ActorFacts, GameHost, PLAYER_REF, ResyncCell, ScriptData, ScriptState, WorldEffect,
-    apply_effects, gather_facts,
+    ActorFacts, GameHost, PLAYER_REF, Pending, ScriptData, ScriptState, WorldEffect, apply_effects,
+    gather_facts,
 };
 
 /// The topic every conversation opens with.
@@ -191,7 +191,7 @@ pub(crate) fn update_conversations(
     cell: Option<Res<CurrentCell>>,
     mut state: ResMut<ScriptState>,
     mut changes: ResMut<WorldChanges>,
-    mut resync: ResMut<ResyncCell>,
+    mut pending: ResMut<Pending>,
     actors: Query<(&PlacedRef, &Actor, &Transform)>,
     mut players: Query<
         (
@@ -258,7 +258,7 @@ pub(crate) fn update_conversations(
             }
         }
         talk.topics = available_topics(data, &mut state, &facts, speaker);
-        apply_effects(effects, &mut changes, &mut resync, Some(&mut inventory));
+        apply_effects(effects, &mut changes, &mut pending, Some(&mut inventory));
         if goodbye {
             *talk = Conversation::default();
         }

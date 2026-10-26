@@ -10,6 +10,7 @@ use crate::inventory::{
     Container, Inventory, Item, OpenContainer, WorldChanges, container_contents, pick_up,
 };
 use crate::player::{EYE_HEIGHT, PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent};
+use crate::script::{PLAYER_REF, Pending, ScriptState, Scripted};
 
 /// How far away the player can activate things (Oblivion's iActivatePickLength).
 pub const ACTIVATE_DISTANCE: f32 = 150.0;
@@ -56,61 +57,85 @@ type Target = (
     Option<&'static Item>,
     Option<&'static Container>,
     Option<&'static Actor>,
+    Option<&'static LoadDoor>,
+    Option<&'static Scripted>,
 );
 
+type PlayerView = (
+    &'static mut PlayerIntent,
+    &'static LookingAt,
+    &'static mut Inventory,
+    &'static mut OpenContainer,
+    &'static mut Conversation,
+);
+
+/// Activation: the player's, and the ones scripts ask for. A script with an
+/// `OnActivate` block takes the activation over; otherwise doors lead on,
+/// items are picked up, containers open and NPCs talk.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn activate(
     mut commands: Commands,
-    mut pending: ResMut<PendingTransition>,
+    mut transition: ResMut<PendingTransition>,
     world: Option<Res<WorldData>>,
     mut changes: ResMut<WorldChanges>,
-    doors: Query<&LoadDoor>,
-    targets: Query<Target>,
-    mut players: Query<
-        (
-            &mut PlayerIntent,
-            &LookingAt,
-            &mut Inventory,
-            &mut OpenContainer,
-            &mut Conversation,
-        ),
-        With<Player>,
-    >,
+    mut state: ResMut<ScriptState>,
+    mut requests: ResMut<Pending>,
+    targets: Query<(Entity, Target)>,
+    mut players: Query<PlayerView, With<Player>>,
 ) {
-    for (mut intent, looking, mut inventory, mut open, mut talk) in &mut players {
-        if !std::mem::take(&mut intent.activate) {
+    let Some(world) = world else { return };
+    let Ok((mut intent, looking, mut inventory, mut open, mut talk)) = players.single_mut() else {
+        return;
+    };
+    // (target entity, activator, whether its script may take over)
+    let mut wanted: Vec<(Entity, u32, bool)> = Vec::new();
+    if std::mem::take(&mut intent.activate)
+        && let Some(target) = looking.0
+    {
+        wanted.push((target, PLAYER_REF, true));
+    }
+    for (reference, by, run_script) in std::mem::take(&mut requests.activations) {
+        if let Some((e, _)) = targets.iter().find(|(_, t)| t.0.0 == reference) {
+            wanted.push((e, by, run_script));
+        }
+    }
+    for (target, by, run_script) in wanted {
+        let Ok((_, (placed, item, container, actor, door, scripted))) = targets.get(target) else {
+            continue;
+        };
+        if run_script
+            && let Some(Scripted(script)) = scripted
+            && world.scripting.handles_activation(*script)
+        {
+            state.activated.insert(placed.0, by);
             continue;
         }
-        let Some(target) = looking.0 else { continue };
-        if let Ok((placed, item, container, actor)) = targets.get(target) {
-            if let Some(Actor::Npc(_)) = actor {
-                talk.request = Some(placed.0);
-                continue;
-            }
-            if let Some(Item(base)) = item {
-                pick_up(
-                    &mut commands,
-                    &mut changes,
-                    &mut inventory,
-                    target,
-                    placed.0,
-                    *base,
-                );
-                if let Some(info) = world.as_ref().and_then(|w| w.items.get(base)) {
-                    info!("picked up {}", info.name);
-                }
-                continue;
-            }
-            if let (Some(Container(base)), Some(world)) = (container, world.as_ref()) {
-                container_contents(&mut changes, world, placed.0, *base);
-                open.0 = Some(placed.0);
-                continue;
-            }
+        // Only the player's activations do anything else yet.
+        if by != PLAYER_REF {
+            continue;
         }
-        if let Ok(door) = doors.get(target) {
+        if let Some(Actor::Npc(_)) = actor {
+            talk.request = Some(placed.0);
+        } else if let Some(Item(base)) = item {
+            pick_up(
+                &mut commands,
+                &mut changes,
+                &mut inventory,
+                target,
+                placed.0,
+                *base,
+            );
+            if let Some(info) = world.items.get(base) {
+                info!("picked up {}", info.name);
+            }
+        } else if let Some(Container(base)) = container {
+            container_contents(&mut changes, &world, placed.0, *base);
+            open.0 = Some(placed.0);
+        } else if let Some(door) = door {
             match door.cell {
                 Some(cell) => {
                     info!("going to {}", door.label);
-                    pending.0 = Some((cell, door.arrival));
+                    transition.0 = Some((cell, door.arrival));
                 }
                 None => info!("that door leads outside; exteriors aren't implemented yet"),
             }

@@ -78,6 +78,36 @@ impl Script {
     }
 }
 
+/// Base forms that can carry an object script (`SCRI`).
+const SCRIPTED_TYPES: [&[u8; 4]; 19] = [
+    b"ACTI", b"ALCH", b"APPA", b"ARMO", b"BOOK", b"CLOT", b"CONT", b"CREA", b"DOOR", b"FLOR",
+    b"FURN", b"INGR", b"KEYM", b"LIGH", b"MISC", b"NPC_", b"SGST", b"SLGM", b"WEAP",
+];
+
+/// Each scripted base form's script, by global form ID.
+pub fn object_scripts(order: &LoadOrder) -> Result<HashMap<u32, u32>> {
+    let mut out = HashMap::new();
+    for_each_top_record(order, &SCRIPTED_TYPES, |index, r| {
+        let id = order.global(index, r.form_id);
+        out.remove(&id);
+        if r.is_deleted() {
+            return Ok(());
+        }
+        let fields = r.fields()?;
+        for f in fields.iter() {
+            let f = f?;
+            if f.tag.0 == *b"SCRI" && f.data.len() >= 4 {
+                let script = order.global(index, u32_at(f.data, 0));
+                if script != 0 {
+                    out.insert(id, script);
+                }
+            }
+        }
+        Ok(())
+    })?;
+    Ok(out)
+}
+
 pub fn scripts(order: &LoadOrder) -> Result<HashMap<u32, Script>> {
     let mut out = HashMap::new();
     for_each_top_record(order, &[b"SCPT"], |index, r| {

@@ -30,7 +30,7 @@ use crate::inventory::{Container, Item, PLAYER_LEVEL, WorldChanges};
 use crate::player::{
     PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent, PlayerMotion, StepPositions,
 };
-use crate::script::ScriptData;
+use crate::script::{ScriptData, Scripted};
 use crate::{GameData, WorldConfig};
 use oo_formats::packages::{Package, packages};
 
@@ -440,6 +440,9 @@ fn spawn_reference(commands: &mut Commands, world: &WorldData, r: &Reference) ->
     if world.containers.contains_key(&r.base) {
         entity.insert(Container(r.base));
     }
+    if let Some(&script) = world.scripting.object_scripts.get(&r.base) {
+        entity.insert(Scripted(script));
+    }
     if let Some(light) = world.lights.get(&r.base) {
         debug!(
             "light {:08X} at {:?}: radius {}, colour {:?}, flags {:#x}, falloff {}, fov {}",
@@ -540,13 +543,13 @@ pub(crate) fn apply_transition(
 /// and spawns what's now enabled.
 pub(crate) fn resync_cell(
     mut commands: Commands,
-    mut resync: ResMut<crate::script::ResyncCell>,
+    mut resync: ResMut<crate::script::Pending>,
     world: Option<Res<WorldData>>,
     current: Option<Res<CurrentCell>>,
     changes: Res<WorldChanges>,
     spawned: Query<(Entity, &PlacedRef), With<CellMember>>,
 ) {
-    if !std::mem::take(&mut resync.0) {
+    if !std::mem::take(&mut resync.resync) {
         return;
     }
     let (Some(world), Some(current)) = (world, current) else {

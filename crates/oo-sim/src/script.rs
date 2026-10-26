@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use oo_formats::commands::Command;
 use oo_formats::dialogue::{DialogueData, Quest};
 use oo_formats::load_order::LoadOrder;
-use oo_formats::scripts::{Script, ScriptCode, ScriptKind, scripts};
+use oo_formats::scripts::{Script, ScriptCode, ScriptKind, object_scripts, scripts};
 use oo_script::{Host, Locals, Outcome, Statement, Value, conditions_pass, decode, run};
 
 use crate::actor::Actor;
@@ -34,6 +34,26 @@ pub struct ScriptData {
     /// Decoded `SCPT` bytecode. Scripts that failed to decode are left out and
     /// never run, as the game disables them.
     pub decoded: HashMap<u32, Vec<Statement>>,
+    /// Scripted base forms' scripts.
+    pub object_scripts: HashMap<u32, u32>,
+}
+
+impl ScriptData {
+    /// Whether a script has an `OnActivate` block, which replaces what
+    /// activating the object normally does.
+    pub fn handles_activation(&self, script: u32) -> bool {
+        self.decoded.get(&script).is_some_and(|code| {
+            code.iter().any(|s| {
+                matches!(
+                    s,
+                    Statement::Begin {
+                        block: ON_ACTIVATE,
+                        ..
+                    }
+                )
+            })
+        })
+    }
 }
 
 impl ScriptData {
@@ -62,6 +82,7 @@ impl ScriptData {
             dialogue: oo_formats::dialogue::dialogue_data(order)?,
             scripts,
             decoded,
+            object_scripts: object_scripts(order)?,
         })
     }
 }
@@ -100,6 +121,12 @@ pub struct ScriptState {
     pub unsupported: HashSet<String>,
     /// State for `GetRandomPercent`.
     pub random: u32,
+    /// Each scripted reference's event list: (source form or 0, flags).
+    pub events: HashMap<u32, Vec<(u32, u32)>>,
+    /// References activated since their script last ran, and by whom.
+    pub activated: HashMap<u32, u32>,
+    /// Scripts that failed to evaluate and won't run again this session.
+    pub disabled: HashSet<u32>,
     started: bool,
 }
 
@@ -114,6 +141,19 @@ impl ScriptState {
             if q.flags & Quest::START_GAME_ENABLED != 0 {
                 self.quests.entry(id).or_default().running = true;
             }
+        }
+    }
+
+    /// Raises an event on a scripted reference, for its blocks that listen.
+    /// The source-less entry is created if missing, so an event like `OnLoad`
+    /// reaches a script that hasn't run yet.
+    pub fn raise(&mut self, reference: u32, source: u32, flag: u32) {
+        let list = self.events.entry(reference).or_default();
+        if !list.iter().any(|e| e.0 == 0) {
+            list.push((0, 0));
+        }
+        for e in list.iter_mut().filter(|e| e.0 == 0 || e.0 == source) {
+            e.1 |= flag;
         }
     }
 
@@ -162,7 +202,69 @@ pub struct ActorFacts {
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorldEffect {
     Enable(u32, bool),
-    AddItem { to: u32, item: u32, count: i32 },
+    AddItem {
+        to: u32,
+        item: u32,
+        count: i32,
+    },
+    /// Activate `target` as `by`. Without `run_script`, do what activation
+    /// normally does, as a script's own `Activate` does from its OnActivate.
+    Activate {
+        target: u32,
+        by: u32,
+        run_script: bool,
+    },
+}
+
+/// Event flags, by the block that listens for them.
+pub mod event {
+    pub const ADD: u32 = 0x1;
+    pub const EQUIP: u32 = 0x2;
+    pub const DROP: u32 = 0x4;
+    pub const UNEQUIP: u32 = 0x8;
+    pub const DEATH: u32 = 0x10;
+    pub const MURDER: u32 = 0x20;
+    pub const KNOCKOUT: u32 = 0x40;
+    pub const HIT: u32 = 0x80;
+    pub const HIT_WITH: u32 = 0x100;
+    pub const PACKAGE_START: u32 = 0x200;
+    pub const PACKAGE_DONE: u32 = 0x400;
+    pub const PACKAGE_CHANGE: u32 = 0x800;
+    pub const LOAD: u32 = 0x1000;
+    pub const MAGIC_EFFECT_HIT: u32 = 0x2000;
+    pub const SELL: u32 = 0x4000;
+    pub const START_COMBAT: u32 = 0x8000;
+    pub const TRIGGER: u32 = 0x1000_0000;
+    pub const TRIGGER_ACTOR: u32 = 0x2000_0000;
+    pub const TRIGGER_MOB: u32 = 0x4000_0000;
+    pub const RESET: u32 = 0x8000_0000;
+}
+
+/// The flag a block type listens for, by block type.
+fn block_flag(block: u16) -> Option<u32> {
+    Some(match block {
+        3 => event::ADD,
+        4 | 28 => event::EQUIP,
+        5 | 29 => event::UNEQUIP,
+        6 => event::DROP,
+        8 => event::HIT,
+        9 => event::HIT_WITH,
+        10 => event::DEATH,
+        11 => event::MURDER,
+        12 => event::KNOCKOUT,
+        15 => event::PACKAGE_START,
+        16 => event::PACKAGE_DONE,
+        20 => event::PACKAGE_CHANGE,
+        21 => event::LOAD,
+        22 => event::MAGIC_EFFECT_HIT,
+        23 => event::SELL,
+        24 => event::TRIGGER,
+        25 => event::START_COMBAT,
+        26 => event::TRIGGER_ACTOR,
+        27 => event::TRIGGER_MOB,
+        30 => event::RESET,
+        _ => return None,
+    })
 }
 
 /// The block types the runner can match against.
@@ -176,6 +278,7 @@ pub enum Event {
 
 const GAME_MODE: u16 = 0;
 const MENU_MODE: u16 = 1;
+const ON_ACTIVATE: u16 = 2;
 
 /// Answers commands for one run.
 pub struct GameHost<'a> {
@@ -420,6 +523,14 @@ impl Host for GameHost<'_> {
             | "GetPCFactionSteal"
             | "GetPCFactionSubmitAuthority" => 0.0,
             "GetSecondsPassed" => f64::from(QUEST_DELAY),
+            "GetSelf" => f64::from(self.this.unwrap_or(0)),
+            "GetActionRef" => f64::from(
+                self.this
+                    .and_then(|t| self.state.activated.get(&t))
+                    .copied()
+                    .unwrap_or(0),
+            ),
+            "GetButtonPressed" => -1.0,
             "GetDisabled" => 0.0,
 
             // What scripts do.
@@ -441,6 +552,28 @@ impl Host for GameHost<'_> {
             }
             "AddTopic" => {
                 self.state.known_topics.insert(form(0));
+                1.0
+            }
+            "Activate" => {
+                // On itself from its OnActivate block: what activation
+                // normally does. On something else: activate that.
+                let Some(target) = subject else {
+                    return Err("Activate requires a reference".into());
+                };
+                let by = args
+                    .first()
+                    .and_then(Value::form)
+                    .or_else(|| {
+                        self.this
+                            .and_then(|t| self.state.activated.get(&t))
+                            .copied()
+                    })
+                    .unwrap_or(PLAYER_REF);
+                self.effects.push(WorldEffect::Activate {
+                    target,
+                    by,
+                    run_script: Some(target) != self.this,
+                });
                 1.0
             }
             "Enable" | "Disable" => {
@@ -490,9 +623,31 @@ impl Host for GameHost<'_> {
 
     fn begin(&mut self, block: u16, args: &[Value]) -> bool {
         match (self.event, block) {
-            (Event::GameMode, GAME_MODE) => true,
-            (Event::MenuMode, MENU_MODE) => args.is_empty(),
-            _ => false,
+            (Event::GameMode, GAME_MODE) => return true,
+            (Event::MenuMode, MENU_MODE) => return args.is_empty(),
+            (Event::Result, _) | (_, GAME_MODE | MENU_MODE) => return false,
+            _ => {}
+        }
+        let Some(this) = self.this else {
+            return false;
+        };
+        if block == ON_ACTIVATE {
+            // Its actor filter isn't checked by the game either.
+            return self.state.activated.contains_key(&this);
+        }
+        let Some(flag) = block_flag(block) else {
+            return false;
+        };
+        // A filtered block listens for its source from the first time it's
+        // evaluated, and can only catch events after that.
+        let source = args.first().and_then(Value::form).unwrap_or(0);
+        let list = self.state.events.entry(this).or_default();
+        match list.iter().find(|e| e.0 == source) {
+            Some(e) => e.1 & flag != 0,
+            None => {
+                list.push((source, 0));
+                false
+            }
         }
     }
 
@@ -583,10 +738,86 @@ mod tests {
     }
 }
 
-/// Set when scripts enabled or disabled something, so the loaded cell is
-/// brought in line (see `cell::resync_cell`).
+/// A reference whose base form has an object script.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Scripted(pub u32);
+
+/// Runs each scripted reference's script once per step: `GameMode` blocks,
+/// and event blocks whose events happened since the last run.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_object_scripts(
+    world: Option<Res<WorldData>>,
+    cell: Option<Res<CurrentCell>>,
+    mut state: ResMut<ScriptState>,
+    mut changes: ResMut<WorldChanges>,
+    mut pending: ResMut<Pending>,
+    scripted: Query<(&PlacedRef, &Scripted)>,
+    loaded: Query<&PlacedRef, Added<Scripted>>,
+    actors: Query<(&PlacedRef, &Actor, &Transform)>,
+    mut players: Query<(&Transform, &mut Inventory), With<Player>>,
+) {
+    let Some(world) = world else { return };
+    let data = &world.scripting;
+    for r in &loaded {
+        state.raise(r.0, 0, event::LOAD);
+    }
+    if scripted.is_empty() {
+        return;
+    }
+    state.start(data);
+    let mut player = players.single_mut().ok();
+    let facts = gather_facts(
+        &world,
+        cell.as_deref(),
+        actors.iter(),
+        player.as_ref().map(|(t, i)| (*t, &**i)),
+    );
+    let mut effects = Vec::new();
+    for (placed, Scripted(script)) in &scripted {
+        if state.disabled.contains(script) {
+            continue;
+        }
+        let mut locals = state.objects.remove(&placed.0).unwrap_or_default();
+        let mut host = GameHost::new(data, &mut state, &facts, Some(placed.0));
+        let outcome = host.run_script(*script, &mut locals, Event::GameMode);
+        host.apply_stages();
+        effects.append(&mut host.effects);
+        match outcome {
+            Outcome::Finished | Outcome::Returned => {
+                // Events are caught by the run after them or not at all.
+                if let Some(list) = state.events.get_mut(&placed.0) {
+                    for e in list {
+                        e.1 = 0;
+                    }
+                }
+                state.activated.remove(&placed.0);
+            }
+            Outcome::Aborted(e) => debug!("{:08X}: {e}", placed.0),
+            Outcome::Disabled(e) => {
+                warn!("script {script:08X} on {:08X} stops: {e}", placed.0);
+                state.disabled.insert(*script);
+            }
+        }
+        state.objects.insert(placed.0, locals);
+    }
+    apply_effects(
+        effects,
+        &mut changes,
+        &mut pending,
+        player.as_mut().map(|(_, i)| &mut **i),
+    );
+}
+
+/// What scripts asked of the world that other systems carry out.
 #[derive(Resource, Debug, Default)]
-pub struct ResyncCell(pub bool);
+pub struct Pending {
+    /// Something was enabled or disabled; bring the loaded cell in line (see
+    /// `cell::resync_cell`).
+    pub resync: bool,
+    /// Activations scripts asked for: target, activator, and whether the
+    /// target's own script gets to handle it.
+    pub activations: Vec<(u32, u32, bool)>,
+}
 
 /// A snapshot of the actors in the loaded cell and the player, for scripts and
 /// conditions to ask about.
@@ -637,7 +868,7 @@ pub(crate) fn gather_facts<'a>(
 pub(crate) fn apply_effects(
     effects: Vec<WorldEffect>,
     changes: &mut WorldChanges,
-    resync: &mut ResyncCell,
+    pending: &mut Pending,
     inventory: Option<&mut Inventory>,
 ) {
     let mut inventory = inventory;
@@ -645,7 +876,7 @@ pub(crate) fn apply_effects(
         match e {
             WorldEffect::Enable(r, on) => {
                 changes.enabled.insert(r, on);
-                resync.0 = true;
+                pending.resync = true;
             }
             WorldEffect::AddItem {
                 to: PLAYER_REF,
@@ -656,6 +887,11 @@ pub(crate) fn apply_effects(
                     inv.add(item, count);
                 }
             }
+            WorldEffect::Activate {
+                target,
+                by,
+                run_script,
+            } => pending.activations.push((target, by, run_script)),
             WorldEffect::AddItem { to, .. } => {
                 debug!("AddItem on {to:08X}: only the player's inventory is kept so far");
             }
@@ -671,7 +907,7 @@ pub(crate) fn run_quests(
     cell: Option<Res<CurrentCell>>,
     mut state: ResMut<ScriptState>,
     mut changes: ResMut<WorldChanges>,
-    mut resync: ResMut<ResyncCell>,
+    mut pending: ResMut<Pending>,
     actors: Query<(&PlacedRef, &Actor, &Transform)>,
     mut players: Query<(&Transform, &mut Inventory), With<Player>>,
 ) {
@@ -687,7 +923,7 @@ pub(crate) fn run_quests(
     apply_effects(
         effects,
         &mut changes,
-        &mut resync,
+        &mut pending,
         player.as_mut().map(|(_, i)| &mut **i),
     );
     // The client shows and drains these; without one, don't let them pile up.

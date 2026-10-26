@@ -59,7 +59,7 @@ impl Plugin for SimPlugin {
             .init_resource::<cell::PendingTransition>()
             .init_resource::<WorldChanges>()
             .init_resource::<script::ScriptState>()
-            .init_resource::<script::ResyncCell>()
+            .init_resource::<script::Pending>()
             // The simulation steps at a fixed rate, independent of framerate.
             .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
             .add_systems(Startup, cell::load_world)
@@ -71,6 +71,7 @@ impl Plugin for SimPlugin {
                     dialogue::update_conversations,
                     inventory::handle_actions,
                     script::run_quests,
+                    script::run_object_scripts,
                     ai::run_ai,
                     cell::resync_cell,
                     cell::apply_transition,
