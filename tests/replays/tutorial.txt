@@ -33,4 +33,15 @@ t200 expect stage Charactergen >= 15
 t220 expect stage Charactergen >= 16
 t230 expect stage Charactergen >= 17
 
-t240 quit
+# He greets the player (about t90) and the topic tree opens once his line
+# ends. Take the top topic each time: "What's going on?", "Who are you?",
+# "Why am I in jail?", then the last one, which says Goodbye and sets
+# convCount to 15, so the Blades move on (18).
+t116 key Enter
+t131 key Enter
+t146 key Enter
+t161 key Enter
+t176 key Enter
+t300 expect stage Charactergen >= 18
+
+t310 quit
