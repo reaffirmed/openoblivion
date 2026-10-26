@@ -3,35 +3,76 @@
 How the game sizes its menu coordinate space, where the safe zone comes from, and
 which menu texture set it loads. Used by `crates/oo-game/src/xml_ui.rs`.
 
-## Established
+## The rules
+
+Let `W`×`H` be the render resolution in pixels (`[Display] iSize W` / `iSize H`).
+
+**Virtual screen** (`screen().width` / `screen().height`, in menu units):
+
+```
+if W > H:   height = 960,               width = 960 × W / H
+if W < H:   height = 1280 × H / W,      width = 1280
+if W == H:  height = 960,               width = 1280     (both "else" branches)
+```
+
+So any landscape screen is 960 units tall and as wide as its aspect ratio allows (4:3 →
+1280, 16:9 → 1706.7, 16:10 → 1536). The width is not rounded.
+
+**Safe zone** (`screen().cropx` / `screen().cropy`, in menu units, copied straight from
+the INI with no scaling):
+
+```
+if H / W < 0.74:   cropx = iSafeZoneXWide, cropy = iSafeZoneYWide
+else:              cropx = iSafeZoneX,     cropy = iSafeZoneY
+```
+
+The threshold is an aspect ratio above about 1.351, so 4:3 and 5:4 use the plain pair and
+16:10 and 16:9 use the `Wide` pair. All four default to 20. The game writes `width`,
+`height`, `cropx` and `cropy` together whenever the screen setup changes; the safe zone
+can also be changed at run time, which updates only the plain pair (the `Wide` pair stays
+as loaded).
+
+**Texture set.** For a texture path under `Menus\`, the loader works out the pixel scale
+`s = H / screen().height` (pixels per menu unit) and picks:
+
+```
+if s <= 0.5:                              Textures\Menus50\…   (texture scale 0.5)
+else if s <= 0.8 and the caller allows:   Textures\Menus80\…   (texture scale 0.8)
+else:                                     Textures\Menus\…     (texture scale 1)
+```
+
+If the reduced file doesn't exist it falls back to the full-size `Menus` texture with scale
+1. The menu units never change; only which file is loaded and a scale factor handed back
+with it. Examples: 640×480 → Menus50; 1280×720 (0.75) and 1024×768 (0.8) → Menus80;
+1920×1080 (1.125) → Menus. The 80% set is only used when the caller passes a positive
+value for one argument (the 50% set has no such condition); which tiles pass it is still
+open.
+
+**Menu entity values.** The XML entities are numbers: `&false;` = 1, `&true;` = 2,
+`&left;` = 1, `&center;` = 2, `&right;` = 4, `&scale;` = −1, `&generic;` = −1,
+`&click_past;` = 101, `&no_click_past;` = 102, `&mixed_menu;` = 103, `&prev;`/`&next;`/
+`&first;`/`&last;` = 104–107, `&xlist;` = 108, `&xitem;` = 109, `&does_not_stack;` = 6000,
+and the Xbox entities (`&xbox;`, `&xenon;`, `&xboxhint;`, `&xbutton…;`) = 1. So a trait
+that reads 1 is *false*: that's why `hudmain_frame` (visible = `user3`, and `user3` = 1 in
+play) is not drawn.
+
+## Evidence
 
 | Fact | Source | Confidence |
 |------|--------|------------|
-| Menus read the screen through the `screen()` tile and its traits `width`, `height`, `cropx`, `cropy`. | Game's own menu XML | confirmed |
-| `cropx`/`cropy` are trait ids `0x0FDA`/`0x0FD9` (aliases `cropoffsetx`/`cropoffsety`); `screen` is `0x138E`. | xOBSE tile-trait list | confirmed |
-| `cropx`/`cropy` are in the same units as `width`/`height`: the debug overlay draws margins `cropx` wide and `cropy` tall, at `x = width − cropx`, `y = height − cropy`. | Game's safe-zone debug menu (`HUDSafeZone`, toggled by the console command `ToggleSafeZone`) | confirmed |
-| The menu screen is 960 units tall whatever the resolution: at 1280×720 one unit is 0.75 px. | Real-game HUD screenshot at 1280×720, measured (health/magicka/fatigue bars x ≈ 66–205 px, bar top ≈ 648 px, compass x ≈ 365–522 px) | confirmed at 720p |
-| `cropx`/`cropy` equal the safe zone (20 units with default settings), not the larger of the pillarbox margin and the safe zone. The HUD is anchored to the true screen edges at 16:9, not to a centred 4:3 area. | Same screenshot | confirmed at 16:9 |
-| The safe zone comes from four INI settings in `[Interface]`: `iSafeZoneX`, `iSafeZoneY`, `iSafeZoneXWide`, `iSafeZoneYWide`, all 20 in `Oblivion_default.ini`. | Strings in the executable; default INI | confirmed (names and defaults) |
-| Menu textures come from one of three folders, `Textures\Menus\`, `Textures\Menus80\`, `Textures\Menus50\`. | Path format strings in the executable | confirmed (folders) |
-| The game resolution comes from `[Display]` `iSize W` / `iSize H` (640×480 in the default INI). | Executable strings; default INI | confirmed |
+| Screen width/height rules and constants (960, 1280) | Executable: the two helpers every menu uses for screen size, and the routine that writes the `screen()` traits | confirmed |
+| Safe-zone pair selection and the 0.74 threshold | Executable: the two safe-zone getters | confirmed |
+| 960-line screen, `cropx`/`cropy` = 20 at 16:9 | Real-game HUD screenshot at 1280×720 (bars x ≈ 66–205 px, top ≈ 648 px; compass x ≈ 365–522 px) | confirmed, matches the code |
+| Texture-set thresholds 0.5 / 0.8 and fallback | Executable: the menu texture path resolver | confirmed |
+| Entity values | Executable: the menu XML entity table | confirmed |
+| `cropx`/`cropy` are trait ids `0x0FDA`/`0x0FD9`, `width`/`height` `0x0FCB`/`0x0FCA`, `screen` `0x138E` | xOBSE tile-trait list, matches the code | confirmed |
+| Safe-zone settings `iSafeZoneX`, `iSafeZoneY`, `iSafeZoneXWide`, `iSafeZoneYWide` in `[Interface]`, all 20 by default | Executable strings; `Oblivion_default.ini` | confirmed |
 
 ## Open
 
-1. **Widescreen safe zone.** When do `iSafeZoneXWide`/`YWide` replace `iSafeZoneX`/`Y`
-   (an aspect-ratio threshold?), and are they in menu units or pixels? With all four at
-   20 the screenshot can't tell them apart.
-2. **Screen width.** Presumably `960 × aspect`; confirm in the code that fills `screen()`.
-3. **Texture set.** What picks `Menus` vs `Menus80` vs `Menus50` (resolution
-   thresholds, a video setting, or a texture-size setting)? Do the menu units change
-   with the set, or only the texture resolution?
-4. **Truthiness of menu values.** In play `HUDMainMenu` has `user3 = 1`, yet the
-   `hudmain_frame` tile, whose `visible` copies `user3`, is not drawn by the real game.
-   Either `&false;` expands to 1 (and `&true;` to 2), or only 2 counts as true for
-   `visible`. Find the entity values and the test the tile renderer uses.
-5. **XML error tolerance** (lower priority). Vanilla `hud_main_menu.xml` has an unclosed
-   `<_handonly>` tag; how does the game's parser recover (ignore to the next closing tag,
-   close at the parent, drop the element)?
-
-Questions 1–5 need the executable: the INI reader for the four safe-zone settings leads
-to the code that fills `screen()`; the entity table and tile-value parser answer 4 and 5.
+1. **Menus80 condition.** Which callers pass the value that allows the 80% set, and what
+   is it (a tile's size, a flag)? Matters only for which texture file is loaded.
+2. **How `visible` and other boolean traits test their value**: equal to 2, or not 1?
+   Both agree for every vanilla menu so far.
+3. **XML error tolerance** (lower priority). Vanilla `hud_main_menu.xml` has an unclosed
+   `<_handonly>` tag; how does the game's parser recover?

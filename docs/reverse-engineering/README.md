@@ -46,6 +46,6 @@ addresses. Nothing from there is committed; only the distilled fact moves here.
 
 | Note | Question | Status |
 |------|----------|--------|
-| [menu-layout.md](menu-layout.md) | Virtual screen size, safe zone, menu scaling, `Menus`/`Menus80`/`Menus50` | open |
-| [script-commands.md](script-commands.md) | Script command names, opcodes, parameter types | open |
+| [menu-layout.md](menu-layout.md) | Virtual screen size, safe zone, menu scaling, `Menus`/`Menus80`/`Menus50`, XML entities | mostly settled |
+| [script-commands.md](script-commands.md) | Script command names, opcodes, parameter types | done |
 | [light-falloff.md](light-falloff.md) | How a LIGH radius becomes attenuation | open |
