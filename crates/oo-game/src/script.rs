@@ -32,7 +32,9 @@
 //! t53 face 700 120                         # turn the player towards x z
 //! t54 goto 700 120                         # walk there after earlier gotos (20 s each)
 //! t55 follow 00032A17 150                   # keep within 150 units of an actor
+//!                                              # (through load doors it goes through too)
 //! t58 follow off
+//! t59 god                                   # the player's health stays full
 //! t60 quit
 //! ```
 
@@ -58,6 +60,8 @@ enum Action {
     Goto(Vec2),
     /// Keep walking after an actor while it is farther than the distance.
     Follow(Option<(u32, f32)>),
+    /// Keep the player's health full from now on.
+    God,
     Move(f64, f64),
     Click,
     Wheel(f32),
@@ -131,6 +135,12 @@ pub struct Script {
     follow: Option<(u32, f32)>,
     /// Whether the followed actor was missing last frame, so it is logged once.
     follow_lost: bool,
+    /// Where the followed actor was last seen, and where it was heading.
+    follow_seen: Option<(Vec2, Vec2)>,
+    /// A door to open once the gotos are done: the point to face.
+    open_door: Option<Vec2>,
+    /// Whether `god` keeps the player's health full.
+    god: bool,
 }
 
 /// How long `goto` keeps walking, and how close counts as there.
@@ -162,6 +172,9 @@ impl Plugin for ScriptPlugin {
                     goto: VecDeque::new(),
                     follow: None,
                     follow_lost: false,
+                    follow_seen: None,
+                    open_door: None,
+                    god: false,
                 })
                 .add_systems(PreUpdate, run_script.after(InputSystems));
             }
@@ -219,6 +232,7 @@ fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
                 words.next().ok_or_else(bad)?.parse()?,
             ),
             "click" => Action::Click,
+            "god" => Action::God,
             "wheel" => Action::Wheel(words.next().ok_or_else(bad)?.parse()?),
             "shot" => Action::Shot(words.next().ok_or_else(bad)?.into()),
             "quit" => Action::Quit,
@@ -338,7 +352,7 @@ fn run_script(
     player: Query<&Transform, With<oo_sim::Player>>,
     actors: Query<(&oo_sim::PlacedRef, &Transform), Without<oo_sim::Player>>,
     world: Option<Res<oo_sim::cell::WorldData>>,
-    state: Res<oo_sim::script::ScriptState>,
+    mut state: ResMut<oo_sim::script::ScriptState>,
     mut intents: Query<&mut oo_sim::PlayerIntent, With<oo_sim::Player>>,
 ) {
     script.frame += 1;
@@ -373,6 +387,13 @@ fn run_script(
             script.goto.pop_front();
             if script.goto.is_empty() {
                 keys.release(KeyCode::KeyW);
+                if let Some(door) = script.open_door.take()
+                    && let Ok(mut intent) = intents.single_mut()
+                {
+                    intent.yaw = yaw_towards(at.translation, door);
+                    intent.activate = true;
+                    info!("script: opening the door the followed actor went through");
+                }
             }
             if distance <= GOTO_REACHED {
                 info!("script: reached {to}");
@@ -393,6 +414,12 @@ fn run_script(
             Some((_, t)) => {
                 script.follow_lost = false;
                 let to = t.translation.xz();
+                let heading = match script.follow_seen {
+                    Some((was, _)) if was.distance(to) > 1.0 => (to - was).normalize(),
+                    Some((_, heading)) => heading,
+                    None => Vec2::ZERO,
+                };
+                script.follow_seen = Some((to, heading));
                 if at.translation.xz().distance(to) > near {
                     if let Ok(mut intent) = intents.single_mut() {
                         intent.yaw = yaw_towards(at.translation, to);
@@ -406,9 +433,21 @@ fn run_script(
                 if !std::mem::replace(&mut script.follow_lost, true) {
                     keys.release(KeyCode::KeyW);
                     warn!("script: lost {r:08X}, it isn't loaded");
+                    // It went through a load door: walk to where it was last
+                    // seen and open the door it was heading for.
+                    if let Some((seen, heading)) = script.follow_seen.take() {
+                        script.goto.push_back((seen, GOTO_SECONDS));
+                        script.open_door = Some(seen + heading * 100.0);
+                    }
                 }
             }
         }
+    }
+    if script.god
+        && let Some(v) = state.vitals.get_mut(&oo_sim::script::PLAYER_REF)
+        && v.health < v.max_health
+    {
+        v.health = v.max_health;
     }
     let frame = script.frame;
     let now = fixed.elapsed_secs();
@@ -452,6 +491,7 @@ fn run_script(
             Action::Follow(f) => {
                 script.follow = f;
                 script.follow_lost = false;
+                script.follow_seen = None;
                 if f.is_none() {
                     keys.release(KeyCode::KeyW);
                 }
@@ -461,6 +501,7 @@ fn run_script(
                     w.set_physical_cursor_position(Some(DVec2::new(x, y)));
                 }
             }
+            Action::God => script.god = true,
             Action::Click => {
                 mouse.press(MouseButton::Left);
                 script.held_click = true;
