@@ -10,7 +10,7 @@ publishable and matches how OpenMW has survived for over fifteen years.
 - The game's own data files, loaded at runtime from the user's install.
 - Observing the running game: play it, measure it, record what it does.
 - Reverse engineering the executable *to learn facts*. Write what you learned as a plain
-  description in `docs/research/` (a formula, a constant, an order of operations), then
+  description in `docs/reverse-engineering/` (a formula, a constant, an order of operations), then
   implement from that description.
 
 ## Not allowed in the repository
@@ -28,6 +28,6 @@ nothing on its own; it only catches mistakes.
 ## Research notes
 
 Keep raw disassembly, Ghidra projects and dumps out of the repo (somewhere private).
-What goes in `docs/research/` is the distilled fact and where it came from, e.g.
+What goes in `docs/reverse-engineering/` is the distilled fact and where it came from, e.g.
 "Fall damage = (fall height − 600) × 0.1 × fFallDamageMult, observed in game at
 heights 600–3000; matches GMST fJumpFallHeightMult".
