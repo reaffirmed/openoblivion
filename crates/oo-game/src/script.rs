@@ -14,6 +14,19 @@
 //! 170 wheel -2           # scroll, in lines (negative is down)
 //! 200 quit
 //! ```
+//!
+//! A step can instead name simulation time with `t` and seconds, which doesn't
+//! depend on the framerate, so a recorded run replays the same way on any
+//! machine. Checks make a run a test: each one that fails is logged, and the
+//! run exits with an error at `quit`.
+//!
+//! ```text
+//! t2.5 hold KeyW 1.5
+//! t40 expect stage CharacterGen >= 14      # ==, >=, <=, >, <
+//! t40 expect near 824 -104 0 64            # the player within 64 units
+//! t40 expect actor 0002ABCD near 200 0 30 100
+//! t60 quit
+//! ```
 
 use std::path::{Path, PathBuf};
 
@@ -34,11 +47,56 @@ enum Action {
     Wheel(f32),
     Shot(PathBuf),
     Quit,
+    ExpectStage(String, Compare, u16),
+    ExpectNear(Option<u32>, Vec3, f32),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Compare {
+    Eq,
+    Ge,
+    Le,
+    Gt,
+    Lt,
+}
+
+impl Compare {
+    fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "==" => Self::Eq,
+            ">=" => Self::Ge,
+            "<=" => Self::Le,
+            ">" => Self::Gt,
+            "<" => Self::Lt,
+            _ => return None,
+        })
+    }
+
+    fn holds(self, a: u16, b: u16) -> bool {
+        match self {
+            Self::Eq => a == b,
+            Self::Ge => a >= b,
+            Self::Le => a <= b,
+            Self::Gt => a > b,
+            Self::Lt => a < b,
+        }
+    }
+}
+
+/// When a step runs: on a rendered frame, or at a simulation time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum When {
+    Frame(u32),
+    Seconds(f32),
 }
 
 #[derive(Resource)]
 pub struct Script {
-    steps: Vec<(u32, Action)>,
+    steps: Vec<(When, Action)>,
+    /// Steps already run.
+    done: Vec<bool>,
+    checks: u32,
+    failed: u32,
     frame: u32,
     /// Pressed last frame, released this one.
     held_keys: Vec<KeyCode>,
@@ -54,6 +112,9 @@ impl Plugin for ScriptPlugin {
         match load(&self.0) {
             Ok(steps) => {
                 app.insert_resource(Script {
+                    done: vec![false; steps.len()],
+                    checks: 0,
+                    failed: 0,
                     steps,
                     frame: 0,
                     held_keys: Vec::new(),
@@ -67,7 +128,7 @@ impl Plugin for ScriptPlugin {
     }
 }
 
-fn load(path: &Path) -> anyhow::Result<Vec<(u32, Action)>> {
+fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
     let text = std::fs::read_to_string(path)?;
     let mut steps = Vec::new();
     for (n, line) in text.lines().enumerate() {
@@ -77,7 +138,11 @@ fn load(path: &Path) -> anyhow::Result<Vec<(u32, Action)>> {
         }
         let mut words = line.split_whitespace();
         let bad = || anyhow::anyhow!("line {}: can't read {line:?}", n + 1);
-        let frame: u32 = words.next().ok_or_else(bad)?.parse()?;
+        let when = words.next().ok_or_else(bad)?;
+        let when = match when.strip_prefix('t') {
+            Some(seconds) => When::Seconds(seconds.parse()?),
+            None => When::Frame(when.parse()?),
+        };
         let action = match words.next().ok_or_else(bad)? {
             "key" => Action::Key(key_code(words.next().ok_or_else(bad)?).ok_or_else(bad)?),
             "hold" => Action::Hold(
@@ -93,11 +158,47 @@ fn load(path: &Path) -> anyhow::Result<Vec<(u32, Action)>> {
             "wheel" => Action::Wheel(words.next().ok_or_else(bad)?.parse()?),
             "shot" => Action::Shot(words.next().ok_or_else(bad)?.into()),
             "quit" => Action::Quit,
+            "expect" => match words.next().ok_or_else(bad)? {
+                "stage" => {
+                    let quest = words.next().ok_or_else(bad)?.to_owned();
+                    let op = Compare::parse(words.next().ok_or_else(bad)?).ok_or_else(bad)?;
+                    let stage = words.next().ok_or_else(bad)?.parse()?;
+                    Action::ExpectStage(quest, op, stage)
+                }
+                "near" => {
+                    let at = Vec3::new(
+                        number(&mut words)?,
+                        number(&mut words)?,
+                        number(&mut words)?,
+                    );
+                    Action::ExpectNear(None, at, number(&mut words)?)
+                }
+                "actor" => {
+                    let id = u32::from_str_radix(words.next().ok_or_else(bad)?, 16)?;
+                    if words.next() != Some("near") {
+                        return Err(bad());
+                    }
+                    let at = Vec3::new(
+                        number(&mut words)?,
+                        number(&mut words)?,
+                        number(&mut words)?,
+                    );
+                    Action::ExpectNear(Some(id), at, number(&mut words)?)
+                }
+                _ => return Err(bad()),
+            },
             _ => return Err(bad()),
         };
-        steps.push((frame, action));
+        steps.push((when, action));
     }
     Ok(steps)
+}
+
+fn number<'a>(words: &mut impl Iterator<Item = &'a str>) -> anyhow::Result<f32> {
+    Ok(words
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("a number is missing"))?
+        .parse()?)
 }
 
 fn key_code(name: &str) -> Option<KeyCode> {
@@ -156,7 +257,11 @@ fn run_script(
     mut window: Query<(Entity, &mut Window), With<PrimaryWindow>>,
     mut exit: MessageWriter<AppExit>,
     time: Res<Time>,
+    fixed: Res<Time<Fixed>>,
     player: Query<&Transform, With<oo_sim::Player>>,
+    actors: Query<(&oo_sim::PlacedRef, &Transform), Without<oo_sim::Player>>,
+    world: Option<Res<oo_sim::cell::WorldData>>,
+    state: Res<oo_sim::script::ScriptState>,
 ) {
     script.frame += 1;
     for key in std::mem::take(&mut script.held_keys) {
@@ -177,12 +282,18 @@ fn run_script(
         mouse.release(MouseButton::Left);
     }
     let frame = script.frame;
-    let due: Vec<Action> = script
-        .steps
-        .iter()
-        .filter(|(f, _)| *f == frame)
-        .map(|(_, a)| a.clone())
-        .collect();
+    let now = fixed.elapsed_secs();
+    let mut due: Vec<Action> = Vec::new();
+    for i in 0..script.steps.len() {
+        let ready = match script.steps[i].0 {
+            When::Frame(f) => f == frame,
+            When::Seconds(t) => !script.done[i] && now >= t,
+        };
+        if ready {
+            script.done[i] = true;
+            due.push(script.steps[i].1.clone());
+        }
+    }
     for action in due {
         info!("script frame {frame}: {action:?}");
         match action {
@@ -225,8 +336,55 @@ fn run_script(
                     .observe(save_to_disk(path));
             }
             Action::Quit => {
-                exit.write(AppExit::Success);
+                if script.failed > 0 {
+                    error!(
+                        "script: {} of {} checks failed",
+                        script.failed, script.checks
+                    );
+                    exit.write(AppExit::error());
+                } else {
+                    info!("script: all {} checks passed", script.checks);
+                    exit.write(AppExit::Success);
+                }
+            }
+            Action::ExpectStage(quest, op, want) => {
+                let id = world.as_ref().and_then(|w| {
+                    w.scripting
+                        .dialogue
+                        .quests
+                        .iter()
+                        .find(|(_, q)| q.editor_id.eq_ignore_ascii_case(&quest))
+                        .map(|(&id, _)| id)
+                });
+                let have = id.map(|id| state.stage(id));
+                let pass = have.is_some_and(|h| op.holds(h, want));
+                check(&mut script, pass, || {
+                    format!("stage {quest} is {have:?}, wanted {op:?} {want}")
+                });
+            }
+            Action::ExpectNear(who, at, radius) => {
+                let position = match who {
+                    None => player.single().ok().map(|t| t.translation),
+                    Some(id) => actors
+                        .iter()
+                        .find(|(r, _)| r.0 == id)
+                        .map(|(_, t)| t.translation),
+                };
+                let pass = position.is_some_and(|p| p.distance(at) <= radius);
+                check(&mut script, pass, || {
+                    format!("{who:08X?} is at {position:?}, wanted within {radius} of {at}")
+                });
             }
         }
+    }
+}
+
+fn check(script: &mut Script, pass: bool, explain: impl FnOnce() -> String) {
+    script.checks += 1;
+    if pass {
+        info!("script check passed");
+    } else {
+        script.failed += 1;
+        error!("script check failed: {}", explain());
     }
 }

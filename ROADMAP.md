@@ -164,10 +164,10 @@ Things that only the person can give; work carries on around them.
 
 ### Alongside everything
 
-- [ ] Replay tests: the `--script` harness keyed to simulation steps instead of
-      rendered frames, with per-step assertions (player position, quest stages,
-      actor positions), so a recorded run through the tutorial re-verifies itself
-      after every change
+- [x] Replay tests: `--script` steps can be keyed to simulation time (`t12.5`), with
+      checks on quest stages and player and actor positions; a failed check fails
+      the run
+- [ ] A recorded run through the whole tutorial, re-checked after every change
 - [ ] Numeric fidelity checks against the documented formulas (movement speeds,
       combat, falloff), as tests
 
