@@ -72,7 +72,10 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
       original.
 - [ ] A lighting setting: "Vanilla" (the default, 1:1 through the translated shaders)
       or "Enhanced", an optional modern renderer with shadows, ambient occlusion and
-      physically based falloff.
+      physically based falloff. Progress: `--lighting vanilla` gives point lights the
+      game's falloff (disc × slab from its attenuation texture, zero at the radius)
+      inside Bevy's shading; to be compared against the original before it becomes
+      the default.
 - [x] Doors that open (animated `DOOR` references), with collision that follows them;
       locks and keys with the game's own messages
 - [ ] Dynamic clutter (Havok bodies Oblivion simulates, like the prison's chains)

@@ -5,9 +5,17 @@
 //! here are tuned by eye against the original game (the tutorial prison,
 //! ImperialDungeon01: dim, warm pools under torches, dark corners). `--light-scale` and
 //! `--ambient-scale` adjust them at runtime while tuning.
+//!
+//! `--lighting vanilla` gives point lights the game's own falloff (see
+//! `docs/reverse-engineering/light-falloff.md`): the shaders sample an
+//! attenuation texture holding 1 − r², once across the horizontal offset and
+//! once along the vertical, so a light fades to nothing at its radius as a disc
+//! times a slab. Bevy's lighting shader is patched to compute that instead of
+//! its inverse square.
 
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
+use bevy::shader::Shader;
 use oo_formats::world::Light;
 use oo_sim::{CurrentCell, LightSource, PlacedRef, UNITS_PER_METRE};
 
@@ -16,6 +24,71 @@ use oo_sim::{CurrentCell, LightSource, PlacedRef, UNITS_PER_METRE};
 pub struct LightingTuning {
     pub light_scale: f32,
     pub ambient_scale: f32,
+    pub mode: LightingMode,
+}
+
+/// How point lights fall off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum LightingMode {
+    /// The game's curve: (1 − min(dx² + dz², 1)) × (1 − min(dy², 1)) with the
+    /// offset in radii, zero past the radius.
+    Vanilla,
+    /// Bevy's physically based inverse square, tuned to look like the game.
+    #[default]
+    Enhanced,
+}
+
+/// Bevy's lighting shader, which `--lighting vanilla` patches.
+const LIGHTING_SHADER: &str = "embedded://bevy_pbr/render/pbr_lighting.wesl";
+
+/// The call the patch replaces, and what with.
+const ATTENUATION_CALL: &str =
+    "getDistanceAttenuation(distance_square, (*light).color_inverse_square_range.w)";
+const VANILLA_CALL: &str =
+    "oblivionAttenuation(light_to_frag, (*light).color_inverse_square_range.w)";
+
+/// The game's falloff. The light's range is √2 radii (the farthest the disc
+/// times slab reaches), so the radius is 1 / (2 × inverse range²). Bethesda's
+/// vertical Z is Bevy's Y.
+const VANILLA_ATTENUATION: &str = "
+fn oblivionAttenuation(offset: vec3<f32>, inverseRangeSquared: f32) -> f32 {
+    let d2 = offset * offset * (2.0 * inverseRangeSquared);
+    let disc = 1.0 - min(d2.x + d2.z, 1.0);
+    let slab = 1.0 - min(d2.y, 1.0);
+    return disc * slab;
+}
+";
+
+/// Vanilla falloff reaches √2 radii, at the corner of its disc and slab.
+const VANILLA_RANGE_PER_RADIUS: f32 = std::f32::consts::SQRT_2;
+
+/// Rewrites Bevy's lighting shader for `--lighting vanilla`, once it has
+/// loaded. Pipelines using it recompile.
+pub fn patch_falloff_shader(
+    tuning: Res<LightingTuning>,
+    server: Res<AssetServer>,
+    mut shaders: ResMut<Assets<Shader>>,
+    mut state: Local<(Option<Handle<Shader>>, bool)>,
+) {
+    if tuning.mode != LightingMode::Vanilla || state.1 {
+        return;
+    }
+    let handle = state
+        .0
+        .get_or_insert_with(|| server.load(LIGHTING_SHADER))
+        .clone();
+    let Some(mut shader) = shaders.get_mut(&handle) else {
+        return;
+    };
+    state.1 = true;
+    let source = shader.source.as_str();
+    if !source.contains(ATTENUATION_CALL) {
+        warn!("vanilla lighting: Bevy's lighting shader has changed; keeping its falloff");
+        return;
+    }
+    let patched = format!("{}{VANILLA_ATTENUATION}", source.replace(ATTENUATION_CALL, VANILLA_CALL));
+    shader.source = bevy::shader::Source::Wesl(patched.into());
+    info!("vanilla lighting: point lights use the game's falloff");
 }
 
 /// Ambient brightness for a full-white `XCLL` ambient colour.
@@ -119,16 +192,30 @@ pub fn attach_lights(
             // Bevy has no negative lights; leave them out rather than brighten.
             continue;
         }
-        // Bevy works in world units; ours are 1/70 m, so scale the 1/d² falloff to match.
-        intensity *= UNITS_PER_METRE * UNITS_PER_METRE;
-        // Undo Bevy's range window at half the radius, so the constant above holds there.
-        let window = 1.0 - (0.5 / RANGE_PER_RADIUS).powi(4);
-        intensity /= window * window;
+        let range = match tuning.mode {
+            LightingMode::Enhanced => {
+                // Bevy works in world units; ours are 1/70 m, so scale the 1/d²
+                // falloff to match.
+                intensity *= UNITS_PER_METRE * UNITS_PER_METRE;
+                // Undo Bevy's range window at half the radius, so the constant
+                // above holds there.
+                let window = 1.0 - (0.5 / RANGE_PER_RADIUS).powi(4);
+                intensity /= window * window;
+                radius * RANGE_PER_RADIUS
+            }
+            LightingMode::Vanilla => {
+                // The patched shader's attenuation has no 1/d²: as bright at
+                // half the radius, level with the light (0.75 there), as the
+                // enhanced falloff.
+                intensity /= half_radius_m * half_radius_m * 0.75;
+                radius * VANILLA_RANGE_PER_RADIUS
+            }
+        };
         commands.entity(entity).insert((
             PointLight {
                 color: rgb(light.color),
                 intensity,
-                range: radius * RANGE_PER_RADIUS,
+                range,
                 radius: 2.0,
                 shadow_maps_enabled: false,
                 ..default()
@@ -166,5 +253,21 @@ pub fn animate_lights(time: Res<Time>, mut lights: Query<(&Flicker, &mut PointLi
             continue;
         };
         light.intensity = f.base_intensity * factor;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_attenuation_is_valid_wgsl() {
+        let module = naga::front::wgsl::parse_str(VANILLA_ATTENUATION).expect("parses");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        .expect("validates");
     }
 }

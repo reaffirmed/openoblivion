@@ -57,6 +57,10 @@ struct Args {
     /// Multiplies the brightness of cells' ambient light, for tuning.
     #[arg(long, default_value_t = 1.0)]
     ambient_scale: f32,
+    /// Point-light falloff: `vanilla` is the game's own curve, `enhanced`
+    /// Bevy's inverse square.
+    #[arg(long, value_enum, default_value_t = lighting::LightingMode::Enhanced)]
+    lighting: lighting::LightingMode,
     /// Turn off vsync to run as fast as the GPU allows.
     #[arg(long)]
     no_vsync: bool,
@@ -142,6 +146,7 @@ fn main() -> AppExit {
     .insert_resource(lighting::LightingTuning {
         light_scale: args.light_scale,
         ambient_scale: args.ambient_scale,
+        mode: args.lighting,
     })
     .insert_resource(GlobalAmbientLight {
         brightness: 400.0,
@@ -196,6 +201,7 @@ fn main() -> AppExit {
                 lighting::apply_cell_lighting,
                 lighting::attach_lights,
                 lighting::animate_lights,
+                lighting::patch_falloff_shader,
             ),
         ),
     )

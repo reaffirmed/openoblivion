@@ -4594,6 +4594,7 @@ dependencies = [
  "byroredux-menuxml",
  "byroredux-nif",
  "clap",
+ "naga",
  "oo-formats",
  "oo-sim",
 ]

@@ -16,3 +16,6 @@ byroredux-core.workspace = true
 byroredux-nif.workspace = true
 byroredux-menuxml.workspace = true
 bevy_rapier3d = { workspace = true, features = ["debug-render-3d"] }
+
+[dev-dependencies]
+naga = { version = "30.0.1", features = ["wgsl-in"] }
