@@ -25,6 +25,8 @@ fn wearable(slots: u32, model: &str) -> WearableInfo {
     WearableInfo {
         slots,
         armor: false,
+        heavy: false,
+        rating: 0,
         model: [Some(model.into()), None],
     }
 }

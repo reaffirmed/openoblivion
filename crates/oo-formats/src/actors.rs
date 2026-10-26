@@ -93,6 +93,8 @@ impl Stats {
     pub const LUCK: usize = 7;
 
     pub const BLADE: usize = 2;
+    pub const HEAVY_ARMOR: usize = 6;
+    pub const LIGHT_ARMOR: usize = 15;
     pub const BLOCK: usize = 3;
     pub const BLUNT: usize = 4;
     pub const HAND_TO_HAND: usize = 5;
@@ -239,6 +241,10 @@ pub struct WearableInfo {
     /// Body slots it takes; see [`biped`].
     pub slots: u32,
     pub armor: bool,
+    /// Heavy rather than light armour (`BMDT` flag 0x80 in its third byte).
+    pub heavy: bool,
+    /// Armour rating × 100 (`DATA`), 0 for clothing.
+    pub rating: u16,
     /// The model on a body, `[male, female]` (`MODL`, `MOD3`). Female falls back
     /// to male when missing.
     pub model: [Option<String>; 2],
@@ -518,11 +524,23 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
                     .iter()
                     .find(|f| f.tag.0 == *b"BMDT" && f.data.len() >= 2)
                     .map_or(0, |f| u32::from(u16::from_le_bytes([f.data[0], f.data[1]])));
+                let armor = r.tag.0 == *b"ARMO";
+                let heavy = armor
+                    && fields
+                        .iter()
+                        .find(|f| f.tag.0 == *b"BMDT" && f.data.len() >= 3)
+                        .is_some_and(|f| f.data[2] & 0x80 != 0);
+                let rating = fields
+                    .iter()
+                    .find(|f| armor && f.tag.0 == *b"DATA" && f.data.len() >= 2)
+                    .map_or(0, |f| u16::from_le_bytes([f.data[0], f.data[1]]));
                 out.wearables.insert(
                     id,
                     WearableInfo {
                         slots,
-                        armor: r.tag.0 == *b"ARMO",
+                        armor,
+                        heavy,
+                        rating,
                         model: [string(b"MODL"), string(b"MOD3")],
                     },
                 );

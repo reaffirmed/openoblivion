@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
-use oo_formats::actors::{Stats, biped};
+use oo_formats::actors::{Stats, WearableInfo, biped};
 use oo_formats::character::ClassInfo;
 use oo_formats::items::{WeaponInfo, WeaponKind};
 use oo_formats::settings::Setting;
@@ -182,6 +182,53 @@ pub fn weapon_damage(gmst: &Settings, stats: &Stats, v: &Vitals, weapon: &Weapon
         * (setting(gmst, "fDamageStrengthBase", 0.75)
             + setting(gmst, "fDamageStrengthMult", 0.5) * strength)
         * fatigue_factor(gmst, v)
+}
+
+/// An actor's total armour rating from the armour it wears, each item once;
+/// see "Armour rating" in `docs/reverse-engineering/combat-and-levelling.md`.
+/// Worn items are taken as in full repair, and Shield effects aren't counted
+/// until magic effects exist.
+pub fn armor_rating<'a>(
+    gmst: &Settings,
+    stats: &Stats,
+    worn: impl IntoIterator<Item = &'a WearableInfo>,
+) -> f32 {
+    let condition = 1.0;
+    let luck = f32::from(stats.attributes[Stats::LUCK]);
+    let rating_base = setting(gmst, "fArmorRatingBase", 0.35);
+    let rating_max = setting(gmst, "fArmorRatingMax", 1.0);
+    let (mut total, mut light, mut heavy) = (0.0, 0, 0);
+    for piece in worn.into_iter().filter(|w| w.armor) {
+        let skill = if piece.heavy {
+            heavy += 1;
+            Stats::HEAVY_ARMOR
+        } else {
+            light += 1;
+            Stats::LIGHT_ARMOR
+        };
+        let s = (f32::from(stats.skills[skill])
+            + luck * setting(gmst, "fActorLuckSkillMult", 0.4)
+            + setting(gmst, "iActorLuckSkillBase", -20.0))
+        .clamp(0.0, 100.0);
+        let ar = f32::from(piece.rating) / 100.0;
+        total += (ar * (rating_base + (rating_max - rating_base) * s / 100.0)).round()
+            * (setting(gmst, "fArmorRatingConditionBase", 0.0)
+                + setting(gmst, "fArmorRatingConditionMult", 1.0) * condition);
+    }
+    // Light Armor at Master level (100).
+    if stats.skills[Stats::LIGHT_ARMOR] >= 100
+        && heavy == 0
+        && light as f32 >= setting(gmst, "iPerkLightArmorMasterMinSum", 5.0)
+    {
+        total *= setting(gmst, "fPerkLightArmorMasterRatingMult", 1.5);
+    }
+    let cap = setting(gmst, "fMaxArmorRating", 85.0);
+    if cap > 0.0 { total.min(cap) } else { total }
+}
+
+/// The share of a hit's health damage armour absorbs.
+pub fn armor_absorbs(gmst: &Settings, rating: f32) -> f32 {
+    (rating.min(100.0) / 100.0).min(setting(gmst, "fArmorRatingMax", 1.0))
 }
 
 /// What a blocker holds up.
@@ -713,6 +760,17 @@ pub(crate) fn run_combat(
             (None, None, None) => hand_damage(&world.settings, stats, &attacker_v),
         };
         let target_stats = base_of(blow.target).and_then(|b| records(&world, b));
+        if let Some((target_stats, _)) = target_stats {
+            let mut worn: Vec<u32> = equipped.get(&blow.target).map_or(vec![], |e| e.to_vec());
+            worn.sort_unstable();
+            worn.dedup();
+            let rating = armor_rating(
+                &world.settings,
+                target_stats,
+                worn.iter().filter_map(|i| world.actors.wearables.get(i)),
+            );
+            health *= 1.0 - armor_absorbs(&world.settings, rating);
+        }
         if blow.target == PLAYER_REF
             && player_blocking
             && let Some((target_stats, _)) = target_stats
@@ -897,6 +955,38 @@ mod tests {
 
     fn world() -> Settings {
         Settings::default()
+    }
+
+    #[test]
+    fn armour_rates_by_skill_and_caps() {
+        let piece = |rating, heavy| WearableInfo {
+            armor: true,
+            heavy,
+            rating,
+            ..Default::default()
+        };
+        let mut stats = Stats::default();
+        stats.attributes[Stats::LUCK] = 50;
+        // Skill 0: 35 % of each piece's value.
+        let cuirass = piece(1000, true);
+        assert_eq!(armor_rating(&world(), &stats, [&cuirass]), 4.0);
+        // Skill 100: all of it; clothing adds nothing; the total caps at 85.
+        stats.skills[Stats::HEAVY_ARMOR] = 100;
+        let shirt = WearableInfo::default();
+        assert_eq!(armor_rating(&world(), &stats, [&cuirass, &shirt]), 10.0);
+        let plate = [piece(5000, true), piece(5000, true)];
+        assert_eq!(armor_rating(&world(), &stats, &plate), 85.0);
+        // A Light Armor master in five light pieces gets half as much again.
+        stats.skills[Stats::LIGHT_ARMOR] = 100;
+        let light = [
+            piece(200, false),
+            piece(200, false),
+            piece(200, false),
+            piece(200, false),
+            piece(200, false),
+        ];
+        assert_eq!(armor_rating(&world(), &stats, &light), 15.0);
+        assert_eq!(armor_absorbs(&world(), 85.0), 0.85);
     }
 
     #[test]
