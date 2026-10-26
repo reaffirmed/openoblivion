@@ -2064,7 +2064,10 @@ fn platform_entity_picks_the_pc_case() {
     let overrides = Overrides::new();
     let mut eval = EvalState::new(&doc, ScreenTraits::new(1280.0, 720.0), &strings, &overrides);
     let bye = doc.name_index["bye"];
-    assert_eq!(eval.trait_value(bye, "filename"), Scalar::Str("pc.dds".into()));
+    assert_eq!(
+        eval.trait_value(bye, "filename"),
+        Scalar::Str("pc.dds".into())
+    );
 }
 
 /// The dialogue subtitle: `dialog_text_layout` shows while `dialog_topics`
@@ -2089,7 +2092,10 @@ fn dialogue_subtitle_shows_while_topics_are_hidden() {
     let strings = HashMap::new();
     let mut overrides = Overrides::new();
     overrides.insert(("dialog_topics".into(), "visible".into()), Scalar::Num(0.0));
-    overrides.insert(("dialog_text".into(), "string".into()), Scalar::Str("Hello".into()));
+    overrides.insert(
+        ("dialog_text".into(), "string".into()),
+        Scalar::Str("Hello".into()),
+    );
     let mut eval = EvalState::new(&doc, ScreenTraits::new(1280.0, 720.0), &strings, &overrides);
     eval.resolve_all();
     let items = build_draw_list(&doc, &mut eval);

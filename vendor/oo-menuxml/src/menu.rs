@@ -551,7 +551,12 @@ impl MenuRenderer {
             // A few vanilla tiles leave `Menus\` off (`dialog\dialog_selection_cut.dds`
             // in the selection markers); try the menu sets after the bare path.
             let mut v = vec![format!("textures\\{lowered}")];
-            for set in [self.texture_set, TextureSet::Base, TextureSet::Menus80, TextureSet::Menus50] {
+            for set in [
+                self.texture_set,
+                TextureSet::Base,
+                TextureSet::Menus80,
+                TextureSet::Menus50,
+            ] {
                 let p = format!("textures\\{}\\{lowered}", set.segment());
                 if !v.contains(&p) {
                     v.push(p);

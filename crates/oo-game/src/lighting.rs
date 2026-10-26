@@ -86,7 +86,10 @@ pub fn patch_falloff_shader(
         warn!("vanilla lighting: Bevy's lighting shader has changed; keeping its falloff");
         return;
     }
-    let patched = format!("{}{VANILLA_ATTENUATION}", source.replace(ATTENUATION_CALL, VANILLA_CALL));
+    let patched = format!(
+        "{}{VANILLA_ATTENUATION}",
+        source.replace(ATTENUATION_CALL, VANILLA_CALL)
+    );
     shader.source = bevy::shader::Source::Wesl(patched.into());
     info!("vanilla lighting: point lights use the game's falloff");
 }

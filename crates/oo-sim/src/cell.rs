@@ -407,7 +407,8 @@ fn spawn_cell(
                 "{:08X} is flagged initially disabled but enabled (script: {:?}, parent: {:?})",
                 r.form_id,
                 changes.enabled.get(&r.form_id),
-                r.enable_parent.map(|p| (format!("{:08X}", p.reference), p.opposite)),
+                r.enable_parent
+                    .map(|p| (format!("{:08X}", p.reference), p.opposite)),
             );
         }
         let spawned = spawn_reference(commands, world, r);

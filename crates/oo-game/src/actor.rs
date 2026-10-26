@@ -481,7 +481,10 @@ pub fn animate_actors(
             && let Some(data) = data.as_deref()
         {
             let dir = skeleton_dir(&animated.skeleton).to_owned();
-            let creature = dir.to_ascii_lowercase().replace('/', "\\").contains("creatures\\");
+            let creature = dir
+                .to_ascii_lowercase()
+                .replace('/', "\\")
+                .contains("creatures\\");
             let clip = gait
                 .files(creature)
                 .iter()

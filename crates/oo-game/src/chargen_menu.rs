@@ -254,7 +254,11 @@ fn fill(
     match open {
         ChargenMenu::Race => {
             xml.set_str("race_name", "string", &screen.name);
-            let page = if screen.race_list { LIST_PAGE } else { MAIN_PAGE };
+            let page = if screen.race_list {
+                LIST_PAGE
+            } else {
+                MAIN_PAGE
+            };
             xml.set_num("RaceSexMenu", "user0", page);
             xml.set_num(RACE_MAIN_PANE, "user0", MAIN_PAGE);
             xml.set_num(RACE_LIST_PANE, "user0", LIST_PAGE);
@@ -265,7 +269,11 @@ fn fill(
             // then the sex toggle.
             let race = list.get(screen.row).map_or("", |r| r.1.as_str());
             xml.set_num(RACE_CHOICE, "listindex", 0.0);
-            xml.set_str(RACE_CHOICE, "user2", world.setting("sRace").unwrap_or("Race"));
+            xml.set_str(
+                RACE_CHOICE,
+                "user2",
+                world.setting("sRace").unwrap_or("Race"),
+            );
             xml.set_str(RACE_CHOICE, "user6", race);
             let sex = if screen.female {
                 world.setting("sFemale").unwrap_or("Female")
@@ -290,7 +298,11 @@ fn fill(
         }
         ChargenMenu::Birthsign => {
             let sign = chosen.and_then(|id| world.characters.birthsigns.get(&id));
-            xml.set_str("apprentice_text", "string", sign.map_or("", |b| b.name.as_str()));
+            xml.set_str(
+                "apprentice_text",
+                "string",
+                sign.map_or("", |b| b.name.as_str()),
+            );
             xml.set_str(
                 "birth_text",
                 "string",

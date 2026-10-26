@@ -412,7 +412,11 @@ fn play_music(
         return;
     };
     let battle = state.fighting.iter().any(|(&who, &target)| {
-        target == PLAYER_REF && state.vitals.get(&who).is_none_or(|v| !v.dead && v.unconscious <= 0.0)
+        target == PLAYER_REF
+            && state
+                .vitals
+                .get(&who)
+                .is_none_or(|v| !v.dead && v.unconscious <= 0.0)
     });
     let kind = match cell.music {
         _ if battle => MUSIC_BATTLE,

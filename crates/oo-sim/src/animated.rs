@@ -407,7 +407,11 @@ pub(crate) fn animate_objects(
             continue;
         };
         if !objects.iter().any(|(p, ..)| p.0 == reference) {
-            let settled = if open { OpenState::Open } else { OpenState::Closed };
+            let settled = if open {
+                OpenState::Open
+            } else {
+                OpenState::Closed
+            };
             state.doors.insert(reference, settled);
         }
         let info = world.as_ref().and_then(|w| w.doors.get(base));

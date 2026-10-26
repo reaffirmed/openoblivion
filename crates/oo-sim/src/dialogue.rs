@@ -205,11 +205,18 @@ pub fn explain_no_line(
             .get(&info.quest)
             .map_or(&[][..], |q| &q.conditions[..]);
         let mut host = GameHost::new(data, state, facts, Some(speaker));
-        let failed = quest_conditions.iter().chain(&info.conditions).find(|c| {
-            !test(c, Some(speaker), Some(PLAYER_REF), &mut host)
-        });
+        let failed = quest_conditions
+            .iter()
+            .chain(&info.conditions)
+            .find(|c| !test(c, Some(speaker), Some(PLAYER_REF), &mut host));
         let failed = failed.map_or("none".to_owned(), |c| {
-            format!("{}({:08X}) {:?} {:?}", names(c), c.params[0], c.op, c.comparand)
+            format!(
+                "{}({:08X}) {:?} {:?}",
+                names(c),
+                c.params[0],
+                c.op,
+                c.comparand
+            )
         });
         out.push_str(&format!(
             "\n  {id:08X}: quest {:08X} running {}, said {}, first failing condition {failed}",
@@ -400,7 +407,11 @@ pub(crate) fn update_conversations(
                 continue;
             };
             let text = data.dialogue.infos.get(&info).map_or(String::new(), |i| {
-                i.responses.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join(" ")
+                i.responses
+                    .iter()
+                    .map(|r| r.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             });
             info!("{speaker:08X} says {info:08X} for topic {topic:08X}: {text:?}");
             effects.extend(say(data, &mut state, &facts, info, speaker));
