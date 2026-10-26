@@ -19,6 +19,27 @@ use crate::menu::Menu;
 
 const HUD: &str = "menus\\main\\hud_main_menu.xml";
 
+/// Menus are laid out in units of a 960-line screen and scaled to the window:
+/// the game's three menu-texture sets are full, 80% and 50% size (`Menus`,
+/// `Menus80`, `Menus50`), which lines up with 960, 768 and 480 lines.
+const UI_HEIGHT: f32 = 960.0;
+
+/// Margin kept clear at the screen edges (Oblivion.ini `iSafeZoneX`/`Y`, 20 by
+/// default). The HUD hangs a little below its background and relies on it.
+const SAFE_ZONE: f32 = 20.0;
+
+/// The UI's virtual screen for a window: 960 lines tall, as wide as the
+/// window's aspect allows. Widescreen keeps the 4:3 layout centred.
+fn ui_screen(window: UVec2) -> ScreenTraits {
+    let width = (UI_HEIGHT * window.x as f32 / window.y as f32).round();
+    let base = ScreenTraits::new(width, UI_HEIGHT);
+    ScreenTraits {
+        cropx: base.cropx.max(SAFE_ZONE),
+        cropy: base.cropy.max(SAFE_ZONE),
+        ..base
+    }
+}
+
 /// Menu files, textures and fonts, read from the game's Data folder.
 pub struct GameMenuAssets<'a>(pub &'a GameData);
 
@@ -115,7 +136,7 @@ pub fn update_hud_overlay(
     };
     let size = UVec2::new(window.physical_width(), window.physical_height()).max(UVec2::ONE);
     let assets = GameMenuAssets(&data);
-    let screen = ScreenTraits::new(size.x as f32, size.y as f32);
+    let screen = ui_screen(size);
     if hud.renderer.is_none() && !hud.failed {
         match MenuRenderer::load(&assets, HUD, screen) {
             Ok(r) => {
