@@ -346,7 +346,16 @@ fn fill_row(
             String::new()
         },
     );
-    menu.set_num(&row, "user10", 0.0);
+    // In the container, user10 picks the icon: −&false; (−1) for the normal
+    // one, −&true; (−2) for the hover one; the template's rules are
+    // `0 − user10 == &false;` and `0 − user10`. The update loop sets −2 on the
+    // hovered row. In the inventory it's the equipped marker.
+    let user10 = if prefix.starts_with("cont_") {
+        -1.0
+    } else {
+        0.0
+    };
+    menu.set_num(&row, "user10", user10);
     menu.set_num(&row, "user12", 0.0);
 }
 
@@ -483,11 +492,12 @@ pub fn update_menu_overlay(
         .filter(|&i| i < stacks.len());
     for i in 0..xml.rows {
         let name = format!("{prefix}{i}");
-        xml.set_num(
-            &name,
-            "mouseover",
-            if hovered_row == Some(i) { 1.0 } else { 0.0 },
-        );
+        let hovered = hovered_row == Some(i);
+        xml.set_num(&name, "mouseover", if hovered { 1.0 } else { 0.0 });
+        if in_container && hovered {
+            // The hover icon (see fill_row).
+            xml.set_num(&name, "user10", -2.0);
+        }
     }
     if let Some(row) = hovered_row {
         menu.row = row;

@@ -420,6 +420,30 @@ impl MenuRenderer {
         );
 
         self.frame.clear([0, 0, 0, 0]);
+        if log::log_enabled!(log::Level::Trace) {
+            for item in &items {
+                let name = |t: usize| self.doc.tiles[t].name.as_deref().unwrap_or("?");
+                match item {
+                    DrawItem::Image {
+                        tile,
+                        rect,
+                        filename,
+                        ..
+                    } => log::trace!(
+                        "draw image {} at ({}, {}) {}x{}: {filename}",
+                        name(*tile),
+                        rect.x,
+                        rect.y,
+                        rect.w,
+                        rect.h
+                    ),
+                    DrawItem::Text {
+                        tile, x, y, string, ..
+                    } => log::trace!("draw text {} at ({x}, {y}): {string:?}", name(*tile)),
+                    _ => {}
+                }
+            }
+        }
         for item in &items {
             match item {
                 DrawItem::Image {

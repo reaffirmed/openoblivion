@@ -28,3 +28,7 @@ listed below and are worth sending upstream.
 - An invisible tile hides its whole subtree (list rows, Xbox-only hint groups), as in
   the game; upstream still drew an invisible tile's children.
 - `MenuRenderer::trait_value`, for reading what a tile will draw with.
+- `Scalar::truthy` is "greater than 1", so negatives are false too. The container
+  row sets user10 to −1 (normal) and −2 (hover) and its equipped-marker tests
+  `visible` against it; upstream's "not 0 or 1" drew a grey bar on every row.
+- `render_frame` logs each draw item at trace level.

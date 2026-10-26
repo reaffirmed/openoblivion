@@ -147,6 +147,7 @@ fn close_repeated_traits(xml: &[u8]) -> Vec<u8> {
             && !TILE_ELEMENTS
                 .iter()
                 .any(|t| t.as_bytes().eq_ignore_ascii_case(name))
+            && closes_enclosing(&xml[i..], &open[..open.len() - 1])
         {
             out.extend_from_slice(b"</");
             out.extend_from_slice(name);
@@ -158,6 +159,29 @@ fn close_repeated_traits(xml: &[u8]) -> Vec<u8> {
         }
     }
     out
+}
+
+/// Whether the next tag in `rest` closes one of `enclosing`. Ops nest
+/// legitimately (an `<add>` inside an `<add>`), so a repeated opening tag is
+/// only taken as the slip when nothing else could follow it: the HUD's stray
+/// `<_handonly>` is followed straight by its image's `</image>`. Without this
+/// the repair rewrote nested ops in the container menu and lifted its list out
+/// of `page_layout` and `cont_contents`, 49 units too far left.
+fn closes_enclosing(rest: &[u8], enclosing: &[&[u8]]) -> bool {
+    let Some(start) = rest.iter().position(|&b| b == b'<') else {
+        return false;
+    };
+    if !rest[..start].iter().all(u8::is_ascii_whitespace) {
+        return false;
+    }
+    let Some(len) = rest[start..].iter().position(|&b| b == b'>') else {
+        return false;
+    };
+    let Some(name) = rest[start..start + len].strip_prefix(b"</") else {
+        return false;
+    };
+    let name = name.trim_ascii();
+    enclosing.iter().any(|n| n.eq_ignore_ascii_case(name))
 }
 
 /// The HUD: health, magicka and fatigue bars and the compass.
@@ -301,6 +325,12 @@ mod tests {
             fixed,
             "<image name=\"a\"><_x><copy>1</copy><!-- <_x> --></_x>\n</image><image name=\"b\"/>"
         );
+    }
+
+    #[test]
+    fn nested_ops_are_left_alone() {
+        let xml = b"<rect name=\"a\"><x><add><add> 1 </add></add></x></rect>";
+        assert_eq!(close_repeated_traits(xml), xml.to_vec());
     }
 
     #[test]

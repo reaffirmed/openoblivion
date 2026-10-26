@@ -143,11 +143,13 @@ impl Scalar {
             Scalar::Str(s) => s.trim().parse().unwrap_or(0.0),
         }
     }
-    /// Truthiness follows Gamebryo: `&false;` (1) and 0 are false, anything
-    /// else true.
+    /// True from `&true;` (2) up; `&false;` (1), 0 and negatives are false.
+    /// The container rows settle the negatives: their equipped marker is
+    /// `visible = parent.user10`, and the engine keeps user10 at −1 (normal
+    /// icon) or −2 (hover icon) on rows that aren't equipped, where the
+    /// marker must not show.
     pub fn truthy(&self) -> bool {
-        let n = self.as_num();
-        n != 0.0 && n != 1.0
+        self.as_num() > 1.0
     }
 }
 
