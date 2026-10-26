@@ -13,8 +13,9 @@ use std::sync::Arc;
 use bevy::audio::{AudioSinkPlayback, PlaybackMode, SpatialAudioSink, Volume};
 use bevy::prelude::*;
 use oo_formats::sounds::SoundInfo;
+use oo_formats::world::Cell;
 use oo_sim::animated::{PlaySound, SoundRef};
-use oo_sim::cell::{PlacedRef, WorldData};
+use oo_sim::cell::{AmbientSound, CurrentCell, PlacedRef, WorldData};
 use oo_sim::script::PLAYER_REF;
 use oo_sim::{GameData, Player};
 
@@ -27,7 +28,18 @@ impl Plugin for GameAudioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SoundCache>()
             .init_resource::<Voice>()
-            .add_systems(Update, (play_sounds, play_voice, place_emitters).chain());
+            .init_resource::<Music>()
+            .add_systems(
+                Update,
+                (
+                    play_sounds,
+                    play_voice,
+                    start_ambient,
+                    play_music,
+                    place_emitters,
+                )
+                    .chain(),
+            );
     }
 }
 
@@ -105,6 +117,8 @@ struct Emitter {
     max: f32,
     /// The record's own attenuation, as a linear gain.
     gain: f32,
+    /// The reference it belongs to, for sounds that stop when it unloads.
+    owner: Option<Entity>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -165,6 +179,7 @@ fn play_sounds(
                         min: sound.min_distance.max(1.0),
                         max: sound.max_distance.max(sound.min_distance + 1.0),
                         gain,
+                        owner: None,
                     },
                 ));
             }
@@ -252,6 +267,7 @@ fn play_voice(
                     min: VOICE_MIN_DISTANCE,
                     max: VOICE_MAX_DISTANCE,
                     gain: 1.0,
+                    owner: None,
                 },
             ))
             .id(),
@@ -260,6 +276,137 @@ fn play_voice(
             .id(),
     };
     voice.playing = Some(entity);
+}
+
+/// Loops the sounds placed in the cell and the ones lights make, for as long
+/// as their reference is loaded.
+#[allow(clippy::too_many_arguments)]
+fn start_ambient(
+    mut commands: Commands,
+    world: Option<Res<WorldData>>,
+    data: Option<Res<GameData>>,
+    mut cache: ResMut<SoundCache>,
+    mut sources: ResMut<Assets<AudioSource>>,
+    added: Query<(Entity, &AmbientSound, &Transform), Added<AmbientSound>>,
+    emitters: Query<(Entity, &Emitter)>,
+    alive: Query<()>,
+) {
+    for (e, emitter) in &emitters {
+        if emitter.owner.is_some_and(|o| !alive.contains(o)) {
+            commands.entity(e).despawn();
+        }
+    }
+    let (Some(world), Some(data)) = (world, data) else {
+        return;
+    };
+    for (owner, AmbientSound(id), at) in &added {
+        let Some(sound) = world.sounds.get(id) else {
+            continue;
+        };
+        let Some(path) = cache.pick(sound, &data) else {
+            continue;
+        };
+        let Some(handle) = cache.file(&path, &data, &mut sources) else {
+            continue;
+        };
+        let speed = 1.0 + f32::from(sound.frequency_adjust) / 100.0;
+        commands.spawn((
+            AudioPlayer(handle),
+            PlaybackSettings::LOOP
+                .with_speed(speed)
+                .with_spatial(true)
+                .with_volume(Volume::Linear(0.0)),
+            Transform::from_translation(at.translation),
+            Emitter {
+                at: at.translation,
+                min: sound.min_distance.max(1.0),
+                max: sound.max_distance.max(sound.min_distance + 1.0),
+                gain: 10f32.powf(-sound.static_attenuation / 20.0),
+                owner: Some(owner),
+            },
+        ));
+    }
+}
+
+/// The music playlist for the loaded cell.
+#[derive(Resource, Default)]
+struct Music {
+    folder: Option<String>,
+    playing: Option<Entity>,
+    last: Option<String>,
+}
+
+/// Music volume, until there's a settings menu.
+const MUSIC_VOLUME: f32 = 0.5;
+
+/// Plays tracks from the folder the cell's music type names, one after
+/// another at random, never the same twice running.
+fn play_music(
+    mut commands: Commands,
+    cell: Option<Res<CurrentCell>>,
+    data: Option<Res<GameData>>,
+    mut music: ResMut<Music>,
+    mut cache: ResMut<SoundCache>,
+    mut sources: ResMut<Assets<AudioSource>>,
+    alive: Query<()>,
+) {
+    let (Some(cell), Some(data)) = (cell, data) else {
+        return;
+    };
+    // Until the game's rule for "default" is known, interiors that don't say
+    // otherwise get the exploring music.
+    let folder = match cell.music {
+        Cell::MUSIC_PUBLIC => "music\\public",
+        Cell::MUSIC_DUNGEON => "music\\dungeon",
+        _ => "music\\explore",
+    };
+    if music.folder.as_deref() != Some(folder) {
+        music.folder = Some(folder.to_owned());
+        if let Some(e) = music.playing.take()
+            && alive.contains(e)
+        {
+            commands.entity(e).despawn();
+        }
+    }
+    if music.playing.is_some_and(|e| alive.contains(e)) {
+        return;
+    }
+    let tracks: Vec<String> = cache
+        .folders
+        .entry(folder.to_owned())
+        .or_insert_with(|| {
+            data.list(folder)
+                .into_iter()
+                .filter(|f| f.ends_with(".mp3") || f.ends_with(".wav"))
+                .collect()
+        })
+        .clone();
+    let choices: Vec<&String> = tracks
+        .iter()
+        .filter(|t| tracks.len() < 2 || Some(*t) != music.last.as_ref())
+        .collect();
+    if choices.is_empty() {
+        return;
+    }
+    cache.random = cache
+        .random
+        .wrapping_mul(1_103_515_245)
+        .wrapping_add(12_345);
+    let track = choices[(cache.random >> 16) as usize % choices.len()].clone();
+    let Some(handle) = cache.file(&track, &data, &mut sources) else {
+        music.playing = None;
+        return;
+    };
+    info!("music: {track}");
+    music.last = Some(track);
+    music.playing = Some(
+        commands
+            .spawn((
+                AudioPlayer(handle),
+                PlaybackSettings::DESPAWN.with_volume(Volume::Linear(MUSIC_VOLUME)),
+            ))
+            .id(),
+    );
 }
 
 /// Full volume within `min`, fading to silence at `max`. An approximation

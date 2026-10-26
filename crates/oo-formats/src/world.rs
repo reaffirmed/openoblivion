@@ -93,6 +93,8 @@ pub struct Light {
     pub flags: u32,
     pub falloff_exponent: f32,
     pub fov: f32,
+    /// A sound it makes while lit, such as a torch's crackle (`SNAM`), or 0.
+    pub sound: u32,
 }
 
 impl Light {
@@ -118,6 +120,7 @@ impl Light {
             flags: u32_at(d, 12),
             falloff_exponent: if d.len() >= 20 { f32_at(d, 16) } else { 1.0 },
             fov: if d.len() >= 24 { f32_at(d, 20) } else { 90.0 },
+            sound: 0,
         })
     }
 }
@@ -135,6 +138,11 @@ pub fn lights(order: &LoadOrder) -> Result<HashMap<u32, Light>> {
                 let Node::Record(r) = node? else { continue };
                 let id = order.global(index, r.form_id);
                 let fields = r.fields()?;
+                let sound = fields
+                    .iter()
+                    .flatten()
+                    .find(|f| f.tag.0 == *b"SNAM" && f.data.len() >= 4)
+                    .map_or(0, |f| order.global(index, u32_at(f.data, 0)));
                 match fields
                     .iter()
                     .flatten()
@@ -142,7 +150,7 @@ pub fn lights(order: &LoadOrder) -> Result<HashMap<u32, Light>> {
                     .and_then(|f| Light::parse(f.data))
                 {
                     Some(light) if !r.is_deleted() => {
-                        out.insert(id, light);
+                        out.insert(id, Light { sound, ..light });
                     }
                     _ => {
                         out.remove(&id);
@@ -230,6 +238,14 @@ pub struct Cell {
     pub references: Vec<Reference>,
     /// Where actors can walk (`PGRD`).
     pub path_grid: Option<PathGrid>,
+    /// Which music plays (`XCMT`): see the `MUSIC_*` constants.
+    pub music: u8,
+}
+
+impl Cell {
+    pub const MUSIC_DEFAULT: u8 = 0;
+    pub const MUSIC_PUBLIC: u8 = 1;
+    pub const MUSIC_DUNGEON: u8 = 2;
 }
 
 /// A cell's navigation graph: points actors walk between, and which points
@@ -439,6 +455,12 @@ pub fn interior_cell_by_form_id(order: &LoadOrder, form_id: u32) -> Result<Optio
                 .flatten()
                 .find(|f| f.tag.0 == *b"XCLL")
                 .and_then(|f| CellLighting::parse(f.data));
+            let music = fields
+                .iter()
+                .flatten()
+                .find(|f| f.tag.0 == *b"XCMT")
+                .and_then(|f| f.data.first().copied())
+                .unwrap_or(Cell::MUSIC_DEFAULT);
             let previous_grid = found.take().and_then(|c| c.path_grid);
             found = Some(Cell {
                 form_id,
@@ -447,6 +469,7 @@ pub fn interior_cell_by_form_id(order: &LoadOrder, form_id: u32) -> Result<Optio
                 lighting,
                 references: Vec::new(),
                 path_grid: previous_grid,
+                music,
             });
             if let Some(children) = children {
                 if let Some(grid) = find_path_grid(children.children())? {

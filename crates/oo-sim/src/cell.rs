@@ -132,7 +132,14 @@ pub struct CurrentCell {
     /// The path grid's points, in world space, and their connections.
     pub path_points: Vec<Vec3>,
     pub path_edges: Vec<Vec<u16>>,
+    /// Which music plays here (`XCMT`).
+    pub music: u8,
 }
+
+/// A reference that makes a sound for as long as it's loaded: a placed sound,
+/// a torch's crackle.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct AmbientSound(pub u32);
 
 /// A reference that gives off light: a torch, a candle, a light with no mesh.
 #[derive(Component, Debug, Clone, Copy)]
@@ -394,6 +401,7 @@ fn spawn_cell(
         editor_id: cell.editor_id.clone(),
         name: cell.name.clone(),
         lighting: cell.lighting,
+        music: cell.music,
         path_points: cell.path_grid.as_ref().map_or(Vec::new(), |g| {
             g.points
                 .iter()
@@ -503,6 +511,9 @@ fn spawn_reference(commands: &mut Commands, world: &WorldData, r: &Reference) ->
             light.fov
         );
         entity.insert(LightSource(*light));
+        if light.sound != 0 {
+            entity.insert(AmbientSound(light.sound));
+        }
     }
     if let Some(t) = &r.teleport {
         let destination = world.reference_cells.get(&t.door).copied();
@@ -521,6 +532,9 @@ fn spawn_reference(commands: &mut Commands, world: &WorldData, r: &Reference) ->
             },
         });
         out.load_door = true;
+    }
+    if world.sounds.contains_key(&r.base) {
+        entity.insert(AmbientSound(r.base));
     }
     if let Some(lock) = r.lock {
         entity.insert(Lockable(lock));
