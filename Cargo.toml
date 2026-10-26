@@ -21,6 +21,7 @@ bevy_rapier3d = { version = "0.37", default-features = false, features = ["dim3"
 byroredux-core = { git = "https://github.com/matiaszanolli/ByroRedux", rev = "eafed0bc5753226a2391c0e404a3059438176603" }
 byroredux-nif = { git = "https://github.com/matiaszanolli/ByroRedux", rev = "eafed0bc5753226a2391c0e404a3059438176603" }
 byroredux-bsa = { git = "https://github.com/matiaszanolli/ByroRedux", rev = "eafed0bc5753226a2391c0e404a3059438176603" }
+byroredux-menuxml = { git = "https://github.com/matiaszanolli/ByroRedux", rev = "eafed0bc5753226a2391c0e404a3059438176603" }
 
 # Bevy is unbearably slow unoptimized; optimize dependencies even in dev builds.
 [profile.dev.package."*"]

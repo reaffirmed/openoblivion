@@ -2117,6 +2117,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "byroredux-menuxml"
+version = "0.1.0"
+source = "git+https://github.com/matiaszanolli/ByroRedux?rev=eafed0bc5753226a2391c0e404a3059438176603#eafed0bc5753226a2391c0e404a3059438176603"
+dependencies = [
+ "log",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "byroredux-nif"
 version = "0.1.0"
 source = "git+https://github.com/matiaszanolli/ByroRedux?rev=eafed0bc5753226a2391c0e404a3059438176603#eafed0bc5753226a2391c0e404a3059438176603"
@@ -4551,6 +4560,7 @@ dependencies = [
  "bevy",
  "bevy_rapier3d",
  "byroredux-core",
+ "byroredux-menuxml",
  "byroredux-nif",
  "clap",
  "oo-formats",
@@ -4562,6 +4572,7 @@ name = "oo-inspect"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "byroredux-menuxml",
  "clap",
  "oo-formats",
 ]

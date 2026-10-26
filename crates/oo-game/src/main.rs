@@ -7,6 +7,7 @@ mod actor;
 mod lighting;
 mod menu;
 mod model;
+mod xml_ui;
 
 use std::path::PathBuf;
 
@@ -122,7 +123,16 @@ fn main() {
         ..default()
     })
     .init_resource::<menu::Menu>()
-    .add_systems(Startup, (setup_scene, setup_hud, menu::setup_menu))
+    .init_resource::<xml_ui::Hud>()
+    .add_systems(
+        Startup,
+        (
+            setup_scene,
+            setup_hud,
+            menu::setup_menu,
+            xml_ui::setup_hud_overlay,
+        ),
+    )
     .add_systems(
         Update,
         (
@@ -131,6 +141,7 @@ fn main() {
             (menu::menu_input, grab_cursor, player_input, follow_player).chain(),
             debug_keys,
             (update_hud, update_cell_label, menu::update_menu),
+            xml_ui::update_hud_overlay,
             (
                 lighting::apply_cell_lighting,
                 lighting::attach_lights,

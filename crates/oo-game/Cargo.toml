@@ -14,4 +14,5 @@ clap.workspace = true
 bevy.workspace = true
 byroredux-core.workspace = true
 byroredux-nif.workspace = true
+byroredux-menuxml.workspace = true
 bevy_rapier3d = { workspace = true, features = ["debug-render-3d"] }
