@@ -280,7 +280,8 @@ const INVENTORY: (&str, &str, &str, &str) = (
     "inv_item_",
 );
 const CONTAINER: (&str, &str, &str, &str) = (
-    "menus\\main\\container_menu.xml",
+    // Unlike the inventory, the container menu sits directly in menus\.
+    "menus\\container_menu.xml",
     "cont_item_template",
     "cont_list_contents",
     "cont_item_",
