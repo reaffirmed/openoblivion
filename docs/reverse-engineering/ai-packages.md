@@ -191,6 +191,41 @@ is true there, exactly as when the activate procedure activates something. **[hi
 the activator path, the counter, the 2000-unit gate and the finish; **[medium, inf]** for the
 other kinds (read only far enough to name them).
 
+### Travel while the player isn't nearby
+
+Actors outside the loaded area run on the **low-level process**. Their packages keep
+running. For the travel step, each time the low process updates the actor, it does
+this: **[high, exe]**
+
+```
+travel (low process), each update:
+    if the actor is already at the package location: the step is done, as usual
+    if it has no path yet: build one to the package location (across cells and load doors)
+    elapsed = (game hours now − game hours at the last update) × 3600 / TimeScale   # real seconds
+              (+24 h if the day rolled over)
+    move the actor along the path for `elapsed`
+    stop early if the move takes the actor into another cell (through a door);
+    the next update continues from there
+```
+
+- So actors **neither wait at the door nor snap to the destination**. They walk the path
+  in jumps, and each jump covers the time since their last update. They arrive about
+  when they would have on foot. **[high, exe]**
+- `TimeScale` is the global (vanilla 30) that turns game hours back into real seconds.
+- A Wander package's travel step passes a stop distance of 0. Other packages pass the
+  package location's own value. **[high, exe]**
+- How often low-process actors update isn't pinned yet. Because each step uses the
+  elapsed time, the update rate changes how smooth the movement is, not when the actor
+  arrives. **[medium, inf]**
+- The move speed is the actor's normal travel speed (walk or run, per the package's
+  *always run* flag). **[medium, inf]**: the speed is applied inside the path-follow
+  routine, which wasn't traced.
+
+Example: the Emperor and the Blades go through the door into the Subterrane while the
+player stays behind. They keep walking their path in the unloaded cell and reach the
+ambush points on roughly the same schedule as when watched. When the player arrives,
+they are wherever that walk has got to.
+
 ### Flags
 
 `PKDT` flag bits (names from the public OBSE headers; the bits used in this note are

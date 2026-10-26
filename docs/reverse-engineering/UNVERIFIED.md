@@ -7,6 +7,8 @@ Every claim the notes tag **medium** or **hypothesis** (any provenance), gathere
 - **When a package is done**: Procedure names are the public OBSE names for the stored codes **[medium, inf]** (the codes and their order are exact; that each name fits what its code does was checked for follow, ambush-wait and activate). A Follow or Escort package whose target is missing gets no list and the game logs that it "is missing necessary Target Or Location Info".
 - **Ambush**: **[high, exe]** for the 200-unit and radius + 300 checks, the 10 s retry, and the order; **[medium, inf]** for "within the location radius" being measured actor-to-target (the distance call is clear, which reference it is taken from less so) and for activation of an actor being a dialogue start. A dead target ends the wait without activating.
 - **Use item at**: The activation is a real activation of the location reference with the actor as the activating reference. So the reference's `OnActivate` block runs and `IsActionRef <actor>` is true there, exactly as when the activate procedure activates something. **[high, exe]** for the activator path, the counter, the 2000-unit gate and the finish; **[medium, inf]** for the other kinds (read only far enough to …
+- **Travel while the player isn't nearby**: - How often low-process actors update isn't pinned yet. Because each step uses the elapsed time, the update rate changes how smooth the movement is, not when the actor arrives. **[medium, inf]**
+- **Travel while the player isn't nearby**: - The move speed is the actor's normal travel speed (walk or run, per the package's *always run* flag). **[medium, inf]**: the speed is applied inside the path-follow routine, which wasn't traced.
 
 ## [audio.md](audio.md)
 
