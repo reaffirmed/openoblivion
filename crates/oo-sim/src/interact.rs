@@ -171,19 +171,6 @@ pub(crate) fn activate(
             requests
                 .animations
                 .push((placed.0, AnimRequest::Open(!open.is_open())));
-            if let Some(info) = inner_door.and_then(|Door(base)| world.doors.get(base)) {
-                let sound = if open.is_open() {
-                    info.close_sound
-                } else {
-                    info.open_sound
-                };
-                if sound != 0 {
-                    sounds.write(PlaySound {
-                        source: placed.0,
-                        sound: SoundRef::Form(sound),
-                    });
-                }
-            }
             continue;
         }
         // Only the player's activations do anything else yet.

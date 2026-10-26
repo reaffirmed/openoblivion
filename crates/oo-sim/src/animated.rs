@@ -12,7 +12,7 @@ use byroredux_nif::anim::{AnimationClip, CycleType, import_kf};
 use byroredux_nif::import::import_nif_scene;
 
 use crate::GameData;
-use crate::cell::PlacedRef;
+use crate::cell::{PlacedRef, WorldData};
 use crate::script::{Pending, ScriptState};
 
 /// A door that opens in place, rather than leading to another cell: its base.
@@ -318,6 +318,8 @@ pub(crate) fn animate_objects(
         Option<&Children>,
     )>,
     mut colliders: Query<(&NodeCollider, &mut Transform)>,
+    world: Option<Res<WorldData>>,
+    mut sounds: MessageWriter<PlaySound>,
 ) {
     let requests = std::mem::take(&mut pending.animations);
     let dt = time.delta_secs();
@@ -342,6 +344,14 @@ pub(crate) fn animate_objects(
                     };
                     let now = if anim.play(name) { moving } else { settled };
                     state.doors.insert(placed.0, now);
+                    let info = door.and_then(|Door(base)| world.as_ref()?.doors.get(base));
+                    let sound = info.map_or(0, |d| if open { d.open_sound } else { d.close_sound });
+                    if sound != 0 {
+                        sounds.write(PlaySound {
+                            source: placed.0,
+                            sound: SoundRef::Form(sound),
+                        });
+                    }
                 }
                 AnimRequest::Group(code) => {
                     let name = ANIM_GROUPS.get(usize::from(code)).copied().unwrap_or("");

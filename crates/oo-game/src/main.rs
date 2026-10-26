@@ -4,6 +4,7 @@
 //! The world itself lives in `oo-sim`; this crate only draws it and takes input.
 
 mod actor;
+mod audio;
 mod dialog_menu;
 mod lighting;
 mod menu;
@@ -116,6 +117,7 @@ fn main() {
         }),
         ..default()
     }))
+    .add_plugins(audio::GameAudioPlugin)
     .add_plugins(SimPlugin(WorldConfig {
         plugins: oo_sim::active_plugins(
             args.plugins,
@@ -263,6 +265,7 @@ fn setup_scene(mut commands: Commands) {
     ));
     commands.spawn((
         Camera3d::default(),
+        audio::listener(),
         Projection::Perspective(PerspectiveProjection {
             fov: 75f32.to_radians(),
             near: 1.0,

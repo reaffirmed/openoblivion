@@ -34,6 +34,7 @@ use crate::script::{ScriptData, ScriptState, Scripted};
 use crate::{GameData, WorldConfig};
 use oo_formats::packages::{Package, packages};
 use oo_formats::settings::{Setting, game_settings};
+use oo_formats::sounds::{SoundInfo, sounds};
 
 /// A reference placed in the world. Its form ID is stable across machines
 /// that have the same plugins, which makes it a natural network ID.
@@ -87,6 +88,9 @@ pub struct WorldData {
     pub doors: HashMap<u32, DoorInfo>,
     /// Game settings (`GMST`) by lower-case editor ID.
     pub settings: HashMap<String, Setting>,
+    pub sounds: HashMap<u32, SoundInfo>,
+    /// Sounds by lower-case editor ID, for the ones the game finds by name.
+    pub sound_ids: HashMap<String, u32>,
 }
 
 impl WorldData {
@@ -206,6 +210,11 @@ pub(crate) fn load_world(
 }
 
 fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
+    let sounds = sounds(&order)?;
+    let sound_ids = sounds
+        .iter()
+        .map(|(&id, s)| (s.editor_id.to_ascii_lowercase(), id))
+        .collect();
     Ok(WorldData {
         models: model_paths(&order)?,
         reference_cells: interior_reference_cells(&order)?,
@@ -221,6 +230,8 @@ fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
         packages: packages(&order)?,
         doors: doors(&order)?,
         settings: game_settings(&order)?,
+        sound_ids,
+        sounds,
         order,
     })
 }

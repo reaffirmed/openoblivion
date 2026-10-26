@@ -16,7 +16,7 @@ anyhow = "1"
 thiserror = "2"
 flate2 = "1"
 clap = { version = "4", features = ["derive"] }
-bevy = { version = "0.20", features = ["dds"] }
+bevy = { version = "0.20", features = ["dds", "wav", "mp3"] }
 bevy_rapier3d = { version = "0.37", default-features = false, features = ["dim3", "parallel"] }
 # NIF and BSA readers from ByroRedux (MIT). Pinned to a commit: it moves fast.
 byroredux-core = { git = "https://github.com/matiaszanolli/ByroRedux", rev = "eafed0bc5753226a2391c0e404a3059438176603" }

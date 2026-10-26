@@ -73,7 +73,8 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
 - [ ] A lighting setting: "Vanilla" (the default, 1:1 through the translated shaders)
       or "Enhanced", an optional modern renderer with shadows, ambient occlusion and
       physically based falloff.
-- [ ] Doors that open (animated `DOOR` references), not just load doors
+- [x] Doors that open (animated `DOOR` references), with collision that follows them;
+      locks and keys with the game's own messages
 - [ ] Dynamic clutter (Havok bodies Oblivion simulates, like the prison's chains)
 
 ### 2. Play the tutorial dungeon, from the prison cell to the sewer exit
@@ -98,13 +99,31 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
 - [x] The script engine, compiled half: every vanilla script (9,440 counting dialogue
       and quest-stage results) decodes and runs; quest scripts on their timers, stage
       results, Enable/Disable, AddTopic, AddItem, MessageBox
-- [ ] The script engine, the rest: object scripts and their event blocks, the long
-      tail of commands, compiling source for mods that ship only source
-- [ ] AI packages, enough for the Emperor's escort and hostile rats, goblins and
-      zombies
+- [x] Object scripts and their event blocks (activate, trigger zones from Havok
+      phantoms, package start/done/change, load), Say/SayTo, MoveTo, new-game start
+      through CharacterGen
+- [ ] The script engine, the rest: the long tail of commands, compiling source for
+      mods that ship only source
+- [x] AI packages: schedules, conditions, travel, follow, wander, escort, path grids
+- [ ] The opening scene end to end: the Emperor's conversation, race and birthsign,
+      the secret wall, the assassins, the escort through the Subterrane (stage 15 of
+      CharacterGen reached on the PC so far)
+- [ ] Audio, in this order: (1) sound effects from `SOUN` records, 3D with the
+      records' distances, wired to doors, locks, pickups and footsteps; (2) voiced
+      dialogue from `Sound\Voice`, with the real line length and `.lip` timing for
+      subtitles and SayTo; (3) cell ambience and the music playlists from
+      `Data\Music`
 - [ ] Melee, archery and magic combat; health, magicka and fatigue
 - [ ] Character creation: race, birthsign, class
 - [ ] Save and load
+
+### Needs you
+
+Things that only the person can give; work carries on around them.
+
+- Reference screenshots and short clips from the original game for side-by-side
+  checks (lighting, menus, the opening scene), which need a click to launch it.
+- Priority calls when two directions compete; until then the order above stands.
 
 ### 3. Step outside: Tamriel and the Imperial City
 
