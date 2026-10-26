@@ -1,0 +1,33 @@
+# The tutorial prison from a new game, as far as the scene goes so far.
+#
+#   oo-game --data <Oblivion Data> --cell ImperialDungeon01 --script tests/replays/tutorial.txt
+#
+# The run exits with an error if a check fails. Times are simulation seconds,
+# with room to spare: voiced lines set the pace.
+
+# Chargen moves the player into the cell and Valen starts taunting.
+t10 expect stage Charactergen >= 6
+
+# The locked cell gate refuses ("This lock cannot be picked. You need a key.").
+t3 hold KeyW 1.1
+t5 key Space
+t6 expect near 420 5 57 40
+
+# Back off to the window, into the trigger zone along the back wall.
+t7 hold KeyS 2.6
+t11 expect near 824 -40 57 40
+
+# Valen's last taunt, then the Emperor and his guards come down the stairs.
+t120 expect stage Charactergen >= 9
+t130 expect stage Charactergen >= 10
+t160 expect stage Charactergen >= 12
+t180 expect stage Charactergen >= 13
+
+# With the player at the window: stand aside (14), the gate opens (15), the
+# Emperor notices the player (16) and comes over (17).
+t185 expect stage Charactergen >= 14
+t200 expect stage Charactergen >= 15
+t220 expect stage Charactergen >= 16
+t230 expect stage Charactergen >= 17
+
+t240 quit

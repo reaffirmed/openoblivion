@@ -95,7 +95,7 @@ struct CameraStart(Vec<f32>);
 #[derive(Resource)]
 struct ScreenshotOnce(PathBuf);
 
-fn main() {
+fn main() -> AppExit {
     let args = Args::parse();
     if args.camera.as_ref().is_some_and(|c| c.len() != 5) {
         eprintln!("--camera takes five numbers: x,y,z,yaw,pitch");
@@ -215,7 +215,8 @@ fn main() {
         app.insert_resource(ScreenshotOnce(path))
             .add_systems(Update, take_screenshot);
     }
-    app.run();
+    // A --script run with failed checks exits with an error.
+    app.run()
 }
 
 /// Applies `--camera`: moves the player there and turns on noclip so they stay put.
