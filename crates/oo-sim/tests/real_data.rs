@@ -244,7 +244,7 @@ fn tutorial_prison_spawn_walls_and_doors() {
 
 /// The prison's spiral-free staircase: three `prisonStairShort01` pieces climbing
 /// about 220 units to the north. Walk down it and back up, checking the player
-/// stays on the steps and doesn't get stuck on the way.
+/// stays on the steps, doesn't get stuck and isn't pushed sideways on the way.
 #[test]
 fn tutorial_prison_stairs_down_and_up() {
     let Some(data) = data_dir() else {
@@ -297,16 +297,13 @@ fn tutorial_prison_stairs_down_and_up() {
         let mut airborne = 0;
         let mut biggest_drop = 0.0f32;
         let mut last = from;
+        // Hold W at a fixed heading, no steering: the stairs shouldn't push the
+        // player sideways.
+        let mut drift = 0.0f32;
         for _ in 0..240 {
-            // Steer like a player would: keep aiming at the far end.
-            let (p, _, _) = state(&app, player);
-            let d = (to - p).with_y(0.0).normalize_or_zero();
-            app.world_mut()
-                .entity_mut(player)
-                .get_mut::<PlayerIntent>()
-                .unwrap()
-                .yaw = (-d.x).atan2(-d.z);
             run(&mut app, 1);
+            let (p, _, _) = state(&app, player);
+            drift = drift.max((p - from).with_y(0.0).cross(dir).length());
             let (p, m, _) = state(&app, player);
             if std::env::var_os("OO_TRACE").is_some() {
                 println!("  {name} feet {} grounded {}", feet(p), m.grounded);
@@ -325,7 +322,9 @@ fn tutorial_prison_stairs_down_and_up() {
             end.y - from.y,
             m.grounded
         );
+        println!("  sideways drift {drift:.1}");
         assert!(m.grounded, "walking {name}: should end on the floor");
+        assert!(drift < 25.0, "walking {name}: drifted {drift:.1} sideways");
         let climbed = end.y - from.y;
         if name == "down" {
             assert!(climbed < -150.0, "should have walked down the stairs");
@@ -404,9 +403,9 @@ fn trace_stair_profile() {
     let top = |z: f32| 437.0 + (-500.0 - z) * 0.43 + 60.0;
     let probe = move |rapier: ReadRapierContext| {
         let rapier = rapier.single().unwrap();
-        for x in [-520.0f32, -480.0, -440.0] {
+        for x in (0..=14).map(|i| -620.0f32 + i as f32 * 20.0) {
             let mut row = Vec::new();
-            for i in 0..=60 {
+            for i in (0..=60).step_by(10) {
                 let z = -500.0 - i as f32 * 10.0;
                 let hit = rapier.cast_ray(
                     Vec3::new(x, top(z), z),

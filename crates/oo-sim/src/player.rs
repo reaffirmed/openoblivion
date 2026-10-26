@@ -128,18 +128,19 @@ pub fn spawn_player(mut commands: Commands, spawn: Option<Res<SpawnPoint>>) {
     ));
 }
 
-pub fn move_player(
-    time: Res<Time>,
-    mut players: Query<(
-        &PlayerIntent,
-        &mut PlayerMotion,
-        &mut Transform,
-        &mut KinematicCharacterController,
-        Option<&KinematicCharacterControllerOutput>,
-    )>,
-) {
+type MovingPlayer<'a> = (
+    Entity,
+    &'a PlayerIntent,
+    &'a mut PlayerMotion,
+    &'a mut Transform,
+    &'a mut KinematicCharacterController,
+    Option<&'a KinematicCharacterControllerOutput>,
+);
+
+pub fn move_player(time: Res<Time>, rapier: ReadRapierContext, mut players: Query<MovingPlayer>) {
     let dt = time.delta_secs().min(0.1);
-    for (intent, mut motion, mut transform, mut controller, output) in &mut players {
+    let rapier = rapier.single().ok();
+    for (entity, intent, mut motion, mut transform, mut controller, output) in &mut players {
         let facing = Quat::from_rotation_y(intent.yaw);
         let speed = if intent.run { RUN_SPEED } else { WALK_SPEED };
 
@@ -161,8 +162,29 @@ pub fn move_player(
             motion.vertical_speed -= GRAVITY * dt;
         }
 
-        let horizontal = facing * Vec3::new(intent.movement.x, 0.0, -intent.movement.y);
-        let velocity = horizontal.normalize_or_zero() * speed + Vec3::Y * motion.vertical_speed;
+        let horizontal =
+            facing * Vec3::new(intent.movement.x, 0.0, -intent.movement.y).normalize_or_zero();
+        let mut velocity = horizontal * speed + Vec3::Y * motion.vertical_speed;
+        if motion.grounded && !intent.jump {
+            // Walk along the floor, not into it. Tilt the move into the plane of the
+            // ground underfoot, keeping its horizontal part exactly as asked. Left
+            // horizontal, the controller treats a slope as an obstacle and slides
+            // along it, which on a sideways-tilted surface pushes you sideways: up
+            // the crowned prison stairs that drifts you off the edge.
+            let normal = rapier.as_ref().and_then(|r| {
+                let below = r.cast_ray_and_get_normal(
+                    transform.translation,
+                    Vec3::NEG_Y,
+                    PLAYER_HALF_HEIGHT + PLAYER_RADIUS + 15.0,
+                    true,
+                    QueryFilter::default().exclude_rigid_body(entity),
+                )?;
+                Some(below.1.normal)
+            });
+            if let Some(n) = normal.filter(|n| n.y > 0.5) {
+                velocity.y = -(velocity.x * n.x + velocity.z * n.z) / n.y;
+            }
+        }
         controller.translation = Some(velocity * dt);
     }
 }
