@@ -221,6 +221,16 @@ fn spawn_cell(commands: &mut Commands, world: &WorldData, cell: &Cell) -> Option
             placed.push(translation);
         }
         if let Some(light) = world.lights.get(&r.base) {
+            debug!(
+                "light {:08X} at {:?}: radius {}, colour {:?}, flags {:#x}, falloff {}, fov {}",
+                r.form_id,
+                r.position,
+                light.radius,
+                light.color,
+                light.flags,
+                light.falloff_exponent,
+                light.fov
+            );
             entity.insert(LightSource(*light));
         }
         if let Some(t) = &r.teleport {
@@ -264,6 +274,10 @@ fn spawn_cell(commands: &mut Commands, world: &WorldData, cell: &Cell) -> Option
             (false, None) => "above the middle of the cell".to_owned(),
         },
     );
+    match &cell.lighting {
+        Some(l) => info!("cell lighting (XCLL): {l:?}"),
+        None => info!("cell has no XCLL lighting"),
+    }
     commands.insert_resource(CurrentCell {
         form_id: cell.form_id,
         editor_id: cell.editor_id.clone(),

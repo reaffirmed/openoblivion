@@ -2,7 +2,8 @@
 //! directional light and fog (`XCLL`), and a point light per light reference.
 //!
 //! Oblivion's lighting isn't physically based, so the brightness constants
-//! here are tuned by eye against the original game. `--light-scale` and
+//! here are tuned by eye against the original game (the tutorial prison,
+//! ImperialDungeon01: dim, warm pools under torches, dark corners). `--light-scale` and
 //! `--ambient-scale` adjust them at runtime while tuning.
 
 use bevy::pbr::{DistanceFog, FogFalloff};
@@ -18,11 +19,11 @@ pub struct LightingTuning {
 }
 
 /// Ambient brightness for a full-white `XCLL` ambient colour.
-const AMBIENT_BRIGHTNESS: f32 = 1500.0;
+const AMBIENT_BRIGHTNESS: f32 = 750.0;
 /// Illuminance, in lux, of the cell's directional light at full white.
-const DIRECTIONAL_LUX: f32 = 1500.0;
+const DIRECTIONAL_LUX: f32 = 450.0;
 /// Illuminance, in lux, a light gives at half its radius at full white.
-const POINT_LUX_AT_HALF_RADIUS: f32 = 2500.0;
+const POINT_LUX_AT_HALF_RADIUS: f32 = 750.0;
 
 /// The light that stands in for the cell's `XCLL` directional light.
 #[derive(Component)]
