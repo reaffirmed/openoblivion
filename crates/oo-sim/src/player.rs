@@ -237,6 +237,21 @@ fn step_up(rapier: &RapierContext, entity: Entity, from: Vec3, step: Vec3) -> Op
     let dir = across / len;
     let shape = Collider::capsule_y(PLAYER_HALF_HEIGHT, PLAYER_RADIUS);
     let filter = QueryFilter::default().exclude_rigid_body(entity);
+    // A step is low: from the waist up the way must be clear. Rays, as shape
+    // casts that start touching a mesh (a gate's bars) can miss it. Several
+    // across the body's width, so bars with gaps still count.
+    let side = Vec3::Y.cross(dir) * (PLAYER_RADIUS * 0.6);
+    for height in [0.0, PLAYER_HALF_HEIGHT * 0.5, PLAYER_HALF_HEIGHT] {
+        for offset in [Vec3::ZERO, side, -side] {
+            let start = from + Vec3::Y * height + offset;
+            if rapier
+                .cast_ray(start, dir, PLAYER_RADIUS + len + 4.0, true, filter)
+                .is_some()
+            {
+                return None;
+            }
+        }
+    }
     let options = |max| ShapeCastOptions {
         max_time_of_impact: max,
         target_distance: 0.5,
@@ -269,5 +284,16 @@ fn step_up(rapier: &RapierContext, entity: Entity, from: Vec3, step: Vec3) -> Op
     // tread, or its edge under the capsule's rounded bottom.
     // A cast that starts inside something has no details: it isn't a landing.
     let normal = drop.details.filter(|_| drop.time_of_impact > 0.0)?.normal1;
-    (landed.y >= from.y + 2.0 && normal.y > 0.7).then_some(landed + Vec3::Y * 0.5)
+    if landed.y < from.y + 2.0 || normal.y <= 0.7 {
+        return None;
+    }
+    // And there must be room to stand there.
+    let to = landed + Vec3::Y * 0.5;
+    let slimmer = Collider::capsule_y(PLAYER_HALF_HEIGHT - 1.0, PLAYER_RADIUS - 1.0);
+    let mut inside = false;
+    rapier.intersect_shape(to, Quat::IDENTITY, &slimmer, filter, |_, _| {
+        inside = true;
+        false
+    });
+    (!inside).then_some(to)
 }

@@ -131,9 +131,32 @@ fn attach_colliders(
     mut animated: ResMut<AnimatedModels>,
 ) {
     let Some(data) = data else { return };
+    // OO_COLLIDERS=<part of a model path> logs that model's collision parts.
+    let watched = std::env::var("OO_COLLIDERS")
+        .ok()
+        .map(|w| w.to_ascii_lowercase());
+    let log_parts = |model: &str, parts: &mut dyn Iterator<Item = &ColliderPart>| {
+        if watched
+            .as_deref()
+            .is_some_and(|w| model.to_ascii_lowercase().contains(w))
+        {
+            for part in parts {
+                let aabb = part.collider.raw.compute_local_aabb();
+                info!(
+                    "{model} part {:?} at {} scale {}: local box {:?} to {:?}",
+                    part.collider.raw.shape_type(),
+                    part.transform.translation,
+                    part.transform.scale,
+                    aabb.mins,
+                    aabb.maxs
+                );
+            }
+        }
+    };
     for (entity, model) in &added {
         // Animated models get colliders that ride on their nodes.
         if let Some(anims) = animated.load(&model.0, &data) {
+            log_parts(&model.0, &mut anims.colliders.iter().map(|(_, p)| p));
             let anim = ObjectAnimation::new(anims.clone());
             let pose = anim.pose();
             commands
@@ -155,6 +178,7 @@ fn attach_colliders(
             continue;
         }
         let parts = cache.load(&model.0, &data);
+        log_parts(&model.0, &mut parts.iter());
         if parts.is_empty() {
             continue;
         }

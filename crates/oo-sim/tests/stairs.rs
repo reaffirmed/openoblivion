@@ -163,3 +163,45 @@ fn a_ledge_too_high_stops_the_player() {
         "went through the ledge: {end}"
     );
 }
+
+#[test]
+fn a_barred_gate_on_a_low_sill_stops_the_player() {
+    let mut app = app();
+    run(&mut app, 1);
+    let world = app.world_mut();
+    world.spawn((
+        RigidBody::Fixed,
+        Collider::cuboid(400.0, 10.0, 400.0),
+        Transform::from_xyz(0.0, -10.0, 0.0),
+    ));
+    // A 20-unit sill, easy to step onto, with bars two units thick and ten
+    // apart rising from it, as a triangle mesh.
+    world.spawn((
+        RigidBody::Fixed,
+        Collider::cuboid(100.0, 10.0, 6.0),
+        Transform::from_xyz(0.0, 10.0, -100.0),
+    ));
+    for i in -10..=10 {
+        let bar = Collider::cuboid(1.0, 70.0, 1.0);
+        let (vertices, indices) = bar.raw.as_cuboid().unwrap().to_trimesh();
+        let mesh = Collider::trimesh(vertices, indices).unwrap();
+        world.spawn((
+            RigidBody::Fixed,
+            mesh,
+            Transform::from_xyz(i as f32 * 12.0, 90.0, -100.0),
+        ));
+    }
+    let player = app
+        .world_mut()
+        .query_filtered::<Entity, With<Player>>()
+        .single(app.world())
+        .unwrap();
+    app.world_mut()
+        .entity_mut(player)
+        .get_mut::<Transform>()
+        .unwrap()
+        .translation = Vec3::new(0.0, PLAYER_HALF_HEIGHT + PLAYER_RADIUS + 2.0, 0.0);
+    run(&mut app, 60);
+    let end = walk(&mut app, player, 0.0, 120);
+    assert!(end.z > -100.0, "went through the gate: {end}");
+}
