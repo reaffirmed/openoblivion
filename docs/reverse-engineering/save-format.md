@@ -133,7 +133,7 @@ and actor fields:
 | 1–3 | as `REFR` | cell-change, moved and new-cell parts |
 | 4 | — | u8 process level: 0 high, 1 middle-high, 2 middle-low, 3 low, 255 none |
 | 5–10 | as `REFR` | form flags, inventory, extra-data list (**always present** for actors), the three u16-counted blocks, `0x10` |
-| 11 | process level ≠ 255 | the AI process's own data (not decoded yet) |
+| 11 | process level ≠ 255 | the AI process's own data (below) |
 | 12 | — | actor fields: u32, u8, u8, u8 |
 | 13 | `0x40` | u8 |
 | 14 | horse creatures only | u8 "has rider/owner", then u32 form index if set |
@@ -144,9 +144,18 @@ and actor fields:
 | 19 | `0x200000` | actor-value modifiers: u16 count, per entry u8 actor value + f32 |
 | 20 | — | u8, u32 form index, u32 form index, u32, u32, u8, u8, u32, u32, u8, u8 (later-version fields) |
 
-Checked on all saves: of the 47,066 actor records without an AI process, 44,157 (94%)
-decode exactly; the rest hit rarer extra-data payloads. Records with a process (about
-80% of actor records) need the process block decoded next. The actor-value modifier block
+**AI process block** (item 11), built up by process level:
+
+| Level | Data |
+|-------|------|
+| all | u32 current package (form index, 0 = none); if non-zero: under `0x20000` some package types add a u8 and package-specific data, then u32; then u32, u32 |
+| low (3) and up | u32, u32, u8 ×5, u32, u32, u32 form index, u32, u32 form index, u32 form index; under `0x400000` an actor-value-modifier block; u32, u8 |
+| middle-low (2) and up | u32; under `0x100000` an actor-value-modifier block |
+| middle-high (1), high (0) | more state (not decoded yet) |
+
+Checked on all saves: **189,693 of 197,266 `ACHR` (96%)** and **41,233 of 52,491 `ACRE`
+(79%)** records decode exactly. Most of the rest are actors in the middle-high or high
+process (in full-detail AI when the game was saved) or carry package-specific data. The actor-value modifier block
 is the same one `NPC_` records use for bit `0x10000000` (2 + 5 × count bytes; 3 entries =
 17 bytes).
 
@@ -218,13 +227,13 @@ with the script-variable block filling the remainder.
 | `QUST` and `CELL` layouts | Executable: their save routines; `QUST` also checked on all saves | confirmed (`CELL` not yet checked on saves) |
 | `INFO` marker | All saves | confirmed (its meaning: likely) |
 | `REFR` layout and extra-data payloads | Executable: the reference, inventory, extra-data and script-variable save routines; then a decoder run over all 932,274 reference records (99.98% exact) | confirmed; bit meanings marked "likely" or open where noted |
-| `ACHR`/`ACRE` layout | Executable: actor and mobile-object save routines; decoder over all actor records without a process (94% exact) | confirmed for the parts listed; process block open |
+| `ACHR`/`ACRE` layout | Executable: actor, mobile-object and base/low/middle-low process save routines; decoder over all actor records (96% / 79% exact) | confirmed for the parts listed; higher process levels open |
 | `NPC_` layout | Executable: the NPC, actor-base, actor-base-data, spell-list and AI-data save routines; decoder over all 159,906 records (99.98% exact) | confirmed |
 
 ## Open
 
-1. Still to do: the AI process block inside `ACHR`/`ACRE` records (per process level), the
-   meanings of the unnamed actor fields, and the two open `CELL` blocks.
+1. Still to do: middle-high and high process data, package-specific data, the meanings of
+   the unnamed actor fields, and the two open `CELL` blocks.
 2. Contents of the eight size-prefixed blobs (processes, weather, quick keys…).
 3. How the game applies change records on load (order, what happens to records whose form
    no longer exists).

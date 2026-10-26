@@ -70,7 +70,7 @@ a fraction of its functions read.
 | Menus | 5 | layout, scaling, entities done | [menu-layout.md](menu-layout.md) |
 | Actors and animation | 6 | not started | |
 | Cell loading | 7 | not started | |
-| Save format | 8 | file layout; QUST, CELL, INFO, REFR, NPC_ done (about 75% of all saved records checked exact); placed actors open | [save-format.md](save-format.md) |
+| Save format | 8 | all main record types decoded; about 89% of all saved records checked exact (cells not yet checked); high-level AI process data open | [save-format.md](save-format.md) |
 | Lighting | — | attenuation formula done; shader side open | [light-falloff.md](light-falloff.md) |
 
-Functions studied so far: about 190 of roughly 9,500 game-code functions (2%). Script VM and conditions documented; dialogue, AI packages, combat formulas and the save format partly.
+Functions studied so far: about 240 of roughly 9,500 game-code functions (2.5%). Script VM, conditions and the save format largely documented; dialogue, AI packages and combat formulas partly; new-game path done.
