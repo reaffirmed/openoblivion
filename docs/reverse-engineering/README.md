@@ -51,4 +51,5 @@ addresses. Nothing from there is committed; only the distilled fact moves here.
 | [script-commands.md](script-commands.md) | Script command names, opcodes, parameter types | done |
 | [script-vm.md](script-vm.md) | Compiled script format and how scripts run | mostly done |
 | [conditions.md](conditions.md) | How condition lists (CTDA) are evaluated, and what vanilla uses | done |
+| [dialogue.md](dialogue.md) | How a topic picks its response | partly done |
 | [light-falloff.md](light-falloff.md) | How a LIGH radius becomes attenuation | formula known; shader use open |

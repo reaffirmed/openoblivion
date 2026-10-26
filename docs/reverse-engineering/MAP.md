@@ -64,7 +64,7 @@ a fraction of its functions read.
 | Subsystem | Roadmap order | Status | Notes |
 |-----------|--------------:|--------|-------|
 | Script VM and command semantics | 1 | format fully decoded; runner, branches, Set, errors documented; evaluator and event tests open | [script-commands.md](script-commands.md), [script-vm.md](script-vm.md) |
-| Dialogue and quest conditions | 2 | condition evaluation done; dialogue selection not started | [conditions.md](conditions.md) |
+| Dialogue and quest conditions | 2 | conditions and response picking done; topic list and quest stages open | [conditions.md](conditions.md), [dialogue.md](dialogue.md) |
 | AI packages | 3 | not started | |
 | Combat and levelling formulas | 4 | not started | |
 | Menus | 5 | layout, scaling, entities done | [menu-layout.md](menu-layout.md) |
