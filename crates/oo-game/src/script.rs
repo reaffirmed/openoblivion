@@ -37,10 +37,14 @@
 //! t59 god                                   # the player's health stays full
 //! t61 travel 000248B2                       # walk there over the path grid and open it
 //! t62 equip 000229A2                       # equip an item, as from the inventory
+//! t62 travel 000178C3                       # walking to a body opens it
+//! t62 take all                             # take everything and close it
 //! t63 fight 0003F0A1                        # close in on an actor and swing until it's dead
 //! t70 expect cell ImperialDungeon04          # the cell the player is in (or its form)
 //! t70 expect item 0000000A >= 2              # how many the player carries
 //! t70 expect actor 00032A17 cell 00022288    # an actor's cell, loaded or not
+//! t75 await stage Charactergen >= 30 120     # hold later steps until a check passes,
+//!                                             # up to 120 s; they then run as late
 //! t80 quit
 //! ```
 //!
@@ -94,8 +98,13 @@ enum Action {
     ExpectDead(u32, bool),
     /// Equip an item the player carries, as the inventory menu does.
     Equip(u32),
+    /// Take everything from the open container or body and close it.
+    TakeAll,
     /// Close in on an actor and keep swinging at it until it's dead or gone.
     Fight(u32),
+    /// Hold the later steps until a check passes, for at most this many
+    /// seconds, then run them that much later than they say.
+    Await(Box<Action>, f32),
     /// The current cell, by editor ID or form ID.
     ExpectCell(String),
     /// How many of an item the player carries.
@@ -182,6 +191,11 @@ pub struct Script {
     god: bool,
     /// The actor `fight` is after, and the seconds to the next swing.
     fight: Option<(u32, f32)>,
+    /// The `await` step holding the ones after it: its index, its check, and
+    /// the simulation time it gives up at.
+    waiting: Option<(usize, Action, f32)>,
+    /// How much later than written the timed steps run, from awaits.
+    delay: f32,
     /// Steps run that a player couldn't take.
     debug_steps: u32,
 }
@@ -228,6 +242,8 @@ impl Plugin for ScriptPlugin {
                     god: false,
                     debug_steps: 0,
                     fight: None,
+                    waiting: None,
+                    delay: 0.0,
                 })
                 .add_systems(PreUpdate, run_script.after(InputSystems));
             }
@@ -244,8 +260,17 @@ fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
         if line.is_empty() {
             continue;
         }
+        let step = step(line).map_err(|e| anyhow::anyhow!("line {}: {e}", n + 1))?;
+        steps.push(step);
+    }
+    Ok(steps)
+}
+
+/// One step: when, then what.
+fn step(line: &str) -> anyhow::Result<(When, Action)> {
+    {
         let mut words = line.split_whitespace();
-        let bad = || anyhow::anyhow!("line {}: can't read {line:?}", n + 1);
+        let bad = || anyhow::anyhow!("can't read {line:?}");
         let when = words.next().ok_or_else(bad)?;
         let when = match when.strip_prefix('t') {
             Some(seconds) => When::Seconds(seconds.parse()?),
@@ -287,6 +312,7 @@ fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
             "click" => Action::Click,
             "god" => Action::God,
             "equip" => Action::Equip(hex(words.next().ok_or_else(bad)?)?),
+            "take" if words.next() == Some("all") => Action::TakeAll,
             "fight" => Action::Fight(hex(words.next().ok_or_else(bad)?)?),
             "travel" => Action::Travel(
                 u32::from_str_radix(words.next().ok_or_else(bad)?, 16).map_err(|_| bad())?,
@@ -297,6 +323,12 @@ fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
             "wheel" => Action::Wheel(words.next().ok_or_else(bad)?.parse()?),
             "shot" => Action::Shot(words.next().ok_or_else(bad)?.into()),
             "quit" => Action::Quit,
+            "await" => {
+                let rest: Vec<&str> = words.collect();
+                let (seconds, check) = rest.split_last().ok_or_else(bad)?;
+                let (_, check) = step(&format!("t0 expect {}", check.join(" ")))?;
+                Action::Await(Box::new(check), seconds.parse()?)
+            }
             "block" => Action::Block(number(&mut words)?),
             "expect" => match words.next().ok_or_else(bad)? {
                 "stage" => {
@@ -325,8 +357,7 @@ fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
                         Some("near") => {}
                         Some("cell") => {
                             let cell = hex(words.next().ok_or_else(bad)?)?;
-                            steps.push((when, Action::ExpectActorCell(id, cell)));
-                            continue;
+                            return Ok((when, Action::ExpectActorCell(id, cell)));
                         }
                         _ => return Err(bad()),
                     }
@@ -353,9 +384,8 @@ fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
             },
             _ => return Err(bad()),
         };
-        steps.push((when, action));
+        Ok((when, action))
     }
-    Ok(steps)
 }
 
 fn hex(word: &str) -> anyhow::Result<u32> {
@@ -588,17 +618,122 @@ fn run_script(
     {
         v.health = v.max_health;
     }
+    // What a check step finds, and why it fails if it does.
+    let evaluate = |action: &Action| -> Option<(bool, String)> {
+        match action.clone() {
+            Action::ExpectStage(quest, op, want) => {
+                let id = world.as_ref().and_then(|w| {
+                    w.scripting
+                        .dialogue
+                        .quests
+                        .iter()
+                        .find(|(_, q)| q.editor_id.eq_ignore_ascii_case(&quest))
+                        .map(|(&id, _)| id)
+                });
+                let have = id.map(|id| state.stage(id));
+                let pass = have.is_some_and(|h| op.holds(h, want));
+                Some((
+                    pass,
+                    format!("stage {quest} is {have:?}, wanted {op:?} {want}"),
+                ))
+            }
+            Action::ExpectHealth(who, op, want) => {
+                let r = who.unwrap_or(oo_sim::script::PLAYER_REF);
+                let have = state.vitals.get(&r).map(|v| v.health);
+                let pass = have.is_some_and(|h| op.holds(h, want));
+                Some((
+                    pass,
+                    format!("{r:08X} has health {have:?}, wanted {op:?} {want}"),
+                ))
+            }
+            Action::ExpectDead(r, dead) => {
+                let have = state.vitals.get(&r).map(|v| v.dead);
+                Some((
+                    have == Some(dead),
+                    format!("{r:08X} dead is {have:?}, wanted {dead}"),
+                ))
+            }
+            Action::ExpectCell(want) => {
+                let have = cell.as_deref().map(|c| (c.form_id, c.editor_id.clone()));
+                let pass = have.as_ref().is_some_and(|(form, id)| {
+                    id.eq_ignore_ascii_case(&want) || hex(&want).is_ok_and(|w| w == *form)
+                });
+                Some((pass, format!("the player is in {have:08X?}, wanted {want}")))
+            }
+            Action::ExpectItem(item, op, want) => {
+                let have = inventory.single().map_or(0, |i| i.count(item));
+                Some((
+                    op.holds(have, want),
+                    format!("the player has {have} of {item:08X}, wanted {op:?} {want}"),
+                ))
+            }
+            Action::ExpectActorCell(r, want) => {
+                // Loaded, it's where the player is; otherwise where it was
+                // moved to, or where it was placed.
+                let have = if actors.iter().any(|(p, ..)| p.0 == r) {
+                    cell.as_deref().map(|c| c.form_id)
+                } else {
+                    changes
+                        .relocated
+                        .get(&r)
+                        .map(|l| l.cell)
+                        .or_else(|| world.as_ref().and_then(|w| w.reference_cell(r)))
+                };
+                Some((
+                    have == Some(want),
+                    format!("{r:08X} is in {have:08X?}, wanted {want:08X}"),
+                ))
+            }
+            Action::ExpectNear(who, at, radius) => {
+                let position = match who {
+                    None => player.single().ok().map(|t| t.translation),
+                    Some(id) => actors
+                        .iter()
+                        .find(|(r, ..)| r.0 == id)
+                        .map(|(_, t, _)| t.translation),
+                };
+                let pass = position.is_some_and(|p| p.distance(at) <= radius);
+                Some((
+                    pass,
+                    format!("{who:08X?} is at {position:?}, wanted within {radius} of {at}"),
+                ))
+            }
+            _ => None,
+        }
+    };
     let frame = script.frame;
     let now = fixed.elapsed_secs();
+    if let Some((i, check_step, until)) = script.waiting.clone() {
+        let (pass, why) = evaluate(&check_step).unwrap_or_default();
+        if pass || now >= until {
+            if let When::Seconds(t) = script.steps[i].0 {
+                script.delay = script.delay.max(now - t);
+            }
+            script.waiting = None;
+            info!(
+                "script: awaited {check_step:?}; steps now run {:.1} s late",
+                script.delay
+            );
+            check(&mut script, pass, || format!("gave up waiting: {why}"));
+        }
+    }
     let mut due: Vec<Action> = Vec::new();
     for i in 0..script.steps.len() {
+        if script.waiting.is_some() {
+            break;
+        }
         let ready = match script.steps[i].0 {
             When::Frame(f) => f == frame,
-            When::Seconds(t) => !script.done[i] && now >= t,
+            When::Seconds(t) => !script.done[i] && now >= t + script.delay,
         };
         if ready {
             script.done[i] = true;
-            due.push(script.steps[i].1.clone());
+            match &script.steps[i].1 {
+                Action::Await(check_step, seconds) => {
+                    script.waiting = Some((i, (**check_step).clone(), now + seconds));
+                }
+                action => due.push(action.clone()),
+            }
         }
     }
     for action in due {
@@ -648,6 +783,12 @@ fn run_script(
             Action::Equip(item) => {
                 if let Ok(mut a) = actions.single_mut() {
                     a.0.push(oo_sim::PlayerAction::Equip(item));
+                }
+            }
+            Action::TakeAll => {
+                if let Ok(mut a) = actions.single_mut() {
+                    a.0.push(oo_sim::PlayerAction::TakeAll);
+                    a.0.push(oo_sim::PlayerAction::CloseContainer);
                 }
             }
             Action::Fight(r) => script.fight = Some((r, 0.0)),
@@ -737,83 +878,15 @@ fn run_script(
                     exit.write(AppExit::Success);
                 }
             }
-            Action::ExpectStage(quest, op, want) => {
-                let id = world.as_ref().and_then(|w| {
-                    w.scripting
-                        .dialogue
-                        .quests
-                        .iter()
-                        .find(|(_, q)| q.editor_id.eq_ignore_ascii_case(&quest))
-                        .map(|(&id, _)| id)
-                });
-                let have = id.map(|id| state.stage(id));
-                let pass = have.is_some_and(|h| op.holds(h, want));
-                check(&mut script, pass, || {
-                    format!("stage {quest} is {have:?}, wanted {op:?} {want}")
-                });
-            }
             Action::Block(seconds) => {
                 mouse.press(MouseButton::Right);
                 script.blocking = seconds;
             }
-            Action::ExpectHealth(who, op, want) => {
-                let r = who.unwrap_or(oo_sim::script::PLAYER_REF);
-                let have = state.vitals.get(&r).map(|v| v.health);
-                let pass = have.is_some_and(|h| op.holds(h, want));
-                check(&mut script, pass, || {
-                    format!("{r:08X} has health {have:?}, wanted {op:?} {want}")
-                });
-            }
-            Action::ExpectDead(r, dead) => {
-                let have = state.vitals.get(&r).map(|v| v.dead);
-                check(&mut script, have == Some(dead), || {
-                    format!("{r:08X} dead is {have:?}, wanted {dead}")
-                });
-            }
-            Action::ExpectCell(want) => {
-                let have = cell.as_deref().map(|c| (c.form_id, c.editor_id.clone()));
-                let pass = have.as_ref().is_some_and(|(form, id)| {
-                    id.eq_ignore_ascii_case(&want) || hex(&want).is_ok_and(|w| w == *form)
-                });
-                check(&mut script, pass, || {
-                    format!("the player is in {have:08X?}, wanted {want}")
-                });
-            }
-            Action::ExpectItem(item, op, want) => {
-                let have = inventory.single().map_or(0, |i| i.count(item));
-                check(&mut script, op.holds(have, want), || {
-                    format!("the player has {have} of {item:08X}, wanted {op:?} {want}")
-                });
-            }
-            Action::ExpectActorCell(r, want) => {
-                // Loaded, it's where the player is; otherwise where it was
-                // moved to, or where it was placed.
-                let have = if actors.iter().any(|(p, ..)| p.0 == r) {
-                    cell.as_deref().map(|c| c.form_id)
-                } else {
-                    changes
-                        .relocated
-                        .get(&r)
-                        .map(|l| l.cell)
-                        .or_else(|| world.as_ref().and_then(|w| w.reference_cell(r)))
-                };
-                check(&mut script, have == Some(want), || {
-                    format!("{r:08X} is in {have:08X?}, wanted {want:08X}")
-                });
-            }
-            Action::ExpectNear(who, at, radius) => {
-                let position = match who {
-                    None => player.single().ok().map(|t| t.translation),
-                    Some(id) => actors
-                        .iter()
-                        .find(|(r, ..)| r.0 == id)
-                        .map(|(_, t, _)| t.translation),
-                };
-                let pass = position.is_some_and(|p| p.distance(at) <= radius);
-                check(&mut script, pass, || {
-                    format!("{who:08X?} is at {position:?}, wanted within {radius} of {at}")
-                });
-            }
+            Action::Await(..) => unreachable!("awaits are handled above"),
+            check_step => match evaluate(&check_step) {
+                Some((pass, why)) => check(&mut script, pass, || why),
+                None => unreachable!("{check_step:?} isn't a check"),
+            },
         }
     }
 }
@@ -855,7 +928,8 @@ mod tests {
             &path,
             "t1 travel 000248B2\nt2 expect cell ImperialDungeon04\n\
              t3 expect item 0000000A >= 2\nt4 expect actor 00032A17 cell 00022288\n\
-             t5 door 00026C11\nt6 fight 0003F0A1\nt7 equip 000229A2\n",
+             t5 door 00026C11\nt6 fight 0003F0A1\nt7 equip 000229A2\nt8 take all\n\
+             t9 await stage Charactergen >= 22 60\nt10 await actor 00032A17 cell 00022288 30\n",
         )
         .unwrap();
         let steps = load(&path).unwrap();
@@ -874,5 +948,10 @@ mod tests {
         assert!(!steps[0].1.is_debug());
         assert!(matches!(steps[5].1, Action::Fight(0x3F0A1)));
         assert!(matches!(steps[6].1, Action::Equip(0x229A2)));
+        assert!(matches!(steps[7].1, Action::TakeAll));
+        assert!(matches!(&steps[8].1, Action::Await(c, 60.0)
+            if matches!(**c, Action::ExpectStage(ref q, Compare::Ge, 22) if q == "Charactergen")));
+        assert!(matches!(&steps[9].1, Action::Await(c, 30.0)
+            if matches!(**c, Action::ExpectActorCell(0x32A17, 0x22288))));
     }
 }
