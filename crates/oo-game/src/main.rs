@@ -53,6 +53,13 @@ struct Args {
     /// Turn off vsync to run as fast as the GPU allows.
     #[arg(long)]
     no_vsync: bool,
+    /// Window size in pixels, e.g. "1920x1080".
+    #[arg(long, value_parser = parse_size)]
+    size: Option<(u32, u32)>,
+    /// Turn the player this many degrees per second, for measuring what turning
+    /// costs (the compass redraws as the heading changes).
+    #[arg(long, allow_negative_numbers = true)]
+    spin: Option<f32>,
     /// Log frames per second and frame time every second.
     #[arg(long)]
     fps: bool,
@@ -94,6 +101,9 @@ fn main() {
             } else {
                 PresentMode::AutoVsync
             },
+            resolution: args.size.map_or_else(default, |(w, h)| {
+                bevy::window::WindowResolution::new(w, h).with_scale_factor_override(1.0)
+            }),
             ..default()
         }),
         ..default()
@@ -155,6 +165,10 @@ fn main() {
     );
     if let Some(camera) = args.camera {
         app.insert_resource(CameraStart(camera));
+    }
+    if let Some(degrees_per_second) = args.spin {
+        app.insert_resource(Spin(degrees_per_second))
+            .add_systems(Update, spin.after(player_input));
     }
     if args.fps {
         app.add_plugins((
@@ -247,6 +261,16 @@ fn grab_cursor(
 /// Keyboard and mouse to [`PlayerIntent`], with Oblivion's default bindings:
 /// WASD, Shift to run (Caps Lock toggles), E to jump, Space to activate.
 /// N toggles noclip.
+/// `--spin`: degrees per second to turn the player.
+#[derive(Resource)]
+struct Spin(f32);
+
+fn spin(time: Res<Time>, rate: Res<Spin>, mut players: Query<&mut PlayerIntent, With<Player>>) {
+    for mut intent in &mut players {
+        intent.yaw += rate.0.to_radians() * time.delta_secs();
+    }
+}
+
 fn player_input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<AccumulatedMouseMotion>,
@@ -422,4 +446,13 @@ fn update_cell_label(cell: Option<Res<CurrentCell>>, mut label: Query<&mut Text,
     {
         text.0 = cell.name.clone().unwrap_or_else(|| cell.editor_id.clone());
     }
+}
+
+/// Parses "1920x1080".
+fn parse_size(s: &str) -> Result<(u32, u32), String> {
+    let (w, h) = s
+        .split_once(['x', 'X'])
+        .ok_or_else(|| format!("expected WIDTHxHEIGHT, got {s:?}"))?;
+    let n = |v: &str| v.trim().parse::<u32>().map_err(|e| format!("{v:?}: {e}"));
+    Ok((n(w)?, n(h)?))
 }
