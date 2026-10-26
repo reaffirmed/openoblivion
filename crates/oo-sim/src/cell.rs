@@ -106,6 +106,14 @@ pub struct WorldData {
 }
 
 impl WorldData {
+    /// The interior cell a reference is placed in by the plugins, before
+    /// anything moves it (see [`WorldChanges::relocated`]).
+    ///
+    /// [`WorldChanges::relocated`]: crate::inventory::WorldChanges::relocated
+    pub fn reference_cell(&self, reference: u32) -> Option<u32> {
+        self.reference_cells.get(&reference).copied()
+    }
+
     /// A string game setting, such as a UI message.
     pub fn setting(&self, editor_id: &str) -> Option<&str> {
         match self.settings.get(&editor_id.to_ascii_lowercase())? {

@@ -35,9 +35,22 @@
 //!                                              # (through load doors it goes through too)
 //! t58 follow off
 //! t59 god                                   # the player's health stays full
-//! t60 door 00026C11                         # go through a load door here, from anywhere
 //! t61 travel 000248B2                       # walk there over the path grid and open it
-//! t60 quit
+//! t62 equip 000229A2                       # equip an item, as from the inventory
+//! t63 fight 0003F0A1                        # close in on an actor and swing until it's dead
+//! t70 expect cell ImperialDungeon04          # the cell the player is in (or its form)
+//! t70 expect item 0000000A >= 2              # how many the player carries
+//! t70 expect actor 00032A17 cell 00022288    # an actor's cell, loaded or not
+//! t80 quit
+//! ```
+//!
+//! Some steps do what a player can't, to reach a later part of the game
+//! quickly. A run that uses one says so at the end, and the gameplay replays
+//! mustn't (a test checks `tests/replays/tutorial.txt`):
+//!
+//! ```text
+//! t90 door 00026C11                         # through a load door here, from anywhere
+//! t91 god                                   # the player's health stays full
 //! ```
 
 use std::collections::VecDeque;
@@ -79,6 +92,23 @@ enum Action {
     Block(f32),
     ExpectHealth(Option<u32>, Compare, f32),
     ExpectDead(u32, bool),
+    /// Equip an item the player carries, as the inventory menu does.
+    Equip(u32),
+    /// Close in on an actor and keep swinging at it until it's dead or gone.
+    Fight(u32),
+    /// The current cell, by editor ID or form ID.
+    ExpectCell(String),
+    /// How many of an item the player carries.
+    ExpectItem(u32, Compare, i32),
+    /// The cell an actor is in, loaded or not, by form ID.
+    ExpectActorCell(u32, u32),
+}
+
+impl Action {
+    /// Whether a step does what a player can't.
+    fn is_debug(&self) -> bool {
+        matches!(self, Self::Door(_) | Self::God)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -146,9 +176,22 @@ pub struct Script {
     follow_seen: Option<(Vec2, Vec2)>,
     /// A door to open once the gotos are done: the point to face.
     open_door: Option<Vec2>,
+    /// Frames until the player activates what they face, once facing a door.
+    activate_in: u8,
     /// Whether `god` keeps the player's health full.
     god: bool,
+    /// The actor `fight` is after, and the seconds to the next swing.
+    fight: Option<(u32, f32)>,
+    /// Steps run that a player couldn't take.
+    debug_steps: u32,
 }
+
+/// How close `fight` closes in (centre to centre, on the ground), and the
+/// seconds between its swings.
+const FIGHT_DISTANCE: f32 = 55.0;
+const FIGHT_SWING: f32 = 0.5;
+/// From the player's feet to the capsule's centre.
+const PLAYER_CENTRE: f32 = oo_sim::player::PLAYER_HALF_HEIGHT + oo_sim::player::PLAYER_RADIUS;
 
 /// How long `goto` keeps walking, and how close counts as there.
 const GOTO_SECONDS: f32 = 20.0;
@@ -181,7 +224,10 @@ impl Plugin for ScriptPlugin {
                     follow_lost: false,
                     follow_seen: None,
                     open_door: None,
+                    activate_in: 0,
                     god: false,
+                    debug_steps: 0,
+                    fight: None,
                 })
                 .add_systems(PreUpdate, run_script.after(InputSystems));
             }
@@ -240,6 +286,8 @@ fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
             ),
             "click" => Action::Click,
             "god" => Action::God,
+            "equip" => Action::Equip(hex(words.next().ok_or_else(bad)?)?),
+            "fight" => Action::Fight(hex(words.next().ok_or_else(bad)?)?),
             "travel" => Action::Travel(
                 u32::from_str_radix(words.next().ok_or_else(bad)?, 16).map_err(|_| bad())?,
             ),
@@ -265,10 +313,22 @@ fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
                     );
                     Action::ExpectNear(None, at, number(&mut words)?)
                 }
+                "cell" => Action::ExpectCell(words.next().ok_or_else(bad)?.to_owned()),
+                "item" => {
+                    let item = hex(words.next().ok_or_else(bad)?)?;
+                    let op = Compare::parse(words.next().ok_or_else(bad)?).ok_or_else(bad)?;
+                    Action::ExpectItem(item, op, words.next().ok_or_else(bad)?.parse()?)
+                }
                 "actor" => {
                     let id = u32::from_str_radix(words.next().ok_or_else(bad)?, 16)?;
-                    if words.next() != Some("near") {
-                        return Err(bad());
+                    match words.next() {
+                        Some("near") => {}
+                        Some("cell") => {
+                            let cell = hex(words.next().ok_or_else(bad)?)?;
+                            steps.push((when, Action::ExpectActorCell(id, cell)));
+                            continue;
+                        }
+                        _ => return Err(bad()),
                     }
                     let at = Vec3::new(
                         number(&mut words)?,
@@ -296,6 +356,10 @@ fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
         steps.push((when, action));
     }
     Ok(steps)
+}
+
+fn hex(word: &str) -> anyhow::Result<u32> {
+    u32::from_str_radix(word, 16).map_err(|_| anyhow::anyhow!("{word:?} isn't a form ID in hex"))
 }
 
 fn number<'a>(words: &mut impl Iterator<Item = &'a str>) -> anyhow::Result<f32> {
@@ -351,7 +415,7 @@ fn key_code(name: &str) -> Option<KeyCode> {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn run_script(
     mut commands: Commands,
     mut script: ResMut<Script>,
@@ -368,7 +432,12 @@ fn run_script(
     mut state: ResMut<oo_sim::script::ScriptState>,
     mut intents: Query<&mut oo_sim::PlayerIntent, With<oo_sim::Player>>,
     cell: Option<Res<oo_sim::cell::CurrentCell>>,
-    mut transition: ResMut<oo_sim::cell::PendingTransition>,
+    (mut transition, inventory, changes, mut actions): (
+        ResMut<oo_sim::cell::PendingTransition>,
+        Query<&oo_sim::Inventory, With<oo_sim::Player>>,
+        Res<oo_sim::inventory::WorldChanges>,
+        Query<&mut oo_sim::PlayerActions, With<oo_sim::Player>>,
+    ),
 ) {
     script.frame += 1;
     for key in std::mem::take(&mut script.held_keys) {
@@ -394,7 +463,60 @@ fn run_script(
             mouse.release(MouseButton::Right);
         }
     }
-    if let Some(&(to, left)) = script.goto.front()
+    if script.activate_in > 0 {
+        script.activate_in -= 1;
+        if script.activate_in == 0
+            && let Ok(mut intent) = intents.single_mut()
+        {
+            intent.activate = true;
+        }
+    }
+    if let Some((r, wait)) = script.fight
+        && let Ok(at) = player.single()
+    {
+        let target = actors
+            .iter()
+            .find(|(p, ..)| p.0 == r)
+            .map(|(_, t, _)| t.translation);
+        let dead = state.vitals.get(&r).is_some_and(|v| v.dead);
+        match target {
+            Some(to) if !dead => {
+                if let Ok(mut intent) = intents.single_mut() {
+                    // From the eye to the middle of the actor's capsule
+                    // (actors stand on their placed position).
+                    let feet = at.translation.y - PLAYER_CENTRE;
+                    let rise = to.y + PLAYER_CENTRE - (feet + oo_sim::EYE_HEIGHT);
+                    let run = at.translation.xz().distance(to.xz()).max(1.0);
+                    intent.yaw = yaw_towards(at.translation, to.xz());
+                    intent.pitch = rise.atan2(run);
+                }
+                if at.translation.xz().distance(to.xz()) > FIGHT_DISTANCE {
+                    keys.press(KeyCode::KeyW);
+                    script.fight = Some((r, wait - dt));
+                } else {
+                    keys.release(KeyCode::KeyW);
+                    if wait <= 0.0 {
+                        mouse.press(MouseButton::Left);
+                        script.held_click = true;
+                        script.fight = Some((r, FIGHT_SWING));
+                    } else {
+                        script.fight = Some((r, wait - dt));
+                    }
+                }
+            }
+            _ => {
+                keys.release(KeyCode::KeyW);
+                if let Ok(mut intent) = intents.single_mut() {
+                    intent.pitch = 0.0;
+                }
+                info!(
+                    "script: done fighting {r:08X} ({})",
+                    if dead { "dead" } else { "gone" }
+                );
+                script.fight = None;
+            }
+        }
+    } else if let Some(&(to, left)) = script.goto.front()
         && let Ok(at) = player.single()
     {
         let distance = at.translation.xz().distance(to);
@@ -405,9 +527,11 @@ fn run_script(
                 if let Some(door) = script.open_door.take()
                     && let Ok(mut intent) = intents.single_mut()
                 {
+                    // Face it first: what's looked at updates after the turn.
                     intent.yaw = yaw_towards(at.translation, door);
-                    intent.activate = true;
-                    info!("script: opening the door the followed actor went through");
+                    intent.pitch = 0.0;
+                    script.activate_in = 3;
+                    info!("script: opening the door at {door}");
                 }
             }
             if distance <= GOTO_REACHED {
@@ -479,6 +603,10 @@ fn run_script(
     }
     for action in due {
         info!("script frame {frame}: {action:?}");
+        if action.is_debug() {
+            warn!("script: {action:?} isn't something a player can do");
+            script.debug_steps += 1;
+        }
         match action {
             Action::Key(key) => {
                 keys.press(key);
@@ -517,6 +645,12 @@ fn run_script(
                 }
             }
             Action::God => script.god = true,
+            Action::Equip(item) => {
+                if let Ok(mut a) = actions.single_mut() {
+                    a.0.push(oo_sim::PlayerAction::Equip(item));
+                }
+            }
+            Action::Fight(r) => script.fight = Some((r, 0.0)),
             Action::Door(r) => match actors.iter().find(|(p, ..)| p.0 == r) {
                 Some((
                     _,
@@ -586,6 +720,12 @@ fn run_script(
                     .observe(save_to_disk(path));
             }
             Action::Quit => {
+                if script.debug_steps > 0 {
+                    warn!(
+                        "script: {} steps a player couldn't take ran; this isn't a player's run",
+                        script.debug_steps
+                    );
+                }
                 if script.failed > 0 {
                     error!(
                         "script: {} of {} checks failed",
@@ -630,6 +770,37 @@ fn run_script(
                     format!("{r:08X} dead is {have:?}, wanted {dead}")
                 });
             }
+            Action::ExpectCell(want) => {
+                let have = cell.as_deref().map(|c| (c.form_id, c.editor_id.clone()));
+                let pass = have.as_ref().is_some_and(|(form, id)| {
+                    id.eq_ignore_ascii_case(&want) || hex(&want).is_ok_and(|w| w == *form)
+                });
+                check(&mut script, pass, || {
+                    format!("the player is in {have:08X?}, wanted {want}")
+                });
+            }
+            Action::ExpectItem(item, op, want) => {
+                let have = inventory.single().map_or(0, |i| i.count(item));
+                check(&mut script, op.holds(have, want), || {
+                    format!("the player has {have} of {item:08X}, wanted {op:?} {want}")
+                });
+            }
+            Action::ExpectActorCell(r, want) => {
+                // Loaded, it's where the player is; otherwise where it was
+                // moved to, or where it was placed.
+                let have = if actors.iter().any(|(p, ..)| p.0 == r) {
+                    cell.as_deref().map(|c| c.form_id)
+                } else {
+                    changes
+                        .relocated
+                        .get(&r)
+                        .map(|l| l.cell)
+                        .or_else(|| world.as_ref().and_then(|w| w.reference_cell(r)))
+                };
+                check(&mut script, have == Some(want), || {
+                    format!("{r:08X} is in {have:08X?}, wanted {want:08X}")
+                });
+            }
             Action::ExpectNear(who, at, radius) => {
                 let position = match who {
                     None => player.single().ok().map(|t| t.translation),
@@ -654,5 +825,54 @@ fn check(script: &mut Script, pass: bool, explain: impl FnOnce() -> String) {
     } else {
         script.failed += 1;
         error!("script check failed: {}", explain());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The gameplay replay goes the way a player does.
+    #[test]
+    fn the_tutorial_replay_has_no_debug_steps() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/replays/tutorial.txt");
+        let steps = load(&path).unwrap();
+        assert!(!steps.is_empty());
+        let debug: Vec<_> = steps.iter().filter(|(_, a)| a.is_debug()).collect();
+        assert!(
+            debug.is_empty(),
+            "debug steps in {}: {debug:?}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn steps_parse() {
+        let dir = std::env::temp_dir().join(format!("oo-script-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("steps.txt");
+        std::fs::write(
+            &path,
+            "t1 travel 000248B2\nt2 expect cell ImperialDungeon04\n\
+             t3 expect item 0000000A >= 2\nt4 expect actor 00032A17 cell 00022288\n\
+             t5 door 00026C11\nt6 fight 0003F0A1\nt7 equip 000229A2\n",
+        )
+        .unwrap();
+        let steps = load(&path).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(matches!(steps[0].1, Action::Travel(0x248B2)));
+        assert!(matches!(&steps[1].1, Action::ExpectCell(c) if c == "ImperialDungeon04"));
+        assert!(matches!(
+            steps[2].1,
+            Action::ExpectItem(0xA, Compare::Ge, 2)
+        ));
+        assert!(matches!(
+            steps[3].1,
+            Action::ExpectActorCell(0x32A17, 0x22288)
+        ));
+        assert!(steps[4].1.is_debug());
+        assert!(!steps[0].1.is_debug());
+        assert!(matches!(steps[5].1, Action::Fight(0x3F0A1)));
+        assert!(matches!(steps[6].1, Action::Equip(0x229A2)));
     }
 }
