@@ -13,9 +13,8 @@ Standing decisions, agreed on 2026-10-26. They decide what gets worked on and ho
    and tolerances such as light falloff, only have to be close. When our data import is
    wrong, fix the importer rather than copying the original engine's quirks one by one.
    The reverse-engineering notes mark which rules are exact and which are close.
-3. **OpenMW's architecture, not its code**, for milestones 3 to 6: cell streaming,
-   exterior terrain, save and load, and the modding API are solved problems in an
-   engine of the same family. Read their design; write our own code (see
+3. **OpenMW's architecture, not its code**, for cell streaming, exterior terrain, save
+   and load, and the modding API: solved problems in an engine of the same family. Read their design; write our own code (see
    [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md)).
 4. **One reference session per milestone.** Captures from the original game
    (screenshots, clips, runtime dumps) are batched into one sitting per milestone, from
@@ -59,6 +58,62 @@ That means, concretely:
   records, the same rules xEdit, Wrye Bash and LOOT assume.
 - **Bethesda's form IDs are the network IDs.** Every co-op player has the same plugins,
   so state can be keyed by form ID and assets never cross the network.
+
+## Where things stand
+
+There is no single percentage. Progress is tracked on eight separate tracks, and a
+feature only counts on a track when the evidence that track asks for exists: data that
+parses or code that runs is not the same as behaviour that matches the game. The levels
+of evidence (built, unit, real data, replay, played, vanilla) are defined in
+[CONTRIBUTING.md](CONTRIBUTING.md#saying-what-was-checked).
+
+Status as of 2026-10-26, from the repository, not from reports:
+
+| Track | What counts | Where it stands | Evidence |
+|---|---|---|---|
+| **1. Data formats** | A format parses every vanilla file, checked on a real install. | ESM/ESP records, BSA archives, NIF meshes (via ByroRedux), compiled scripts, menu XML, `.lip`, MP3. `LAND` terrain and `.ess` saves not read. | real data, by hand on the PC (`oo-inspect`); unit tests on synthetic records in CI. No automated real-data check of "every record parses". |
+| **2. Gameplay systems** | A system exists and has a test that drives it. | Interior cells and load doors, player controller, items and containers, NPCs and creatures, dialogue, script VM, quests, AI packages, combat (melee, bows), character creation, audio. No magic, no detection, no saving. | unit (synthetic plugins in `oo-sim/tests`), replay. |
+| **3. Vanilla-verified behaviour** | Compared against the original game at a reference session. | Reverse-engineering notes tag 27 claims **exact**, 79 **high**, 71 **medium**, 6 **hypothesis** ([UNVERIFIED.md](docs/reverse-engineering/UNVERIFIED.md)). HUD layout matched by screenshot. No captured runtime fixtures in the repository yet. | vanilla for the HUD only. |
+| **4. Playable quest progression** | A replay reaches the stage with no debug commands, and a person has played it. | Tutorial (`CharacterGen`): `tests/replays/tutorial.txt` checks stages up to 20 in the prison cell; stage 26 (first ambush) reached on the PC with a follow-party replay that isn't in the repository yet. | replay. |
+| **5. World coverage** | Cells a player can walk through, with their content. | Interiors only, one at a time. No exteriors, no terrain. | real data, replay. |
+| **6. Save and load** | A save survives exit and reload with the state the acceptance tests list. | None. The original `.ess` layout is documented for later import. | none. |
+| **7. Mod compatibility** | A real mod loads and behaves as in the original. | Load order, form ID remapping, overrides, deletions, loose files over archives, `Plugins.txt`; Shivering Isles loads. Not tried with third-party mods. | unit; real data for the official plugins. |
+| **8. Performance and platforms** | Measured framerate and memory on named hardware; builds and runs per platform. | Linux build and tests in CI; played on Windows on the PC. No framerate or memory measurements, no macOS. | built (Linux), played (Windows). |
+
+## Workstreams
+
+Several people and agents work in parallel, each on its own branch (see
+[CONTRIBUTING.md](CONTRIBUTING.md#branches-pull-requests-and-parallel-work)). Who owns
+what, so overlapping edits get agreed first:
+
+| Workstream | Owns | Needs |
+|---|---|---|
+| Tutorial gameplay (engine) | `oo-sim` gameplay systems, `oo-game/src/script.rs`, `tests/replays/` | PC runs for replays |
+| Save and load | `oo-sim` identity and save modules, save tests | |
+| Exterior streaming | `LAND` in `oo-formats`, exterior cells in `oo-sim`, terrain in `oo-game` | PC runs on real data |
+| PC testing | Real-data tests and replays on the owner's PC, reference sessions | The owner present for the original game |
+| Reverse engineering | `docs/reverse-engineering/` | Ghidra on the owner's PC |
+| Workflow and audit | CI, `CONTRIBUTING.md`, this roadmap, system-order tests | |
+
+## Verification
+
+Four layers, each catching what the one before can't:
+
+1. **Unit and property tests**: rules, parsers, formulas, identities, script operations,
+   on synthetic data. Run by CI on every pull request.
+2. **Gameplay scenario replays**: `--script` runs that drive several systems through a
+   scene and check stages, positions, deaths and inventory. Need the game's files, so
+   they run on the PC.
+3. **Vanilla reference comparisons**: observations captured from the original game at a
+   reference session (quest-stage transitions, dialogue, combat outcomes, cell
+   transitions, inventory changes), stored as versioned fixtures and compared against
+   the same replays. A fixture holds measured facts only (a stage, a position, a count,
+   a time), like the reverse-engineering notes do; screenshots, clips and raw dumps
+   stay with the owner's private captures. Discrete state
+   must match exactly; continuous values within a stated tolerance. Not tick for tick.
+4. **Persistence and endurance**: long simulated runs with cell transitions, scripts, AI
+   schedules and save/reload cycles, checking for drift, dangling references and memory
+   growth. Starts with save and load (milestone 2b).
 
 ## Mod support, by kind of mod
 
@@ -167,7 +222,47 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
       don't load), mouse and keys. Next: check them against the game, FaceGen
       faces and the face sliders, birthsign spells, a custom class, the intro
       movie
-- [ ] Save and load
+- [ ] Save and load: see 2b
+
+**Acceptance:** a person plays from the prison cell to the sewer exit with no debug
+keys, console commands or stage edits, and a replay of the same route passes on real
+data, checking at each step not just the quest stage but where the Emperor, the Blades
+and the player are, who is alive or dead, what the player carries, and which cell they
+are in. Test-only helpers in replays (`god`, `follow`) are listed in the replay and kept
+out of that route's checks.
+
+### 2b. Native save and load
+
+Brought forward: state that can't be saved tends to grow in places nobody can find later.
+An OpenOblivion save format of its own, versioned; importing original `.ess` saves comes
+later (milestone 5).
+
+- [ ] Stable identity: plugin references saved as (defining plugin, object ID) and
+      resolved through the current load order; runtime-created references get IDs of
+      their own; ECS entities never saved
+- [ ] Player, quests and their variables, script instances, actors, doors, containers,
+      moved, created and deleted references, game time and timers, cells
+- [ ] Explicit version, validation, written to a temporary file then renamed
+
+**Acceptance:** automated tests that save and reload at once; exit and resume; change
+the world, save, reload and find the changes; save mid-quest; save after a cell change;
+and reject corrupt or newer-version saves without crashing. Then: the tutorial saved,
+exited, reloaded and finished, on the PC.
+
+### 2c. A walk outside
+
+A small, real exterior before the rest of Cyrodiil, to prove the streaming design early.
+No sky, weather, water or SpeedTree work here.
+
+- [ ] `LAND` terrain read, drawn and collided with
+- [ ] Exterior cells loaded and unloaded around the player, references placed
+- [ ] References keep their state when their cell unloads and loads again
+- [ ] Simulation state separate from render-only entities; assets released on unload
+
+**Acceptance:** on real data, the player walks continuously across at least a 3×3 block
+of adjacent exterior cells and back; a test checks that cells load and unload, that the
+number of live entities and loaded assets stays bounded, and that a changed reference is
+unchanged after its cell reloads.
 
 ### References
 
@@ -210,7 +305,7 @@ repository.
 
 ### 3. Step outside: Tamriel and the Imperial City
 
-- [ ] Exterior worldspaces: `LAND` terrain, cell streaming, distant LOD
+- [ ] Exterior worldspaces beyond the 2c proof: the whole of Tamriel, distant LOD
 - [ ] Sky, weather, day and night, water
 - [ ] SpeedTree trees and grass
 - [ ] Cities with schedules, shops, beds, guards and crime
@@ -239,9 +334,17 @@ repository.
 - [x] Replay tests: `--script` steps can be keyed to simulation time (`t12.5`), with
       checks on quest stages and player and actor positions; a failed check fails
       the run
+- [x] CI on every pull request: clean-room check, `fmt`, `clippy` with warnings as
+      errors, and the tests that run without the game
+- [x] System-order tests: a cell load is ready by the next step, state follows the
+      reference across reloads, the outcome doesn't depend on the framerate
 - [ ] A recorded run through the whole tutorial, re-checked after every change
 - [ ] Numeric fidelity checks against the documented formulas (movement speeds,
       combat, falloff), as tests
+- [ ] Reference fixtures: a versioned format for observations from the original game
+      (layer 3 above): measured facts only, no captures, and a runner that checks
+      replays against them
+- [ ] Real-data tests that report "skipped" rather than "passed" without `OO_DATA`
 
 - [ ] A native modding API (Lua or WebAssembly)
 - [ ] Graphics beyond the original: PBR-friendly shading, shadows, ambient occlusion,
