@@ -435,6 +435,7 @@ fn spawn_reference(commands: &mut Commands, world: &WorldData, r: &Reference) ->
         entity.insert(Item(r.base));
     }
     if actor {
+        entity.insert(crate::ai::StepPose::at(&transform));
         spawn_actor(&mut entity, world, r);
     }
     if world.containers.contains_key(&r.base) {

@@ -16,7 +16,7 @@ use byroredux_core::animation::interpolation::{sample_rotation, sample_scale, sa
 use byroredux_nif::anim::{AnimationClip, import_kf};
 use byroredux_nif::import::{ImportedMesh, import_nif, import_nif_scene};
 
-use oo_sim::ai::Locomotion;
+use oo_sim::ai::{Locomotion, StepPose};
 use oo_sim::{Appearance, GameData};
 
 use crate::model::{ModelCache, read_nif, to_bevy_mesh};
@@ -254,6 +254,13 @@ pub struct BindPoseOnly(pub bool);
 #[derive(Component)]
 pub struct ActorBone;
 
+/// The node an actor's bones hang off. It carries the race's height, and the
+/// easing between simulation steps.
+#[derive(Component)]
+pub struct Rig {
+    scale: f32,
+}
+
 /// The animation an actor is playing and how far in.
 #[derive(Component)]
 pub struct Animated {
@@ -300,6 +307,9 @@ pub fn attach_actors(
         // The rig carries the race's height; bones hang off it.
         let rig = commands
             .spawn((
+                Rig {
+                    scale: appearance.scale,
+                },
                 Transform::from_scale(Vec3::splat(appearance.scale)),
                 Visibility::default(),
                 ChildOf(entity),
@@ -501,5 +511,26 @@ pub fn animate_actors(
                 transform.scale = Vec3::splat(s);
             }
         }
+    }
+}
+
+/// Draws each actor between its last two simulation steps. The actor's own
+/// transform stays where the simulation put it; the rig is offset back toward
+/// the previous step, so motion is smooth at any framerate.
+pub fn smooth_actors(
+    fixed: Res<Time<Fixed>>,
+    actors: Query<(&Transform, &StepPose)>,
+    mut rigs: Query<(&Rig, &ChildOf, &mut Transform), Without<StepPose>>,
+) {
+    let fraction = fixed.overstep_fraction();
+    for (rig, parent, mut transform) in &mut rigs {
+        let Ok((actor, pose)) = actors.get(parent.parent()) else {
+            continue;
+        };
+        let (position, rotation) = pose.interpolate(fraction);
+        let undo = actor.rotation.inverse();
+        transform.translation = undo * (position - actor.translation) / actor.scale;
+        transform.rotation = undo * rotation;
+        transform.scale = Vec3::splat(rig.scale);
     }
 }

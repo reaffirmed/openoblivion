@@ -157,7 +157,12 @@ fn main() {
         Update,
         (
             model::attach_models,
-            (actor::attach_actors, actor::animate_actors).chain(),
+            (
+                actor::attach_actors,
+                actor::animate_actors,
+                actor::smooth_actors,
+            )
+                .chain(),
             (
                 dialog_menu::update_dialog,
                 xml_menu::update_menu_overlay,

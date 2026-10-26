@@ -30,6 +30,50 @@ const FOLLOW_DISTANCE: f32 = 160.0;
 /// An escort waits when the escorted falls this far behind.
 const ESCORT_WAIT_DISTANCE: f32 = 600.0;
 
+/// Moving further than this in one step is a teleport, drawn without easing.
+const TELEPORT_DISTANCE: f32 = 64.0;
+
+/// An actor's placement at the last two simulation steps, so the renderer can
+/// draw it between them, as the player's camera is.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct StepPose {
+    pub previous: (Vec3, Quat),
+    pub current: (Vec3, Quat),
+}
+
+impl StepPose {
+    pub fn at(transform: &Transform) -> Self {
+        let pose = (transform.translation, transform.rotation);
+        Self {
+            previous: pose,
+            current: pose,
+        }
+    }
+
+    /// Where to draw, `fraction` of the way from the last step to the next.
+    pub fn interpolate(&self, fraction: f32) -> (Vec3, Quat) {
+        (
+            self.previous.0.lerp(self.current.0, fraction),
+            self.previous.1.slerp(self.current.1, fraction),
+        )
+    }
+}
+
+pub(crate) fn remember_pose(mut actors: Query<&mut StepPose>) {
+    for mut p in &mut actors {
+        p.previous = p.current;
+    }
+}
+
+pub(crate) fn record_pose(mut actors: Query<(&Transform, &mut StepPose)>) {
+    for (t, mut p) in &mut actors {
+        p.current = (t.translation, t.rotation);
+        if p.previous.0.distance(p.current.0) > TELEPORT_DISTANCE {
+            p.previous = p.current;
+        }
+    }
+}
+
 /// An actor's AI state.
 #[derive(Component, Debug, Clone, Default)]
 pub struct Ai {

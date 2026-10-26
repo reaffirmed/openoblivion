@@ -63,6 +63,8 @@ impl Plugin for SimPlugin {
             // The simulation steps at a fixed rate, independent of framerate.
             .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
             .add_systems(Startup, cell::load_world)
+            .add_systems(FixedFirst, ai::remember_pose)
+            .add_systems(FixedLast, ai::record_pose)
             .add_systems(
                 FixedUpdate,
                 (
