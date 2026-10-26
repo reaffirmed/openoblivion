@@ -466,6 +466,7 @@ fn update_subtitles(
         shown.subtitle = Some((s.text, now + s.seconds));
     }
     for m in state.messages.drain(..) {
+        info!("message: {m}");
         shown.messages.push((m, now + MESSAGE_SECONDS));
     }
     shown.subtitle.take_if(|(_, until)| *until <= now);
