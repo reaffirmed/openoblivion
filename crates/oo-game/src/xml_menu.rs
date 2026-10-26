@@ -116,20 +116,29 @@ impl XmlMenu {
         prefix: &str,
     ) -> Result<(), MenuError> {
         while self.rows < n {
-            let name = format!("{prefix}{}", self.rows);
-            self.renderer
-                .instantiate_template(template, parent, &name)?;
-            // The same clone on the mirror, as instantiate_template does it.
-            let t = self.doc.name_index[&template.to_lowercase()];
-            let p = self.doc.name_index[&parent.to_lowercase()];
-            let children = self.doc.tiles[t].children.clone();
-            if let Some((&first, rest)) = children.split_first() {
-                self.doc.deep_clone(first, p, Some(&name));
-                for &c in rest {
-                    self.doc.deep_clone(c, p, None);
-                }
-            }
+            self.add_row(template, parent, &format!("{prefix}{}", self.rows))?;
             self.rows += 1;
+        }
+        Ok(())
+    }
+
+    /// Clones `template` under `parent`, naming its first tile `name`.
+    pub(crate) fn add_row(
+        &mut self,
+        template: &str,
+        parent: &str,
+        name: &str,
+    ) -> Result<(), MenuError> {
+        self.renderer.instantiate_template(template, parent, name)?;
+        // The same clone on the mirror, as instantiate_template does it.
+        let t = self.doc.name_index[&template.to_lowercase()];
+        let p = self.doc.name_index[&parent.to_lowercase()];
+        let children = self.doc.tiles[t].children.clone();
+        if let Some((&first, rest)) = children.split_first() {
+            self.doc.deep_clone(first, p, Some(name));
+            for &c in rest {
+                self.doc.deep_clone(c, p, None);
+            }
         }
         Ok(())
     }

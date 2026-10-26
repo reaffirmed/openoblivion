@@ -19,6 +19,13 @@ use crate::script::{Pending, ScriptState};
 #[derive(Component, Debug, Clone, Copy)]
 pub struct Door(pub u32);
 
+/// A door placed open (`ONAM`); it stays open until something closes it.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct OpenByDefault;
+
+/// How close in front of a walking actor a closed door opens for it.
+const DOOR_OPEN_DISTANCE: f32 = 110.0;
+
 /// Where a door is, as `GetOpenState` answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OpenState {
@@ -304,6 +311,67 @@ pub struct NodeCollider {
     pub offset: Transform,
 }
 
+/// Actors walking into a closed door open it. A locked one opens only for its
+/// owner or a member of the owning faction (see
+/// `docs/reverse-engineering/doors-and-animated-objects.md`, locked doors).
+pub(crate) fn open_doors_for_actors(
+    world: Option<Res<WorldData>>,
+    state: Res<ScriptState>,
+    mut pending: ResMut<Pending>,
+    doors: Query<(&PlacedRef, &GlobalTransform, Option<&crate::cell::Owner>), With<Door>>,
+    actors: Query<(
+        &PlacedRef,
+        &crate::actor::Actor,
+        &Transform,
+        &crate::ai::Locomotion,
+    )>,
+) {
+    let Some(world) = world else { return };
+    for (placed, actor, transform, locomotion) in &actors {
+        if locomotion.speed <= 0.0 {
+            continue;
+        }
+        let ahead = transform.rotation * Vec3::NEG_Z;
+        for (door, at, owner) in &doors {
+            let open = state.doors.get(&door.0).is_some_and(|s| s.is_open());
+            let asked = pending.animations.iter().any(|(r, _)| *r == door.0);
+            if open || asked {
+                continue;
+            }
+            let to = at.translation() - transform.translation;
+            let flat = Vec3::new(to.x, 0.0, to.z);
+            if flat.length() > DOOR_OPEN_DISTANCE || flat.normalize_or_zero().dot(ahead) < 0.3 {
+                continue;
+            }
+            if let Some(lock) = state.locks.get(&door.0)
+                && lock.locked
+                && !owns(&world, actor, owner.map_or(0, |o| o.0))
+            {
+                continue;
+            }
+            debug!("{:08X} opens door {:08X}", placed.0, door.0);
+            pending.animations.push((door.0, AnimRequest::Open(true)));
+        }
+    }
+}
+
+/// Whether an actor owns something owned by `owner`: it's the actor's base, or
+/// a faction the actor belongs to.
+fn owns(world: &WorldData, actor: &crate::actor::Actor, owner: u32) -> bool {
+    match *actor {
+        crate::actor::Actor::Npc(base) => {
+            owner != 0
+                && (owner == base
+                    || world
+                        .actors
+                        .npcs
+                        .get(&base)
+                        .is_some_and(|n| n.factions.iter().any(|&(f, _)| f == owner)))
+        }
+        crate::actor::Actor::Creature(base) => owner != 0 && owner == base,
+    }
+}
+
 /// Starts requested animations, advances them, settles doors once they've
 /// finished opening or closing, and moves collision with the nodes.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -318,19 +386,24 @@ pub(crate) fn animate_objects(
         Option<&Children>,
     )>,
     mut colliders: Query<(&NodeCollider, &mut Transform)>,
-    doors: Query<(&PlacedRef, &Door)>,
+    doors: Query<(&PlacedRef, &Door, Has<OpenByDefault>)>,
     world: Option<Res<WorldData>>,
     mut sounds: MessageWriter<PlaySound>,
 ) {
     let requests = std::mem::take(&mut pending.animations);
     let dt = time.delta_secs();
+    for (placed, _, open) in &doors {
+        if open {
+            state.doors.entry(placed.0).or_insert(OpenState::Open);
+        }
+    }
     // Doors sound whether or not their model animates; one that doesn't
     // settles at once.
     for &(reference, request) in &requests {
         let AnimRequest::Open(open) = request else {
             continue;
         };
-        let Some((_, Door(base))) = doors.iter().find(|(p, _)| p.0 == reference) else {
+        let Some((_, Door(base), _)) = doors.iter().find(|(p, ..)| p.0 == reference) else {
             continue;
         };
         if !objects.iter().any(|(p, ..)| p.0 == reference) {

@@ -118,13 +118,18 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
       damage; anyone hit fights back; death raises OnDeath and drops the body;
       `StartCombat`, `StopCombat`, `IsInCombat`, `Kill`, `GetActorValue` and
       `ModActorValue` for health, magicka and fatigue; weapons from `WEAP` with the
-      weapon damage formula, reach and speed, equipped from the inventory, and
-      blocking with fists, weapon or shield. Next: armour,
-      attack and death animations, NPC dispositions, archery, magic
-- [ ] Character creation, progress: the race, birthsign and class screens open when
-      the tutorial's scripts ask, pause the game while up, and set the player's
-      race, sex, name, attributes, skills, health, magicka and fatigue (a text
-      screen for now). Next: the game's own menus, FaceGen faces, birthsign spells
+      weapon damage formula, reach (fCombatDistance × weapon reach, half for fists)
+      and speed, equipped from the inventory, and blocking with fists, weapon or
+      shield; bows and arrows; essential actors knocked out. Next: armour, a
+      creature's own reach, attack and death animations, NPC dispositions, magic
+- [ ] Character creation, progress: the race menu opens after the new game's first
+      move, as the game does; the birthsign and class screens open when the
+      tutorial's scripts ask; all three pause the game while up and set the
+      player's race, sex, name, attributes, skills, health, magicka and fatigue.
+      The screens are drawn from the game's own menu XML (a text panel if they
+      don't load), mouse and keys. Next: check them against the game, FaceGen
+      faces and the face sliders, birthsign spells, a custom class, the intro
+      movie
 - [ ] Save and load
 
 ### References
@@ -145,8 +150,6 @@ Things that only the person can give; work carries on around them.
 - Reference screenshots and short clips from the original game for side-by-side
   checks (lighting, menus, the opening scene), which need a click to launch it.
 - Priority calls when two directions compete; until then the order above stands.
-- Allow running `E:\Tools\xEdit\xDump64.exe` on the PC (or run xEdit yourself) so the
-  ESM parser can be cross-checked record by record against xEdit's dump.
 
 ### 3. Step outside: Tamriel and the Imperial City
 

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use oo_formats::dialogue::{Info, TopicKind};
-use oo_script::conditions::check;
+use oo_script::conditions::{check, test};
 
 use crate::actor::Actor;
 use crate::cell::{CurrentCell, PlacedRef, WorldData};
@@ -150,6 +150,71 @@ pub fn pick_response(
         return Some(Pick::Line(randoms[i]));
     }
     low_disposition.map(Pick::DispositionTooLow)
+}
+
+/// Why `speaker` has no line for `topic`, for the log: the topic's lines that
+/// name the speaker (`GetIsID`), or the first few, each with its quest's state
+/// and the first condition that fails.
+pub fn explain_no_line(
+    data: &ScriptData,
+    state: &mut ScriptState,
+    facts: &HashMap<u32, ActorFacts>,
+    topic: u32,
+    speaker: u32,
+) -> String {
+    let d = &data.dialogue;
+    let Some(t) = d.topics.get(&topic) else {
+        return format!("no topic {topic:08X}");
+    };
+    let base = facts.get(&speaker).map_or(0, |f| f.base);
+    let names = |c: &oo_formats::dialogue::Condition| {
+        oo_formats::commands::by_opcode(c.function).map_or("?", |f| f.name)
+    };
+    let mine: Vec<u32> = t
+        .infos
+        .iter()
+        .copied()
+        .filter(|id| {
+            d.infos.get(id).is_some_and(|i| {
+                i.conditions
+                    .iter()
+                    .any(|c| names(c) == "GetIsID" && c.params[0] == base)
+            })
+        })
+        .collect();
+    let shown = if mine.is_empty() {
+        t.infos.iter().copied().take(5).collect()
+    } else {
+        mine
+    };
+    let mut out = format!(
+        "{} lines, speaker {speaker:08X} (base {base:08X}, facts {}):",
+        t.infos.len(),
+        facts.contains_key(&speaker)
+    );
+    for id in shown {
+        let Some(info) = d.infos.get(&id) else {
+            continue;
+        };
+        let quest_conditions = d
+            .quests
+            .get(&info.quest)
+            .map_or(&[][..], |q| &q.conditions[..]);
+        let mut host = GameHost::new(data, state, facts, Some(speaker));
+        let failed = quest_conditions.iter().chain(&info.conditions).find(|c| {
+            !test(c, Some(speaker), Some(PLAYER_REF), &mut host)
+        });
+        let failed = failed.map_or("none".to_owned(), |c| {
+            format!("{}({:08X}) {:?} {:?}", names(c), c.params[0], c.op, c.comparand)
+        });
+        out.push_str(&format!(
+            "\n  {id:08X}: quest {:08X} running {}, said {}, first failing condition {failed}",
+            info.quest,
+            state.running(info.quest),
+            state.said.contains(&id)
+        ));
+    }
+    out
 }
 
 /// Says a line: remembers it, teaches its topics, and runs its result script.
@@ -324,8 +389,13 @@ pub(crate) fn update_conversations(
             talk.line = None;
             talk.choices.clear();
             let Some((topic, info)) = answer(data, &mut state, &facts, topic, speaker) else {
+                info!(
+                    "no line for topic {topic:08X}: {}",
+                    explain_no_line(data, &mut state, &facts, topic, speaker)
+                );
                 continue;
             };
+            debug!("{speaker:08X} says {info:08X} for topic {topic:08X}");
             effects.extend(say(data, &mut state, &facts, info, speaker));
             talk.line = Some((topic, info));
             let line = data.dialogue.infos.get(&info);

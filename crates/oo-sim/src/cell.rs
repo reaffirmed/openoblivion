@@ -55,6 +55,10 @@ pub struct Model(pub String);
 #[derive(Component, Debug, Clone, Copy)]
 pub struct CellMember;
 
+/// Who owns a reference (`XOWN`): an NPC base or a faction.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct Owner(pub u32);
+
 /// A load door: activating it takes the player to another cell.
 #[derive(Component, Debug, Clone)]
 pub struct LoadDoor {
@@ -586,8 +590,14 @@ fn spawn_reference(commands: &mut Commands, world: &WorldData, r: &Reference) ->
     if let Some(lock) = r.lock {
         entity.insert(Lockable(lock));
     }
+    if r.owner != 0 {
+        entity.insert(Owner(r.owner));
+    }
     if r.teleport.is_none() && world.doors.contains_key(&r.base) {
         entity.insert(crate::animated::Door(r.base));
+        if r.open_by_default {
+            entity.insert(crate::animated::OpenByDefault);
+        }
     }
     out
 }
@@ -731,7 +741,13 @@ pub(crate) fn apply_moves(
             ))
         });
         let Some((cell, position, rotation)) = there else {
-            warn!("MoveTo {marker:08X}: no such reference in an interior");
+            // Most often a marker outdoors, which isn't loaded yet; only the
+            // player's own moves matter here.
+            if who == crate::script::PLAYER_REF {
+                warn!("MoveTo {marker:08X}: no such reference in an interior");
+            } else {
+                debug!("{who:08X} MoveTo {marker:08X}: not in an interior");
+            }
             continue;
         };
         if who == crate::script::PLAYER_REF {
@@ -785,6 +801,8 @@ mod tests {
                 opposite: false,
             }),
             lock: None,
+            owner: 0,
+            open_by_default: false,
         }
     }
 

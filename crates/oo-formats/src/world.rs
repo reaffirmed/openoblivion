@@ -30,6 +30,10 @@ pub struct Reference {
     pub enable_parent: Option<EnableParent>,
     /// Locked from the start (`XLOC`).
     pub lock: Option<LockInfo>,
+    /// Who owns it (`XOWN`): an NPC base or a faction, or 0.
+    pub owner: u32,
+    /// A door that starts open (`ONAM`, no data).
+    pub open_by_default: bool,
 }
 
 /// A reference's lock (`XLOC`).
@@ -306,6 +310,8 @@ impl Reference {
             initially_disabled: r.flags & INITIALLY_DISABLED != 0,
             enable_parent: None,
             lock: None,
+            owner: 0,
+            open_by_default: false,
         };
         let fields = r.fields()?;
         for field in fields.iter() {
@@ -318,6 +324,8 @@ impl Reference {
                     out.rotation = [f32_at(d, 12), f32_at(d, 16), f32_at(d, 20)];
                 }
                 b"XSCL" if d.len() >= 4 => out.scale = f32_at(d, 0),
+                b"XOWN" if d.len() >= 4 => out.owner = u32_at(d, 0),
+                b"ONAM" => out.open_by_default = true,
                 b"XESP" if d.len() >= 8 => {
                     out.enable_parent = Some(EnableParent {
                         reference: u32_at(d, 0),
@@ -507,6 +515,9 @@ fn remap_reference(order: &LoadOrder, index: usize, r: &mut Reference) {
     if let Some(p) = &mut r.enable_parent {
         p.reference = order.global(index, p.reference);
     }
+    if r.owner != 0 {
+        r.owner = order.global(index, r.owner);
+    }
     if let Some(l) = &mut r.lock
         && l.key != 0
     {
@@ -694,6 +705,8 @@ fn collect_references(nodes: Nodes<'_>, out: &mut Vec<(Reference, bool)>) -> Res
                         initially_disabled: false,
                         enable_parent: None,
                         lock: None,
+                        owner: 0,
+                        open_by_default: false,
                     };
                     out.push((stub, true));
                 } else {

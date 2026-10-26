@@ -89,6 +89,7 @@ impl Plugin for SimPlugin {
                     trigger::update_triggers.run_if(character::in_game_mode),
                     script::run_object_scripts.run_if(character::in_game_mode),
                     ai::run_ai.run_if(character::in_game_mode),
+                    animated::open_doors_for_actors.run_if(character::in_game_mode),
                     animated::animate_objects,
                     cell::resync_cell,
                     cell::apply_moves,

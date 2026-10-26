@@ -51,15 +51,17 @@ impl Gait {
         }
     }
 
-    /// Clip names beside the skeleton, first found wins: people and creatures
-    /// name them differently.
-    fn files(self) -> &'static [&'static str] {
-        match self {
-            Self::Idle => &["idle.kf"],
-            Self::Walk => &["walkforward.kf", "forward.kf"],
-            // People run with walkfastforward.kf (weapon away); creatures
-            // with fastforward.kf.
-            Self::Run => &["walkfastforward.kf", "fastforward.kf", "forward.kf"],
+    /// Clip names beside the skeleton, first found wins. People walk with
+    /// walkforward.kf and run with walkfastforward.kf (weapon away);
+    /// creatures, whose skeletons are under `meshes\creatures\`, with
+    /// forward.kf and fastforward.kf.
+    fn files(self, creature: bool) -> &'static [&'static str] {
+        match (self, creature) {
+            (Self::Idle, _) => &["idle.kf"],
+            (Self::Walk, false) => &["walkforward.kf", "forward.kf"],
+            (Self::Walk, true) => &["forward.kf"],
+            (Self::Run, false) => &["walkfastforward.kf", "fastforward.kf", "forward.kf"],
+            (Self::Run, true) => &["fastforward.kf", "forward.kf"],
         }
     }
 }
@@ -479,8 +481,9 @@ pub fn animate_actors(
             && let Some(data) = data.as_deref()
         {
             let dir = skeleton_dir(&animated.skeleton).to_owned();
+            let creature = dir.to_ascii_lowercase().replace('/', "\\").contains("creatures\\");
             let clip = gait
-                .files()
+                .files(creature)
                 .iter()
                 .find_map(|f| cache.clip(&format!("{dir}{f}"), data));
             if let Some(clip) = clip {
