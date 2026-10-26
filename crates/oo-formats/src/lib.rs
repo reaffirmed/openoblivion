@@ -3,6 +3,7 @@
 //! Everything here is written from public format documentation (UESP, NifTools),
 //! not from the game's executable. See `docs/CLEAN_ROOM.md` in the repository root.
 
+pub mod actors;
 pub mod bsa;
 pub mod esm;
 pub mod items;

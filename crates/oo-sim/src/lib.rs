@@ -5,6 +5,7 @@
 //! as the authority and clients only render the state it sends them, so keep
 //! rendering, input and audio out of this crate.
 
+pub mod actor;
 pub mod cell;
 pub mod data;
 pub mod interact;
@@ -16,6 +17,7 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 
+pub use actor::{Actor, Appearance, BodyPart, Equipment};
 pub use cell::{
     BaseForm, CellMember, CurrentCell, LightSource, LoadDoor, Model, PlacedRef, SpawnPoint,
 };

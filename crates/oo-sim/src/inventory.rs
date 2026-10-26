@@ -28,6 +28,8 @@ pub struct WorldChanges {
     /// Container contents, once a container has been opened. Before that, the
     /// contents come from the base record, leveled lists resolved on first open.
     pub containers: HashMap<u32, Vec<Stack>>,
+    /// References enabled or disabled since the game started, by scripts.
+    pub enabled: HashMap<u32, bool>,
 }
 
 /// What a player carries.
@@ -84,7 +86,7 @@ pub enum PlayerAction {
 }
 
 /// The player's level, until there are levels.
-const PLAYER_LEVEL: u16 = 1;
+pub(crate) const PLAYER_LEVEL: u16 = 1;
 
 /// A container's current contents, resolving its leveled lists on first use.
 pub fn container_contents<'a>(

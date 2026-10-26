@@ -11,15 +11,21 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
+use bevy_rapier3d::prelude::Collider;
 use byroredux_core::math::coord::{euler_zup_to_quat_yup, zup_to_yup_pos};
+use oo_formats::actors::{ActorData, actor_data};
 use oo_formats::items::{ContainerInfo, ItemInfo, LeveledList, containers, items, leveled_items};
 use oo_formats::load_order::LoadOrder;
 use oo_formats::world::{
-    Cell, CellLighting, Light, form_id_by_editor_id, interior_cell, interior_cell_by_form_id,
-    interior_cell_ids, interior_cell_names, interior_reference_cells, lights, model_paths,
+    Cell, CellLighting, Light, Reference, form_id_by_editor_id, interior_cell,
+    interior_cell_by_form_id, interior_cell_ids, interior_cell_names, interior_reference_cells,
+    lights, model_paths,
 };
 
-use crate::inventory::{Container, Item, WorldChanges};
+use crate::actor::{
+    Actor, Equipment, choose_equipment, creature_appearance, npc_appearance, npc_inventory,
+};
+use crate::inventory::{Container, Item, PLAYER_LEVEL, WorldChanges};
 use crate::player::{
     PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent, PlayerMotion, StepPositions,
 };
@@ -71,6 +77,7 @@ pub struct WorldData {
     pub items: HashMap<u32, ItemInfo>,
     pub containers: HashMap<u32, ContainerInfo>,
     pub leveled_items: HashMap<u32, LeveledList>,
+    pub actors: ActorData,
 }
 
 /// The interior cell that's loaded now.
@@ -168,6 +175,7 @@ fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
         items: items(&order)?,
         containers: containers(&order)?,
         leveled_items: leveled_items(&order)?,
+        actors: actor_data(&order)?,
         order,
     })
 }
@@ -186,6 +194,72 @@ fn unknown_cell_message(order: &LoadOrder, editor_id: &str) -> String {
     )
 }
 
+/// Whether a reference is in the world. Scripts' changes win; otherwise a
+/// reference follows its enable parent (or does the opposite), and failing
+/// that its own initially-disabled flag. Parents outside the cell aren't
+/// loaded yet, so those references go by their own flag.
+fn is_enabled(r: &Reference, cell: &HashMap<u32, &Reference>, changes: &WorldChanges) -> bool {
+    fn go(
+        r: &Reference,
+        cell: &HashMap<u32, &Reference>,
+        changes: &WorldChanges,
+        depth: u8,
+    ) -> bool {
+        if let Some(&enabled) = changes.enabled.get(&r.form_id) {
+            return enabled;
+        }
+        // Parents can chain; a cycle is a broken plugin.
+        match r.enable_parent {
+            Some(p) if depth < 16 && cell.contains_key(&p.reference) => {
+                go(cell[&p.reference], cell, changes, depth + 1) != p.opposite
+            }
+            _ => !r.initially_disabled,
+        }
+    }
+    go(r, cell, changes, 0)
+}
+
+/// Gives an `ACHR`/`ACRE` entity what it needs: which actor it is, what it
+/// wears, what it looks like, and a body to bump into.
+fn spawn_actor(entity: &mut EntityCommands, world: &WorldData, r: &Reference) {
+    let data = &world.actors;
+    let (actor, equipment, appearance) = if let Some(npc) = data.npcs.get(&r.base) {
+        let inventory = npc_inventory(npc, &world.leveled_items, PLAYER_LEVEL, r.form_id);
+        let equipment = choose_equipment(data, &inventory);
+        let appearance = npc_appearance(data, npc, &equipment);
+        debug!(
+            "NPC {:08X} {} ({} parts, wearing {:08X?})",
+            r.form_id,
+            npc.name,
+            appearance.parts.len(),
+            equipment
+        );
+        (Actor::Npc(r.base), equipment, Some(appearance))
+    } else if let Some(creature) = data.creatures.get(&r.base) {
+        (
+            Actor::Creature(r.base),
+            Vec::new(),
+            creature_appearance(creature),
+        )
+    } else {
+        warn!(
+            "{:08X}: base {:08X} is no NPC or creature",
+            r.form_id, r.base
+        );
+        return;
+    };
+    entity.insert((actor, Equipment(equipment)));
+    if let Some(appearance) = appearance {
+        entity.insert(appearance);
+    }
+    // Actors stand where the player can bump into them, with the player's shape
+    // until they have their own.
+    entity.with_child((
+        Collider::capsule_y(PLAYER_HALF_HEIGHT, PLAYER_RADIUS),
+        Transform::from_xyz(0.0, PLAYER_HALF_HEIGHT + PLAYER_RADIUS, 0.0),
+    ));
+}
+
 /// Spawns a cell's references and returns where a player arriving without a
 /// destination (no load door) should stand.
 fn spawn_cell(
@@ -200,9 +274,15 @@ fn spawn_cell(
     let mut doors = 0;
     // Load doors out of here that lead to another interior: (destination cell, door there).
     let mut exits = Vec::new();
+    let by_id: HashMap<u32, &Reference> = cell.references.iter().map(|r| (r.form_id, r)).collect();
+    let mut disabled = 0;
     for r in &cell.references {
         // Picked up, or otherwise gone for good.
         if changes.removed.contains(&r.form_id) {
+            continue;
+        }
+        if !is_enabled(r, &by_id, changes) {
+            disabled += 1;
             continue;
         }
         let translation = Vec3::from(zup_to_yup_pos(r.position));
@@ -224,10 +304,10 @@ fn spawn_cell(
             BaseForm(r.base),
             CellMember,
         ));
-        // Markers have no model to draw. Neither do actors yet: an NPC's or
-        // creature's MODL is its skeleton.nif, which has no visible mesh but
-        // does carry a ragdoll, and frozen in its bind pose that ragdoll is an
-        // invisible T-shaped wall. Actors get their models when they're animated.
+        // Markers have no model to draw. Actors don't get a Model either: an
+        // NPC's or creature's MODL is its skeleton.nif, which has no visible
+        // mesh but does carry a ragdoll, and as a static model that ragdoll is
+        // an invisible T-shaped wall. They get an Appearance instead.
         let actor = matches!(&r.tag.0, b"ACHR" | b"ACRE");
         if let Some(model) = world
             .models
@@ -243,6 +323,9 @@ fn spawn_cell(
         }
         if world.items.contains_key(&r.base) {
             entity.insert(Item(r.base));
+        }
+        if actor {
+            spawn_actor(&mut entity, world, r);
         }
         if world.containers.contains_key(&r.base) {
             entity.insert(Container(r.base));
@@ -290,7 +373,7 @@ fn spawn_cell(
             .find_map(|&(other, door)| arrival_through(world, other, door));
     }
     info!(
-        "cell {} ({:08X}): {} references, {} with models, {doors} load doors, spawn {}",
+        "cell {} ({:08X}): {} references ({disabled} disabled), {} with models, {doors} load doors, spawn {}",
         cell.editor_id,
         cell.form_id,
         cell.references.len(),

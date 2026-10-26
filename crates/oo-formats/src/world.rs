@@ -24,7 +24,22 @@ pub struct Reference {
     pub scale: f32,
     /// Set on load doors: where activating this reference takes you.
     pub teleport: Option<Teleport>,
+    /// Hidden until a script enables it (record flag 0x800).
+    pub initially_disabled: bool,
+    /// Enabled and disabled along with another reference (`XESP`).
+    pub enable_parent: Option<EnableParent>,
 }
+
+/// A reference whose enabled state another reference follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnableParent {
+    pub reference: u32,
+    /// Enabled when the parent is disabled, and the other way round.
+    pub opposite: bool,
+}
+
+/// Record flag on references that start the game disabled.
+pub const INITIALLY_DISABLED: u32 = 0x800;
 
 /// An interior cell's lighting and fog (`XCLL`). Colours are 0..=255 RGB.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -158,6 +173,8 @@ impl Reference {
             rotation: [0.0; 3],
             scale: 1.0,
             teleport: None,
+            initially_disabled: r.flags & INITIALLY_DISABLED != 0,
+            enable_parent: None,
         };
         let fields = r.fields()?;
         for field in fields.iter() {
@@ -170,6 +187,12 @@ impl Reference {
                     out.rotation = [f32_at(d, 12), f32_at(d, 16), f32_at(d, 20)];
                 }
                 b"XSCL" if d.len() >= 4 => out.scale = f32_at(d, 0),
+                b"XESP" if d.len() >= 8 => {
+                    out.enable_parent = Some(EnableParent {
+                        reference: u32_at(d, 0),
+                        opposite: u32_at(d, 4) & 0x1 != 0,
+                    });
+                }
                 b"XTEL" if d.len() >= 28 => {
                     out.teleport = Some(Teleport {
                         door: u32_at(d, 0),
@@ -332,6 +355,9 @@ fn remap_reference(order: &LoadOrder, index: usize, r: &mut Reference) {
     if let Some(t) = &mut r.teleport {
         t.door = order.global(index, t.door);
     }
+    if let Some(p) = &mut r.enable_parent {
+        p.reference = order.global(index, p.reference);
+    }
 }
 
 /// Maps every reference in an interior cell to that cell's global form ID.
@@ -493,6 +519,8 @@ fn collect_references(nodes: Nodes<'_>, out: &mut Vec<(Reference, bool)>) -> Res
                         rotation: [0.0; 3],
                         scale: 1.0,
                         teleport: None,
+                        initially_disabled: false,
+                        enable_parent: None,
                     };
                     out.push((stub, true));
                 } else {

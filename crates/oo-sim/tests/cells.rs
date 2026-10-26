@@ -68,6 +68,20 @@ fn refr(
     record(b"REFR", 0, form_id, &fields)
 }
 
+/// Sets record header flags on a record built by `record`.
+fn with_flags(mut record: Vec<u8>, flags: u32) -> Vec<u8> {
+    record[8..12].copy_from_slice(&flags.to_le_bytes());
+    record
+}
+
+/// Appends a field to a record built by `record`.
+fn with_field(mut record: Vec<u8>, field: Vec<u8>) -> Vec<u8> {
+    let size = u32::from_le_bytes(record[4..8].try_into().unwrap()) + field.len() as u32;
+    record[4..8].copy_from_slice(&size.to_le_bytes());
+    record.extend(field);
+    record
+}
+
 fn cell(form_id: u32, edid: &str, full: &str, refs: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     vec![
         record(
@@ -181,6 +195,17 @@ fn write_data_dir() -> PathBuf {
             // A lockpick at eye height, 80 units in front of the player.
             refr(0x104, LOCKPICK, [90.0, 20.0, EYE_HEIGHT], 0.0, None),
             refr(0x105, CHEST, [10.0, -60.0, 0.0], 0.0, None),
+            // Disabled until a script enables it, and two references that follow
+            // it: one the same way, one the opposite way.
+            with_flags(refr(0x106, WALL, [0.0, 0.0, 300.0], 0.0, None), 0x800),
+            with_field(
+                refr(0x107, WALL, [0.0, 0.0, 400.0], 0.0, None),
+                field(b"XESP", &[0x06, 0x01, 0, 0, 1, 0, 0, 0]),
+            ),
+            with_field(
+                refr(0x108, WALL, [0.0, 0.0, 500.0], 0.0, None),
+                field(b"XESP", &[0x06, 0x01, 0, 0, 0, 0, 0, 0]),
+            ),
         ],
     );
     cells.extend(cell(
@@ -323,7 +348,7 @@ fn picks_up_items_and_uses_containers() {
     // It stays gone after leaving and coming back.
     go_to(&mut app, 0x200);
     go_to(&mut app, 0x100);
-    assert_eq!(refs_in_world(&mut app), [0x101, 0x102, 0x103, 0x105]);
+    assert_eq!(refs_in_world(&mut app), [0x101, 0x102, 0x103, 0x105, 0x107]);
 
     // Open the chest, take one lockpick, then everything, then put some gold back.
     let player = self::player(&mut app);
@@ -413,7 +438,10 @@ fn loads_cell_spawns_player_at_marker_and_takes_load_door() {
         (cell.form_id, cell.name.as_deref()),
         (0x100, Some("Imperial Prison"))
     );
-    assert_eq!(refs_in_world(&mut app), [0x101, 0x102, 0x103, 0x104, 0x105]);
+    assert_eq!(
+        refs_in_world(&mut app),
+        [0x101, 0x102, 0x103, 0x104, 0x105, 0x107]
+    );
 
     // Marker models are never drawn.
     let models: Vec<String> = app
@@ -422,7 +450,7 @@ fn loads_cell_spawns_player_at_marker_and_takes_load_door() {
         .iter(app.world())
         .map(|m| m.0.clone())
         .collect();
-    assert_eq!(models.len(), 2);
+    assert_eq!(models.len(), 3);
     assert!(models.iter().all(|m| !m.to_lowercase().contains("marker")));
 
     // The player stands on the COC marker: Z-up (10, 20, 0) is Y-up (10, 0, -20),

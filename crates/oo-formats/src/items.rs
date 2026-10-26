@@ -14,6 +14,11 @@ pub const ITEM_TYPES: [&[u8; 4]; 12] = [
     b"SLGM", b"APPA",
 ];
 
+const ITEM_AND_LIGHT_TYPES: [&[u8; 4]; 13] = [
+    b"MISC", b"WEAP", b"ARMO", b"CLOT", b"BOOK", b"INGR", b"ALCH", b"KEYM", b"AMMO", b"SGST",
+    b"SLGM", b"APPA", b"LIGH",
+];
+
 /// What the inventory needs to know about an item's base record.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemInfo {
@@ -62,7 +67,7 @@ impl LeveledList {
 /// can be carried (torches).
 pub fn items(order: &LoadOrder) -> Result<HashMap<u32, ItemInfo>> {
     let mut out = HashMap::new();
-    for_each_top_record(order, |index, r| {
+    for_each_top_record(order, &ITEM_AND_LIGHT_TYPES, |index, r| {
         let id = order.global(index, r.form_id);
         let carriable =
             ITEM_TYPES.contains(&&r.tag.0) || (r.tag.0 == *b"LIGH" && light_can_carry(r)?);
@@ -89,7 +94,7 @@ pub fn items(order: &LoadOrder) -> Result<HashMap<u32, ItemInfo>> {
 /// Every container base record (`CONT`), by global form ID.
 pub fn containers(order: &LoadOrder) -> Result<HashMap<u32, ContainerInfo>> {
     let mut out = HashMap::new();
-    for_each_top_record(order, |index, r| {
+    for_each_top_record(order, &[b"CONT"], |index, r| {
         if r.tag.0 != *b"CONT" {
             return Ok(());
         }
@@ -125,7 +130,7 @@ pub fn containers(order: &LoadOrder) -> Result<HashMap<u32, ContainerInfo>> {
 /// Every leveled item list (`LVLI`), by global form ID.
 pub fn leveled_items(order: &LoadOrder) -> Result<HashMap<u32, LeveledList>> {
     let mut out = HashMap::new();
-    for_each_top_record(order, |index, r| {
+    for_each_top_record(order, &[b"LVLI"], |index, r| {
         if r.tag.0 != *b"LVLI" {
             return Ok(());
         }
@@ -267,22 +272,28 @@ impl SplitMix {
     }
 }
 
-fn for_each_top_record(
+/// Every record of the given types in every plugin, in load order, with the
+/// plugin's index. Only top-level groups: base records never live in cells.
+pub(crate) fn for_each_top_record(
     order: &LoadOrder,
+    types: &[&[u8; 4]],
     mut f: impl FnMut(usize, &Record<'_>) -> Result<()>,
 ) -> Result<()> {
     for (index, _, plugin) in order.plugins() {
-        walk_top(plugin, &mut |r| f(index, r))?;
+        walk_top(plugin, types, &mut |r| f(index, r))?;
     }
     Ok(())
 }
 
-/// Records in top-level groups only: items, containers and lists never live in cells.
-fn walk_top(plugin: &Plugin, f: &mut dyn FnMut(&Record<'_>) -> Result<()>) -> Result<()> {
+fn walk_top(
+    plugin: &Plugin,
+    types: &[&[u8; 4]],
+    f: &mut dyn FnMut(&Record<'_>) -> Result<()>,
+) -> Result<()> {
     for node in plugin.top_level() {
         let Node::Group(g) = node? else { continue };
         let Some(tag) = g.record_type() else { continue };
-        if !(ITEM_TYPES.contains(&&tag.0) || matches!(&tag.0, b"LIGH" | b"CONT" | b"LVLI")) {
+        if !types.contains(&&tag.0) {
             continue;
         }
         for node in g.children() {
@@ -294,7 +305,7 @@ fn walk_top(plugin: &Plugin, f: &mut dyn FnMut(&Record<'_>) -> Result<()>) -> Re
     Ok(())
 }
 
-fn names(r: &Record<'_>) -> Result<(Option<String>, Option<String>)> {
+pub(crate) fn names(r: &Record<'_>) -> Result<(Option<String>, Option<String>)> {
     let (mut edid, mut full) = (None, None);
     let fields = r.fields()?;
     for f in fields.iter() {
@@ -319,6 +330,6 @@ fn light_can_carry(r: &Record<'_>) -> Result<bool> {
     Ok(false)
 }
 
-fn u32_at(d: &[u8], at: usize) -> u32 {
+pub(crate) fn u32_at(d: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(d[at..at + 4].try_into().unwrap())
 }
