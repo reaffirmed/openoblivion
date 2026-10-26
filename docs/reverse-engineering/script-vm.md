@@ -229,6 +229,43 @@ can't be evaluated (for example a function called on a `ref` variable that is em
 a malformed stack. This is the mechanism behind the familiar "script stops working
 after calling a function on a null reference".
 
+### Killing blows: `OnHit` and `OnDeath`
+
+The melee hit routine sets the target's `OnHit` (and `OnHitWith`) flags **before** it
+applies the damage. If that damage kills the target, the death routine then sets
+`OnDeath` (and `OnMurder` where it applies). So a one-blow kill leaves both flags set when
+the target's script next runs. **[high]**
+
+The flags are only read on that next run, and every block tests its own flag. So both
+`OnHit` and `OnDeath` run, in the order the blocks appear in the script. **[medium]**
+for "in that same run": that follows from the event-list rules above, not from tracing a
+dead actor's script update.
+
+## Quest stages: `SetStage` and `GetStage`
+
+```
+SetStage quest n:
+    find the stage entry n in the quest's stage list
+    if there is none: nothing happens (the command returns 0)
+    if the quest isn't completed, or it allows repeated stages: mark it running
+    quest.stage = max(quest.stage, n)            # never lowered
+    if stage n hasn't run yet, or the quest allows repeated stages:
+        mark stage n done
+        run each of its log entries in order (their conditions and result scripts)
+    mark the quest's stages changed (for the save)
+
+GetStage quest   → quest.stage, i.e. the highest stage ever set
+GetStageDone quest n → whether stage n has run
+```
+
+**[exact]** So in the tutorial, `SetStage CharacterGen 23` while the quest is at 24 does
+run stage 23's results (if 23 hasn't run before) and marks 23 done, but `GetStage`
+keeps returning 24. A stage that already ran **does not run again** unless the quest has
+the *Allow repeated stages* flag (`0x08`). A completed quest isn't set running again
+either, except with that flag. Flag names: running `0x01`, completed `0x02`, allow
+repeated topics `0x04`, allow repeated stages `0x08` (public OBSE names; the bits used
+here are checked against the executable).
+
 ## Evidence
 
 | Fact | Source | Confidence |
