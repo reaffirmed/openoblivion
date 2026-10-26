@@ -55,6 +55,9 @@ Plugins: by default every `.esm` and `.esp` in the Data directory loads. Name th
 
 Controls follow Oblivion's defaults: click to capture the mouse (Escape releases it),
 WASD to move, Shift to run (Caps Lock toggles always-run), E to jump, Space to activate.
+Activating picks up items and opens containers and doors. Tab shows your inventory. In a
+container, W/S choose a line, A/D switch sides, Space moves the stack across, T takes
+everything, and Tab or Escape closes it.
 Debug keys: N toggles noclip, F3 shows collision shapes. Lighting comes from each cell's
 `XCLL` and its light references; `--light-scale` and `--ambient-scale` adjust brightness
 while it's being tuned.

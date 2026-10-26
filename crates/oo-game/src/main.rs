@@ -4,6 +4,7 @@
 //! The world itself lives in `oo-sim`; this crate only draws it and takes input.
 
 mod lighting;
+mod menu;
 mod model;
 
 use std::path::PathBuf;
@@ -14,9 +15,10 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_dis
 use bevy::window::{CursorGrabMode, CursorOptions, PresentMode, PrimaryWindow};
 use bevy_rapier3d::render::{DebugRenderContext, RapierDebugRenderPlugin};
 use clap::Parser;
+use oo_sim::cell::WorldData;
 use oo_sim::{
-    CurrentCell, EYE_HEIGHT, LoadDoor, LookingAt, Player, PlayerIntent, SimPlugin, StepPositions,
-    UNITS_PER_METRE, WorldConfig,
+    Container, CurrentCell, EYE_HEIGHT, Item, LoadDoor, LookingAt, Player, PlayerIntent, SimPlugin,
+    StepPositions, UNITS_PER_METRE, WorldConfig,
 };
 
 use crate::model::ModelCache;
@@ -113,15 +115,15 @@ fn main() {
         brightness: 400.0,
         ..default()
     })
-    .add_systems(Startup, (setup_scene, setup_hud))
+    .init_resource::<menu::Menu>()
+    .add_systems(Startup, (setup_scene, setup_hud, menu::setup_menu))
     .add_systems(
         Update,
         (
             model::attach_models,
-            grab_cursor,
-            (player_input, follow_player).chain(),
+            (menu::menu_input, grab_cursor, player_input, follow_player).chain(),
             debug_keys,
-            update_hud,
+            (update_hud, update_cell_label, menu::update_menu),
             (
                 lighting::apply_cell_lighting,
                 lighting::attach_lights,
@@ -231,12 +233,18 @@ fn player_input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<AccumulatedMouseMotion>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    menu: Res<menu::Menu>,
     mut always_run: Local<bool>,
     mut players: Query<&mut PlayerIntent, With<Player>>,
 ) {
     let Ok(mut intent) = players.single_mut() else {
         return;
     };
+    if menu.is_open() {
+        intent.movement = Vec2::ZERO;
+        intent.jump = false;
+        return;
+    }
 
     if cursor
         .single()
@@ -340,20 +348,38 @@ fn setup_hud(mut commands: Commands) {
 fn update_hud(
     players: Query<&LookingAt, With<Player>>,
     doors: Query<&LoadDoor>,
-    cell: Option<Res<CurrentCell>>,
-    mut prompt: Query<&mut Text, (With<ActivatePrompt>, Without<CellLabel>)>,
-    mut label: Query<&mut Text, (With<CellLabel>, Without<ActivatePrompt>)>,
+    targets: Query<(Option<&Item>, Option<&Container>)>,
+    world: Option<Res<WorldData>>,
+    menu: Res<menu::Menu>,
+    mut prompt: Query<&mut Text, With<ActivatePrompt>>,
 ) {
     if let (Ok(looking), Ok(mut text)) = (players.single(), prompt.single_mut()) {
         let wanted = looking
             .0
-            .and_then(|e| doors.get(e).ok())
-            .map(|d| format!("[Space] {}", d.label))
+            .filter(|_| !menu.is_open())
+            .and_then(|e| {
+                if let Ok(door) = doors.get(e) {
+                    return Some(format!("[Space] {}", door.label));
+                }
+                let world = world.as_ref()?;
+                match targets.get(e).ok()? {
+                    (Some(Item(base)), _) => {
+                        Some(format!("[Space] Take {}", world.items.get(base)?.name))
+                    }
+                    (_, Some(Container(base))) => {
+                        Some(format!("[Space] Open {}", world.containers.get(base)?.name))
+                    }
+                    _ => None,
+                }
+            })
             .unwrap_or_default();
         if text.0 != wanted {
             text.0 = wanted;
         }
     }
+}
+
+fn update_cell_label(cell: Option<Res<CurrentCell>>, mut label: Query<&mut Text, With<CellLabel>>) {
     if let (Some(cell), Ok(mut text)) = (cell, label.single_mut())
         && cell.is_changed()
     {
