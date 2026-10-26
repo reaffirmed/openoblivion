@@ -113,7 +113,8 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
       CharacterGen reached on the PC so far)
 - [x] Audio: sound effects from `SOUN` records with DirectSound's 3D falloff; voiced
       dialogue with `.lip` timing; cell ambience and music picked the game's way
-      (loose files by music type, uniform random). Open: battle music, footsteps
+      (loose files by music type, uniform random), battle music while something fights
+      the player. Open: footsteps, when the game switches to and from battle music
 - [ ] Combat, progress: health, magicka and fatigue from the records with the
       derived-stat formulas and regeneration, on the HUD; punching with the
       hand-to-hand formula (left mouse) and blocking (right mouse); creatures with

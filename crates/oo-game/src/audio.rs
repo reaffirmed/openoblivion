@@ -393,12 +393,15 @@ fn music_folder(kind: u8) -> &'static str {
 const MUSIC_BATTLE: u8 = 4;
 const MUSIC_SPECIAL: u8 = 8;
 
-/// Plays the cell's music type: a uniformly random loose `*.mp3` from its
-/// folder, picked again whenever a track ends or the type changes. Picking
-/// the track that's already playing keeps it going.
+/// Plays the cell's music type, or battle music while anyone is fighting the
+/// player: a uniformly random loose `*.mp3` from its folder, picked again
+/// whenever a track ends or the type changes. Picking the track that's
+/// already playing keeps it going.
+#[allow(clippy::too_many_arguments)]
 fn play_music(
     mut commands: Commands,
     cell: Option<Res<CurrentCell>>,
+    state: Res<oo_sim::script::ScriptState>,
     data: Option<Res<GameData>>,
     mut music: ResMut<Music>,
     mut cache: ResMut<SoundCache>,
@@ -408,7 +411,11 @@ fn play_music(
     let (Some(cell), Some(data)) = (cell, data) else {
         return;
     };
+    let battle = state.fighting.iter().any(|(&who, &target)| {
+        target == PLAYER_REF && state.vitals.get(&who).is_none_or(|v| !v.dead && v.unconscious <= 0.0)
+    });
     let kind = match cell.music {
+        _ if battle => MUSIC_BATTLE,
         Cell::MUSIC_PUBLIC | Cell::MUSIC_DUNGEON => cell.music,
         _ => Cell::MUSIC_DEFAULT,
     };
