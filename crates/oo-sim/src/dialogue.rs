@@ -289,6 +289,10 @@ pub(crate) fn update_conversations(
             }
             _ => true,
         });
+        // An actor walking up to talk starts a conversation, if none is open.
+        if !talk.is_open() && talk.request.is_none() && !pending.greetings.is_empty() {
+            talk.request = Some(pending.greetings.remove(0));
+        }
         if talk.request.is_none() && asked.is_empty() && !goodbye {
             continue;
         }

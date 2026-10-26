@@ -67,8 +67,13 @@ impl SoundCache {
             .entry(path.to_owned())
             .or_insert_with(|| {
                 let bytes = data.read(path);
-                if bytes.is_none() {
-                    warn!("missing sound {path}");
+                match bytes.as_deref() {
+                    None => warn!("missing sound {path}"),
+                    Some(b) => {
+                        if let Some(tag) = wav_encoding(b).filter(|t| !matches!(t, 1 | 3)) {
+                            warn!("{path}: WAV encoding {tag:#x} can't be decoded");
+                        }
+                    }
                 }
                 bytes.map(|b| {
                     sources.add(AudioSource {
@@ -109,6 +114,23 @@ impl SoundCache {
     }
 }
 
+/// A RIFF WAV file's format tag (1 for PCM, 3 for float, 2 or 0x11 for
+/// ADPCM), if it is one.
+fn wav_encoding(bytes: &[u8]) -> Option<u16> {
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+    let mut at = 12;
+    while at + 8 <= bytes.len() {
+        let size = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().ok()?) as usize;
+        if &bytes[at..at + 4] == b"fmt " && at + 10 <= bytes.len() {
+            return Some(u16::from_le_bytes([bytes[at + 8], bytes[at + 9]]));
+        }
+        at += 8 + size + (size & 1);
+    }
+    None
+}
+
 /// A sound playing at a place in the world.
 #[derive(Component)]
 struct Emitter {
@@ -147,6 +169,14 @@ fn play_sounds(
         let Some(path) = cache.pick(sound, &data) else {
             continue;
         };
+        debug!(
+            "sound {:?} from {:08X}: {path}, min {} max {} attenuation {} dB",
+            request.sound,
+            request.source,
+            sound.min_distance,
+            sound.max_distance,
+            sound.static_attenuation
+        );
         let Some(handle) = cache.file(&path, &data, &mut sources) else {
             continue;
         };
@@ -457,10 +487,17 @@ fn place_emitters(
     for (emitter, mut transform, sink) in &mut emitters {
         let offset = emitter.at - ear;
         let distance = offset.length();
-        transform.translation = ear + offset.normalize_or_zero();
+        // Touch the sink only on a real change: each update takes a lock the
+        // audio thread also holds while it mixes.
+        let place = ear + offset.normalize_or_zero();
+        if transform.translation.distance_squared(place) > 1e-4 {
+            transform.translation = place;
+        }
         if let Some(mut sink) = sink {
             let volume = falloff(distance, emitter.min, emitter.max) * emitter.gain;
-            sink.set_volume(Volume::Linear(volume));
+            if (sink.volume().to_linear() - volume).abs() > 0.002 {
+                sink.set_volume(Volume::Linear(volume));
+            }
         }
     }
 }

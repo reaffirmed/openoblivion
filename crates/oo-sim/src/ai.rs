@@ -16,7 +16,7 @@ use crate::actor::Actor;
 use crate::cell::{CurrentCell, PlacedRef, WorldData};
 use crate::inventory::Inventory;
 use crate::player::{PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player};
-use crate::script::{GameHost, PLAYER_REF, ScriptData, ScriptState, event, gather_facts};
+use crate::script::{GameHost, PLAYER_REF, Pending, ScriptData, ScriptState, event, gather_facts};
 
 /// Bethesda units per second.
 pub const WALK_SPEED: f32 = 110.0;
@@ -27,6 +27,11 @@ const REEVALUATE: f32 = 1.0;
 const WAYPOINT_REACHED: f32 = 24.0;
 /// Followers stop this close to whoever they follow.
 const FOLLOW_DISTANCE: f32 = 160.0;
+/// An ambush springs when its target comes this close, if the package
+/// doesn't say.
+const AMBUSH_RADIUS: f32 = 500.0;
+/// How close an actor comes to start talking, if the package doesn't say.
+const GREET_DISTANCE: f32 = 100.0;
 /// An escort waits when the escorted falls this far behind.
 const ESCORT_WAIT_DISTANCE: f32 = 600.0;
 
@@ -349,6 +354,7 @@ pub(crate) fn run_ai(
     world: Option<Res<WorldData>>,
     cell: Option<Res<CurrentCell>>,
     mut state: ResMut<ScriptState>,
+    mut pending: ResMut<Pending>,
     refs: Query<(&PlacedRef, &Transform), Without<Ai>>,
     mut actors: Query<
         (&PlacedRef, &Actor, &mut Transform, &mut Ai, &mut Locomotion),
@@ -396,7 +402,7 @@ pub(crate) fn run_ai(
         .as_ref()
         .map(|c| (&c.path_points[..], &c.path_edges[..]));
 
-    for (placed, _, mut transform, mut ai, mut motion) in &mut actors {
+    for (placed, actor, mut transform, mut ai, mut motion) in &mut actors {
         ai.reevaluate_in -= dt;
         if ai.reevaluate_in <= 0.0 {
             ai.reevaluate_in += REEVALUATE;
@@ -501,6 +507,61 @@ pub(crate) fn run_ai(
                     {
                         goal = Some(to);
                         speed = pace;
+                    }
+                }
+                // Wait until the target comes within the radius of the place,
+                // then go up to it: an aggressive actor attacks, anyone else
+                // greets the player.
+                PackageKind::Ambush if !ai.finished => {
+                    let target = package_target(p).unwrap_or(PLAYER_REF);
+                    let centre = destination(p, &ai, here, &positions).map_or(here, |(c, _)| c);
+                    let radius = if p.radius > 0 {
+                        p.radius as f32
+                    } else {
+                        AMBUSH_RADIUS
+                    };
+                    if let Some(&to) = positions.get(&target)
+                        && (to.distance(centre) <= radius || to.distance(here) <= radius)
+                    {
+                        let close = if p.target_count > 0 {
+                            p.target_count as f32
+                        } else {
+                            GREET_DISTANCE
+                        };
+                        let flat = Vec3::new(to.x - here.x, 0.0, to.z - here.z).length();
+                        if flat > close {
+                            goal = Some(to);
+                            speed = pace;
+                        } else {
+                            ai.finished = true;
+                            let base = match *actor {
+                                Actor::Npc(b) | Actor::Creature(b) => b,
+                            };
+                            let aggression = world
+                                .actors
+                                .npcs
+                                .get(&base)
+                                .map(|n| n.stats.aggression)
+                                .or_else(|| {
+                                    world
+                                        .actors
+                                        .creatures
+                                        .get(&base)
+                                        .map(|c| c.stats.aggression)
+                                })
+                                .unwrap_or(0);
+                            if aggression > 50 {
+                                if state.fighting.insert(placed.0, target).is_none() {
+                                    state.raise(placed.0, target, event::START_COMBAT);
+                                }
+                            } else if target == PLAYER_REF {
+                                debug!("{:08X} greets the player", placed.0);
+                                pending.greetings.push(placed.0);
+                            }
+                            if let Some(current) = ai.current {
+                                state.raise(placed.0, current, event::PACKAGE_DONE);
+                            }
+                        }
                     }
                 }
                 PackageKind::Wander => {

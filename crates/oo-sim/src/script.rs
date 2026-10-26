@@ -1061,6 +1061,8 @@ pub fn tick_quests(
         let mut locals = std::mem::take(&mut progress.locals);
         let seconds_passed = std::mem::take(&mut progress.since_run);
         let mut host = GameHost::new(data, state, facts, Some(quest));
+        // Quest scripts say lines too (Say, SayTo): time and voice them.
+        host.voice = voice;
         host.seconds_passed = seconds_passed;
         let outcome = host.run_script(script, &mut locals, Event::GameMode);
         let stages = std::mem::take(&mut host.stages);
@@ -1211,6 +1213,8 @@ pub struct Pending {
     pub moves: Vec<(u32, u32)>,
     /// Doors to open or close and animation groups to play, by reference.
     pub animations: Vec<(u32, AnimRequest)>,
+    /// Actors who came up to the player to talk, oldest first.
+    pub greetings: Vec<u32>,
 }
 
 /// A snapshot of the actors in the loaded cell and the player, for scripts and
