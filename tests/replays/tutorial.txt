@@ -14,10 +14,11 @@ t10 expect stage Charactergen >= 6
 # The locked cell gate refuses ("This lock cannot be picked. You need a key.").
 t3 hold KeyW 1.1
 t5 key Space
-t6 expect near 420 5 57 40
+# The floor rises towards the gate; the player stops against it.
+t6 expect near 358 29 52 40
 
 # Back off to the window, into the trigger zone along the back wall.
-t7 hold KeyS 2.6
+t7 hold KeyS 3.0
 t11 expect near 824 -40 57 40
 
 # Valen's last taunt, then the Emperor and his guards come down the stairs.
