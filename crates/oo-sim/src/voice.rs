@@ -110,13 +110,37 @@ impl Voices {
             .map(|(_, _, p)| p.as_str())
     }
 
-    /// How long a voice file plays, in seconds. The game times lines by their
-    /// `.lip` file instead, whose layout isn't known yet; the two should be
-    /// close.
+    /// How long a voiced response lasts, in seconds: its `.lip` file's frame
+    /// count at 30 frames a second, as the game times it, or the MP3's own
+    /// length when there's no `.lip`.
     pub fn seconds(&self, path: &str, data: &GameData) -> Option<f32> {
         let mut lengths = self.lengths.lock().ok()?;
-        *lengths
-            .entry(path.to_owned())
-            .or_insert_with(|| data.read(path).and_then(|b| mp3::duration(&b)))
+        *lengths.entry(path.to_owned()).or_insert_with(|| {
+            let lip = path.strip_suffix(".mp3").map(|stem| format!("{stem}.lip"));
+            lip.and_then(|p| data.read(&p))
+                .and_then(|b| lip_seconds(&b))
+                .or_else(|| data.read(path).and_then(|b| mp3::duration(&b)))
+        })
+    }
+}
+
+/// A `.lip` file's length: the frame count at byte 12, at 30 frames a second.
+fn lip_seconds(bytes: &[u8]) -> Option<f32> {
+    let frames = u16::from_le_bytes([*bytes.get(12)?, *bytes.get(13)?]);
+    Some(f32::from(frames) / LIP_FRAMES_PER_SECOND)
+}
+
+const LIP_FRAMES_PER_SECOND: f32 = 30.0;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lip_length_is_frames_over_thirty() {
+        let mut lip = vec![0u8; 16];
+        lip[12..14].copy_from_slice(&90u16.to_le_bytes());
+        assert_eq!(lip_seconds(&lip), Some(3.0));
+        assert_eq!(lip_seconds(&[0; 4]), None);
     }
 }
