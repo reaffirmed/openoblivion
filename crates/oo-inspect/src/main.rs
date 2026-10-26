@@ -286,17 +286,19 @@ fn main() -> Result<()> {
             }
             all.sort_by(|a, b| a.0.cmp(&b.0));
             let (mut ok, mut failed, mut source_only) = (0, 0, 0);
+            // Failures by kind of record and kind of error.
+            let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
             for (name, code) in &all {
                 if code.compiled.is_empty() {
                     source_only += 1;
                     continue;
                 }
+                let wanted = show
+                    .as_ref()
+                    .is_some_and(|w| name.to_ascii_lowercase().contains(&w.to_ascii_lowercase()));
                 match oo_script::decode(&code.compiled) {
                     Ok(statements) => {
                         ok += 1;
-                        let wanted = show.as_ref().is_some_and(|w| {
-                            name.to_ascii_lowercase().contains(&w.to_ascii_lowercase())
-                        });
                         if wanted {
                             println!("{name}");
                             for (i, s) in statements.iter().enumerate() {
@@ -306,11 +308,34 @@ fn main() -> Result<()> {
                     }
                     Err(e) => {
                         failed += 1;
-                        if failed <= 20 {
+                        let origin = if name.starts_with("INFO ") {
+                            "INFO result"
+                        } else if name.contains(" stage ") {
+                            "quest stage result"
+                        } else {
+                            "SCPT"
+                        };
+                        let what = e.to_string();
+                        let what = what.split(" at ").next().unwrap_or(&what).to_owned();
+                        *kinds.entry(format!("{origin}: {what}")).or_default() += 1;
+                        if failed <= 20 || wanted {
                             println!("FAIL {name}: {e}");
+                        }
+                        if wanted {
+                            for line in code.source.lines().filter(|l| !l.trim().is_empty()) {
+                                println!("    | {line}");
+                            }
+                            for (n, chunk) in code.compiled.chunks(16).enumerate() {
+                                let hex: Vec<String> =
+                                    chunk.iter().map(|b| format!("{b:02X}")).collect();
+                                println!("    {:5}: {}", n * 16, hex.join(" "));
+                            }
                         }
                     }
                 }
+            }
+            for (kind, n) in &kinds {
+                println!("  {n:5} {kind}");
             }
             println!("{ok} decoded, {failed} failed, {source_only} with source only");
         }

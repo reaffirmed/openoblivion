@@ -104,7 +104,9 @@ fn script() -> Vec<u8> {
     get_stage.extend((args.len() as u16).to_le_bytes());
     get_stage.extend(args);
     // player.Enable
-    let enable = [&[0x1C][..], &1u16.to_le_bytes(), &stmt(0x1021, &[])].concat();
+    // A statement on a reference opens with a 16-bit 0x001C (see
+    // decodes_calls_on_references).
+    let enable = [&[0x1C, 0x00][..], &1u16.to_le_bytes(), &stmt(0x1021, &[])].concat();
     [
         stmt(0x1D, &[]),
         block(
@@ -233,4 +235,41 @@ fn or_binds_tighter_than_and() {
     assert!(conditions_pass(&[against_global], None, None, &mut world));
     let call = world.calls.last().unwrap();
     assert_eq!(call.2, [Value::Form(QUEST)]);
+}
+
+/// A statement calling a command on a reference: a 16-bit 0x001C, the
+/// reference-list index, then the command. From ARSwitch01SCRIPT's
+/// `target.Activate mySelf 1`.
+#[test]
+fn decodes_calls_on_references() {
+    let mut bytes = stmt(0x1D, &[]);
+    bytes.extend([0x1C, 0x00, 0x01, 0x00]);
+    bytes.extend(stmt(
+        0x100D,
+        &[0x02, 0x00, b'r', 0x0A, 0x00, b'n', 0x01, 0x00, 0x00, 0x00],
+    ));
+    let code = decode(&bytes).unwrap();
+    let Statement::Call(call) = &code[1] else {
+        panic!("expected a call, got {:?}", code[1]);
+    };
+    assert_eq!(call.on, Some(1));
+    assert_eq!(call.command.name, "Activate");
+    assert_eq!(call.args.len(), 2);
+}
+
+/// A crime type argument is a bare 16-bit code, as in block headers. From
+/// DAMephalaUlfgarScript's `GetCrimeKnown 0 Player NivanDalviluRef`.
+#[test]
+fn decodes_crime_type_arguments() {
+    let mut bytes = stmt(0x1D, &[]);
+    bytes.extend(stmt(
+        0x1077,
+        &[0x03, 0x00, 0x00, 0x00, b'r', 0x03, 0x00, b'r', 0x04, 0x00],
+    ));
+    let code = decode(&bytes).unwrap();
+    let Statement::Call(call) = &code[1] else {
+        panic!("expected a call, got {:?}", code[1]);
+    };
+    assert_eq!(call.command.name, "GetCrimeKnown");
+    assert_eq!(call.args.len(), 3);
 }

@@ -234,8 +234,11 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Statement>, DecodeError> {
 fn statement(r: &mut Reader<'_>) -> Result<Statement, DecodeError> {
     let start = r.at;
     let mut on = None;
-    if r.peek() == Some(ON_REFERENCE) {
-        r.u8()?;
+    // A statement that calls a command on a reference starts with a 16-bit
+    // 0x001C, then the reference-list index (`target.Activate` is
+    // `1C 00 01 00 0D 10 …`). Inside expressions the same prefix is one byte.
+    if r.bytes.get(r.at..r.at + 2) == Some(&[ON_REFERENCE, 0][..]) {
+        r.u16()?;
         on = Some(r.u16()?);
     }
     let opcode = r.u16()?;
@@ -406,9 +409,11 @@ fn arg(r: &mut Reader<'_>, kind: ParamKind) -> Result<Arg, DecodeError> {
             let len = r.u16()? as usize;
             Ok(Arg::Str(text(r.take(len)?)))
         }
-        ActorValue | AnimGroup | Sex => Ok(Arg::Code(r.u16()?)),
+        // A crime type is a bare code as a command argument too
+        // (`GetCrimeKnown 0 Player …` is `00 00 72 03 00 …`), not an `n` number.
+        ActorValue | AnimGroup | Sex | CrimeType => Ok(Arg::Code(r.u16()?)),
         Axis => Ok(Arg::Axis(r.u8()?)),
-        Int | QuestStage | FormType | CrimeType | Float => match r.peek() {
+        Int | QuestStage | FormType | Float => match r.peek() {
             Some(b'n') => {
                 r.u8()?;
                 Ok(Arg::Int(r.u32()? as i32))
