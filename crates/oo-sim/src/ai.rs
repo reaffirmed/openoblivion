@@ -36,8 +36,12 @@ const AMBUSH_HOME: f32 = 200.0;
 const AMBUSH_LEASH: f32 = 300.0;
 /// How close an actor comes to start talking.
 const GREET_DISTANCE: f32 = 100.0;
-/// How close an actor gets to what its package uses before activating it.
+/// How close an actor gets to what its package uses before activating it,
+/// when the package has no place of its own.
 const USE_DISTANCE: f32 = 120.0;
+/// A use-item-at package waits while the player is further than this
+/// (`fAIIdleAnimationDistance`).
+const USE_PLAYER_DISTANCE: f32 = 2000.0;
 /// An escort waits when the escorted falls this far behind.
 const ESCORT_WAIT_DISTANCE: f32 = 600.0;
 
@@ -97,6 +101,8 @@ pub struct Ai {
     pub arrived: bool,
     /// The package raised its done event.
     pub finished: bool,
+    /// Times a use-item-at package has used its target.
+    pub uses: u32,
     /// Points still to walk through.
     pub path: Vec<Vec3>,
     /// Where `path` leads, to replan when the goal moves.
@@ -431,6 +437,7 @@ pub(crate) fn run_ai(
                 ai.current = picked;
                 ai.arrived = false;
                 ai.finished = false;
+                ai.uses = 0;
                 ai.path.clear();
                 ai.goal = None;
             }
@@ -564,30 +571,44 @@ pub(crate) fn run_ai(
                         speed = pace;
                     }
                 }
-                // Use an item at: go to the target reference (or the
-                // package's place) and activate it, as with a lever or a
-                // switch. Not yet checked against the game.
+                // Use an item at: travel to the package's place, then
+                // activate the target there until it has been used the
+                // package's count of times; nothing happens while the player
+                // is far away. See `docs/reverse-engineering/ai-packages.md`.
                 PackageKind::UseItemAt if !ai.finished => {
                     let target = package_target(p);
-                    let to = target
-                        .and_then(|t| positions.get(&t).copied())
-                        .or_else(|| destination(p, &ai, here, &positions).map(|(c, _)| c));
-                    match to {
-                        Some(to)
-                            if Vec3::new(to.x - here.x, 0.0, to.z - here.z).length()
-                                > USE_DISTANCE =>
-                        {
+                    let player_near = positions
+                        .get(&PLAYER_REF)
+                        .is_some_and(|p| p.distance(here) <= USE_PLAYER_DISTANCE);
+                    let place = destination(p, &ai, here, &positions).or_else(|| {
+                        target
+                            .and_then(|t| positions.get(&t).copied())
+                            .map(|t| (t, USE_DISTANCE))
+                    });
+                    match place {
+                        Some((to, radius)) if !reached(here, to, radius) => {
                             goal = Some(to);
                             speed = pace;
                         }
+                        _ if !player_near => {}
                         _ => {
-                            ai.finished = true;
                             if let Some(t) = target {
+                                if let Some(&at) = positions.get(&t) {
+                                    let flat = Vec3::new(at.x - here.x, 0.0, at.z - here.z);
+                                    if flat.length() > 1.0 {
+                                        transform.rotation =
+                                            Quat::from_rotation_y((-flat.x).atan2(-flat.z));
+                                    }
+                                }
                                 info!("{:08X} uses {t:08X}", placed.0);
                                 pending.activations.push((t, placed.0, true));
                             }
-                            if let Some(current) = ai.current {
-                                state.raise(placed.0, current, event::PACKAGE_DONE);
+                            ai.uses += 1;
+                            if ai.uses >= p.target_count.max(1) as u32 || target.is_none() {
+                                ai.finished = true;
+                                if let Some(current) = ai.current {
+                                    state.raise(placed.0, current, event::PACKAGE_DONE);
+                                }
                             }
                         }
                     }
