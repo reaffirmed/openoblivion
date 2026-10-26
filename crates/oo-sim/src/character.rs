@@ -8,10 +8,11 @@
 //! specialization.
 
 use bevy::prelude::*;
-use oo_formats::actors::Stats;
+use oo_formats::actors::{ActorData, RaceInfo, Stats};
+use oo_formats::character::ClassInfo;
 
 use crate::cell::WorldData;
-use crate::combat::starting_vitals;
+use crate::combat::{Settings, setting, starting_vitals};
 use crate::inventory::{PlayerAction, PlayerActions};
 use crate::player::Player;
 use crate::script::{PLAYER_BASE, PLAYER_REF, Pending, ScriptState};
@@ -70,38 +71,149 @@ impl Character {
             .get(&PLAYER_BASE)
             .map(|n| n.stats.clone())
             .unwrap_or_default();
-        if let Some(race) = world.actors.races.get(&self.race) {
-            let base = race.attributes[usize::from(self.female)];
-            if base.iter().any(|&a| a > 0) {
-                stats.attributes = base;
-            }
-            stats.skills = [5; 21];
-            for &(code, bonus) in &race.skill_bonuses {
-                if let Some(i) = skill_index(code) {
-                    stats.skills[i] = stats.skills[i].saturating_add_signed(bonus);
-                }
-            }
-        }
-        if let Some(class) = self.class.and_then(|c| world.characters.classes.get(&c)) {
-            for &a in &class.attributes {
-                if let Some(v) = stats.attributes.get_mut(usize::from(a)) {
-                    *v = v.saturating_add(5);
-                }
-            }
-            for &code in &class.major_skills {
-                if let Some(i) = skill_index(code) {
-                    stats.skills[i] = stats.skills[i].saturating_add(20);
-                }
-            }
-            for (i, skill) in stats.skills.iter_mut().enumerate() {
-                if specialization(i) == class.specialization {
-                    *skill = skill.saturating_add(5);
-                }
-            }
-        }
-        stats.skills = stats.skills.map(|s| s.min(100));
-        stats.attributes = stats.attributes.map(|a| a.min(100));
+        auto_calc(
+            &world.settings,
+            &mut stats,
+            world.actors.races.get(&self.race),
+            self.female,
+            self.class.and_then(|c| world.characters.classes.get(&c)),
+            1,
+            true,
+        );
         stats
+    }
+}
+
+/// The attribute each skill is governed by, by skill index.
+const GOVERNED_BY: [usize; 21] = [
+    Stats::ENDURANCE,    // Armorer
+    Stats::SPEED,        // Athletics
+    Stats::STRENGTH,     // Blade
+    Stats::ENDURANCE,    // Block
+    Stats::STRENGTH,     // Blunt
+    Stats::STRENGTH,     // Hand to Hand
+    Stats::ENDURANCE,    // Heavy Armor
+    Stats::INTELLIGENCE, // Alchemy
+    Stats::WILLPOWER,    // Alteration
+    Stats::INTELLIGENCE, // Conjuration
+    Stats::WILLPOWER,    // Destruction
+    Stats::PERSONALITY,  // Illusion
+    Stats::INTELLIGENCE, // Mysticism
+    Stats::WILLPOWER,    // Restoration
+    Stats::SPEED,        // Acrobatics
+    Stats::SPEED,        // Light Armor
+    Stats::AGILITY,      // Marksman
+    Stats::PERSONALITY,  // Mercantile
+    Stats::AGILITY,      // Security
+    Stats::AGILITY,      // Sneak
+    Stats::PERSONALITY,  // Speechcraft
+];
+
+/// Attributes and skills from race, class and level, as the game works them
+/// out for auto-calculated NPCs, `SetLevel` and the player's start; see
+/// "Auto-calculated stats" in `docs/reverse-engineering/combat-and-levelling.md`.
+pub fn auto_calc(
+    gmst: &Settings,
+    stats: &mut Stats,
+    race: Option<&RaceInfo>,
+    female: bool,
+    class: Option<&ClassInfo>,
+    level: i16,
+    player: bool,
+) {
+    let l = f32::from((level - 1).max(0));
+    let major = |skill: usize| {
+        class.is_some_and(|c| {
+            c.major_skills
+                .iter()
+                .any(|&code| skill_index(code) == Some(skill))
+        })
+    };
+    let race_base = race
+        .map(|r| r.attributes[usize::from(female)])
+        .filter(|a| a.iter().any(|&v| v > 0));
+    for a in 0..8 {
+        if !player && a == Stats::PERSONALITY {
+            continue;
+        }
+        let mut v = f32::from(race_base.map_or(stats.attributes[a], |r| r[a]));
+        if let Some(c) = class {
+            if usize::from(c.attributes[0]) == a {
+                v += setting(gmst, "fAttributeClassPrimaryBonus", 5.0);
+            }
+            if usize::from(c.attributes[1]) == a {
+                v += setting(gmst, "fAttributeClassSecondaryBonus", 5.0);
+            }
+            for (skill, &by) in GOVERNED_BY.iter().enumerate() {
+                if by == a {
+                    v += if major(skill) { l } else { l * 0.2 };
+                }
+            }
+        }
+        stats.attributes[a] = v.clamp(0.0, 100.0).round() as u8;
+    }
+    for skill in 0..21 {
+        let mut s = match class {
+            Some(c) => {
+                let base = if major(skill) {
+                    l + 25.0
+                } else {
+                    l * 0.1 + 5.0
+                };
+                let special = if specialization(skill) == c.specialization {
+                    l * 0.5 + 5.0
+                } else {
+                    0.0
+                };
+                base + special
+            }
+            None => 5.0,
+        };
+        if let Some(r) = race {
+            for &(code, bonus) in &r.skill_bonuses {
+                if skill_index(code) == Some(skill) {
+                    s += f32::from(bonus);
+                }
+            }
+        }
+        stats.skills[skill] = s.clamp(0.0, 100.0).round() as u8;
+    }
+}
+
+/// Works out the attributes and skills of NPCs flagged to have them
+/// calculated, at the player's level for level-offset ones.
+pub(crate) fn auto_calc_npcs(world: &mut WorldData, player_level: i16) {
+    let WorldData {
+        actors,
+        characters,
+        settings,
+        ..
+    } = world;
+    let ActorData { npcs, races, .. } = actors;
+    for npc in npcs.values_mut() {
+        if npc.stats.flags & Stats::FLAG_AUTO_CALC == 0 {
+            continue;
+        }
+        let level = npc_level(&npc.stats, player_level);
+        let class = npc.class.and_then(|c| characters.classes.get(&c));
+        auto_calc(
+            settings,
+            &mut npc.stats,
+            races.get(&npc.race),
+            npc.female,
+            class,
+            level,
+            false,
+        );
+    }
+}
+
+/// The level an NPC is at, for a player of `player_level`.
+pub fn npc_level(stats: &Stats, player_level: i16) -> i16 {
+    if stats.flags & Stats::FLAG_PC_LEVEL_OFFSET != 0 {
+        (player_level + stats.level).max(1)
+    } else {
+        stats.level.max(1)
     }
 }
 
@@ -148,7 +260,10 @@ pub(crate) fn apply_choices(
     );
     let stats = character.stats(&world);
     // The new maximums, full: character creation comes before any fight.
-    let vitals = starting_vitals(&world.settings, &stats, false, true);
+    let class = character
+        .class
+        .and_then(|c| world.characters.classes.get(&c));
+    let vitals = starting_vitals(&world.settings, &stats, false, true, class);
     state.vitals.insert(PLAYER_REF, vitals);
     state.player_stats = Some(stats);
 }
@@ -167,6 +282,39 @@ pub fn next_menu(pending: &mut Pending) -> Option<ChargenMenu> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_character_starts_from_race_and_class() {
+        let race = RaceInfo {
+            attributes: [[40; 8], [30; 8]],
+            skill_bonuses: vec![(14, 10)], // Blade +10
+            ..default()
+        };
+        let class = ClassInfo {
+            attributes: [Stats::STRENGTH as u8, Stats::ENDURANCE as u8],
+            specialization: 0,
+            major_skills: vec![14, 15, 16, 17, 18, 22, 25], // Blade, Block, Blunt…
+            ..default()
+        };
+        let mut stats = Stats::default();
+        auto_calc(
+            &Settings::default(),
+            &mut stats,
+            Some(&race),
+            false,
+            Some(&class),
+            1,
+            true,
+        );
+        assert_eq!(stats.attributes[Stats::STRENGTH], 45);
+        assert_eq!(stats.attributes[Stats::LUCK], 40);
+        // Blade: major 25, combat +5, race +10.
+        assert_eq!(stats.skills[Stats::BLADE], 40);
+        // Armorer: not major, combat +5.
+        assert_eq!(stats.skills[0], 10);
+        // Alchemy (magic): 5.
+        assert_eq!(stats.skills[7], 5);
+    }
 
     #[test]
     fn skills_map_to_their_specialization() {

@@ -532,12 +532,20 @@ fn setup_hud(mut commands: Commands) {
 #[derive(Component)]
 struct Crosshair;
 
+/// What the activation prompt needs to know about what's in front of you.
+type PromptTarget = (
+    Option<&'static PlacedRef>,
+    Option<&'static Item>,
+    Option<&'static Container>,
+    Option<&'static Actor>,
+);
+
 #[allow(clippy::too_many_arguments)]
 fn update_hud(
     players: Query<&LookingAt, With<Player>>,
     doors: Query<&LoadDoor>,
     inner_doors: Query<(&PlacedRef, &Door)>,
-    targets: Query<(Option<&Item>, Option<&Container>, Option<&Actor>)>,
+    targets: Query<PromptTarget>,
     world: Option<Res<WorldData>>,
     state: Res<ScriptState>,
     menu: Res<menu::Menu>,
@@ -566,19 +574,27 @@ fn update_hud(
                     let name = world.doors.get(base).map_or("", |d| d.name.as_str());
                     return Some(format!("[Space] {verb} {name}").trim_end().to_owned());
                 }
-                match targets.get(e).ok()? {
+                let (placed, item, container, actor) = targets.get(e).ok()?;
+                let dead = placed
+                    .and_then(|p| state.vitals.get(&p.0))
+                    .is_some_and(|v| v.dead);
+                match (item, container, actor) {
                     (Some(Item(base)), _, _) => {
                         Some(format!("[Space] Take {}", world.items.get(base)?.name))
                     }
                     (_, Some(Container(base)), _) => {
                         Some(format!("[Space] Open {}", world.containers.get(base)?.name))
                     }
-                    // Nothing to say to anyone until there's dialogue; just a name.
-                    (_, _, Some(Actor::Npc(base))) => {
-                        Some(world.actors.npcs.get(base)?.name.clone())
-                    }
-                    (_, _, Some(Actor::Creature(base))) => {
-                        Some(world.actors.creatures.get(base)?.name.clone())
+                    (_, _, Some(&actor)) => {
+                        let name = match actor {
+                            Actor::Npc(base) => &world.actors.npcs.get(&base)?.name,
+                            Actor::Creature(base) => &world.actors.creatures.get(&base)?.name,
+                        };
+                        Some(match (dead, actor) {
+                            (true, _) => format!("[Space] Search {name}"),
+                            (false, Actor::Npc(_)) => format!("[Space] Talk to {name}"),
+                            (false, Actor::Creature(_)) => name.clone(),
+                        })
                     }
                     _ => None,
                 }

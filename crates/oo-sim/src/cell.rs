@@ -237,7 +237,7 @@ fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
         .iter()
         .map(|(&id, s)| (s.editor_id.to_ascii_lowercase(), id))
         .collect();
-    Ok(WorldData {
+    let mut world = WorldData {
         models: model_paths(&order)?,
         reference_cells: interior_reference_cells(&order)?,
         cell_names: interior_cell_names(&order)?,
@@ -257,7 +257,9 @@ fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
         sound_ids,
         sounds,
         order,
-    })
+    };
+    crate::character::auto_calc_npcs(&mut world, 1);
+    Ok(world)
 }
 
 fn unknown_cell_message(order: &LoadOrder, editor_id: &str) -> String {

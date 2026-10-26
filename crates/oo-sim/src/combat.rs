@@ -10,12 +10,14 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 use oo_formats::actors::{Stats, biped};
+use oo_formats::character::ClassInfo;
 use oo_formats::items::{WeaponInfo, WeaponKind};
 use oo_formats::settings::Setting;
 
 use crate::actor::{Actor, Equipment};
 use crate::ai::Ai;
 use crate::cell::{PlacedRef, WorldData};
+use crate::character::npc_level;
 use crate::player::{EYE_HEIGHT, PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent};
 use crate::script::{PLAYER_BASE, PLAYER_REF, ScriptState, event};
 
@@ -80,7 +82,7 @@ const DISPOSITION: u8 = 50;
 pub type Settings = HashMap<String, Setting>;
 
 /// A numeric game setting, or its vanilla value if no plugin has it.
-fn setting(gmst: &Settings, name: &str, vanilla: f32) -> f32 {
+pub(crate) fn setting(gmst: &Settings, name: &str, vanilla: f32) -> f32 {
     match gmst.get(&name.to_ascii_lowercase()) {
         Some(Setting::Float(f)) => *f,
         Some(Setting::Int(i)) => *i as f32,
@@ -151,32 +153,40 @@ pub fn blocked_fraction(gmst: &Settings, stats: &Stats, v: &Vitals, guard: Guard
     .min(setting(gmst, "fBlockMax", 0.75))
 }
 
-/// The level an NPC is at, for a player of `player_level`.
-fn level(stats: &Stats, player_level: i16) -> i16 {
-    if stats.flags & Stats::FLAG_PC_LEVEL_OFFSET != 0 {
-        (player_level + stats.level).max(1)
-    } else {
-        stats.level.max(1)
-    }
-}
-
-/// Starting vitals from an actor's records.
-pub fn starting_vitals(gmst: &Settings, stats: &Stats, creature: bool, player: bool) -> Vitals {
+/// Starting vitals from an actor's stats; see "Auto-calculated stats" in
+/// `docs/reverse-engineering/combat-and-levelling.md`. `class` matters for
+/// auto-calculated NPCs' health.
+pub fn starting_vitals(
+    gmst: &Settings,
+    stats: &Stats,
+    creature: bool,
+    player: bool,
+    class: Option<&ClassInfo>,
+) -> Vitals {
     let a = |i: usize| f32::from(stats.attributes[i]);
     let health = if player {
         (a(Stats::ENDURANCE) * setting(gmst, "fPCBaseHealthMult", 2.0)).trunc()
     } else if !creature && stats.flags & Stats::FLAG_AUTO_CALC != 0 {
-        // Specialization and the flag the RE notes mention aren't known yet,
-        // so every level gets the base amount.
         let base = ((a(Stats::STRENGTH) + a(Stats::ENDURANCE))
             * setting(gmst, "fNPCAttributeHealthMult", 0.5))
         .trunc();
-        let level = f32::from(level(stats, 1));
-        let mut h = base + setting(gmst, "iNPCBasePerLevelHealthMult", 4.0) * level;
+        let mut per_level = setting(gmst, "iNPCBasePerLevelHealthMult", 4.0);
+        if let Some(c) = class {
+            if c.attributes.contains(&(Stats::ENDURANCE as u8)) {
+                per_level += 1.0;
+            }
+            match c.specialization {
+                0 => per_level += 1.0,
+                1 => per_level -= 1.0,
+                _ => {}
+            }
+        }
+        let l = f32::from(npc_level(stats, 1) - 1);
+        let mut h = base + per_level * l;
         let low = setting(gmst, "iLowLevelNPCMaxLevel", 4.0);
-        if level < low {
+        if l < low {
             let m = setting(gmst, "fLowLevelNPCBaseHealthMult", 0.4);
-            h *= m + (1.0 - m) * level / low;
+            h *= m + (1.0 - m) * l / low;
         }
         h.trunc()
     } else {
@@ -187,8 +197,9 @@ pub fn starting_vitals(gmst: &Settings, stats: &Stats, creature: bool, player: b
     } else {
         setting(gmst, "fNPCBaseMagickaMult", 1.5)
     };
+    // The ACBS magicka and fatigue are taken as offsets on top, which the RE
+    // notes think likely.
     let magicka = (a(Stats::INTELLIGENCE) * (1.0 + mult)).trunc() + f32::from(stats.magicka);
-    // Maximum fatigue: the community formula, open in the RE notes.
     let fatigue = a(Stats::STRENGTH)
         + a(Stats::WILLPOWER)
         + a(Stats::AGILITY)
@@ -229,10 +240,16 @@ pub(crate) fn attach_fighters(
         let Some((stats, _)) = records(&world, base) else {
             continue;
         };
+        let class = world
+            .actors
+            .npcs
+            .get(&base)
+            .and_then(|n| n.class)
+            .and_then(|c| world.characters.classes.get(&c));
         let vitals = *state
             .vitals
             .entry(placed.0)
-            .or_insert_with(|| starting_vitals(&world.settings, stats, creature, false));
+            .or_insert_with(|| starting_vitals(&world.settings, stats, creature, false, class));
         commands.entity(entity).insert(Fighter::default());
         if vitals.dead {
             commands.entity(entity).insert(Dead);
@@ -244,7 +261,7 @@ pub(crate) fn attach_fighters(
             state
                 .vitals
                 .entry(PLAYER_REF)
-                .or_insert_with(|| starting_vitals(&world.settings, &npc.stats, false, true));
+                .or_insert_with(|| starting_vitals(&world.settings, &npc.stats, false, true, None));
         }
         commands.entity(entity).insert(Fighter::default());
     }
@@ -614,13 +631,13 @@ mod tests {
     fn low_level_auto_calc_health() {
         let mut stats = Stats {
             flags: Stats::FLAG_AUTO_CALC,
-            level: 1,
+            level: 3,
             ..default()
         };
         stats.attributes[Stats::STRENGTH] = 40;
         stats.attributes[Stats::ENDURANCE] = 40;
-        // (40 + 40) × 0.5 = 40, + 4 × 1 = 44, × (0.4 + 0.6 / 4) = 24.2 → 24.
-        let v = starting_vitals(&world(), &stats, false, false);
-        assert_eq!(v.max_health, 24.0);
+        // (40 + 40) × 0.5 = 40, + 4 × (3 − 1) = 48, × (0.4 + 0.6 × 2 / 4) = 33.6 → 33.
+        let v = starting_vitals(&world(), &stats, false, false, None);
+        assert_eq!(v.max_health, 33.0);
     }
 }

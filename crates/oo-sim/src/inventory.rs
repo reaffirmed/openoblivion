@@ -167,13 +167,18 @@ pub(crate) fn handle_actions(
                 continue;
             }
             let Some(reference) = open.0 else { continue };
-            let Some((_, Container(base))) = containers.iter().find(|(r, _)| r.0 == reference)
-            else {
+            // A container, or a body being searched (its contents are
+            // already listed).
+            let base = containers
+                .iter()
+                .find(|(r, _)| r.0 == reference)
+                .map(|(_, Container(base))| *base);
+            if base.is_none() && !changes.containers.contains_key(&reference) {
                 // The container went away (the player changed cells).
                 open.0 = None;
                 continue;
-            };
-            let contents = container_contents(&mut changes, &world, reference, *base);
+            }
+            let contents = container_contents(&mut changes, &world, reference, base.unwrap_or(0));
             match action {
                 PlayerAction::Take { item, count } => {
                     let available: i32 = contents

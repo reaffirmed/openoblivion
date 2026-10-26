@@ -20,6 +20,32 @@ pub const ACTIVATE_DISTANCE: f32 = 150.0;
 pub const LOCKPICK: u32 = 0x0000_000A;
 pub const SKELETON_KEY: u32 = 0x0000_000B;
 
+/// What a dead actor carried: the same roll its inventory got at spawn.
+fn body_contents(world: &WorldData, actor: Actor, reference: u32) -> Vec<oo_formats::items::Stack> {
+    let base = match actor {
+        Actor::Npc(b) | Actor::Creature(b) => b,
+    };
+    let carried = world
+        .actors
+        .npcs
+        .get(&base)
+        .map(|n| n.inventory.as_slice())
+        .or_else(|| {
+            world
+                .actors
+                .creatures
+                .get(&base)
+                .map(|c| c.inventory.as_slice())
+        })
+        .unwrap_or_default();
+    oo_formats::items::resolve_contents(
+        carried,
+        &world.leveled_items,
+        crate::inventory::PLAYER_LEVEL,
+        u64::from(reference),
+    )
+}
+
 /// The placed reference a player is looking at, if it's within reach.
 #[derive(Component, Debug, Default, Clone, Copy)]
 pub struct LookingAt(pub Option<Entity>);
@@ -177,7 +203,17 @@ pub(crate) fn activate(
         if by != PLAYER_REF {
             continue;
         }
-        if let Some(Actor::Npc(_)) = actor {
+        let dead = state.vitals.get(&placed.0).is_some_and(|v| v.dead);
+        if let Some(&actor) = actor
+            && dead
+        {
+            // Searching a body: what it carried, as a container.
+            changes
+                .containers
+                .entry(placed.0)
+                .or_insert_with(|| body_contents(&world, actor, placed.0));
+            open.0 = Some(placed.0);
+        } else if let Some(Actor::Npc(_)) = actor {
             talk.request = Some(placed.0);
         } else if let Some(Item(base)) = item {
             pick_up(
