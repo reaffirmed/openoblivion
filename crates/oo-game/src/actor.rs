@@ -20,8 +20,13 @@ use oo_sim::{Appearance, GameData};
 
 use crate::model::{ModelCache, read_nif, to_bevy_mesh};
 
-/// The animation every actor plays until AI chooses others.
-const IDLE: &str = "Characters\\_Male\\Idle.kf";
+/// The animation an actor plays until AI chooses others: the `idle.kf` beside
+/// its skeleton. That's `Characters\_Male\Idle.kf` for people; every creature
+/// folder has its own (a rat playing the human idle stands up on its hind legs).
+fn idle_for(skeleton: &str) -> String {
+    let dir = skeleton.rfind(['\\', '/']).map_or("", |i| &skeleton[..=i]);
+    format!("{dir}idle.kf")
+}
 
 /// A skeleton's bones in parent-first order.
 struct Skeleton {
@@ -44,6 +49,39 @@ struct PartMesh {
     transform: Transform,
     /// Kept to build materials with different textures.
     imported: Arc<ImportedMesh>,
+    /// The bone a rigid part hangs from, if its NIF names one (`Prn`).
+    prn: Option<String>,
+}
+
+/// Which of [`Appearance::skin`] a stock body texture stands for, if `path` is
+/// one: `textures\characters\imperial\male\upperbodymale.dds` and the like.
+fn skin_slot(path: &str) -> Option<usize> {
+    let path = path.replace('/', "\\").to_ascii_lowercase();
+    let path = path.strip_prefix("textures\\").unwrap_or(&path);
+    if !path.starts_with("characters\\") {
+        return None;
+    }
+    let file = path.rsplit('\\').next()?;
+    [
+        &["upperbody"][..],
+        &["lowerbody", "leg"],
+        &["hand"],
+        &["foot"],
+    ]
+    .iter()
+    .position(|names| names.iter().any(|n| file.starts_with(n)))
+}
+
+/// The bone a rigid model attaches to, from its `Prn` string extra data
+/// (helmets, shields, creature heads and horns name it this way).
+fn parent_bone(scene: &byroredux_nif::scene::NifScene) -> Option<String> {
+    scene.blocks.iter().find_map(|b| {
+        let extra = b
+            .as_any()
+            .downcast_ref::<byroredux_nif::blocks::extra_data::NiExtraData>()?;
+        (extra.name.as_deref()? == "Prn")
+            .then(|| extra.string_value.as_deref().map(str::to_owned))?
+    })
 }
 
 /// A material per model piece, texture override and tint.
@@ -101,11 +139,18 @@ impl ActorCache {
             .entry(key)
             .or_insert_with(|| {
                 let scene = read_nif(path, data)?;
+                let prn = parent_bone(&scene);
                 let parts = import_nif(&scene, &mut models.pool)
                     .into_iter()
                     .filter(|m| !m.positions.is_empty() && !m.indices.is_empty())
                     .map(|m| {
                         let mut mesh = to_bevy_mesh(&m);
+                        // Hair vertex colours are data for the hair shader (cyan:
+                        // R near 0, G and B at 1), not colour; as colour they turn
+                        // every head of hair teal. The NPC's hair colour is the tint.
+                        if path.to_ascii_lowercase().starts_with("characters\\hair\\") {
+                            mesh.remove_attribute(Mesh::ATTRIBUTE_COLOR);
+                        }
                         let skin = m.skin.as_ref().filter(|s| {
                             !s.bones.is_empty() && s.vertex_bone_indices.len() == m.positions.len()
                         });
@@ -138,6 +183,7 @@ impl ActorCache {
                                 scale: Vec3::splat(m.scale),
                             },
                             imported: Arc::new(m),
+                            prn: prn.clone(),
                         }
                     })
                     .collect();
@@ -210,8 +256,8 @@ pub fn attach_actors(
             .id();
         let mut bone_entities: Vec<Entity> = Vec::with_capacity(skeleton.bones.len());
         let mut by_name: HashMap<String, usize> = HashMap::new();
-        // Each bone's transform relative to the rig at bind time, for rigid parts.
-        let mut bind_world: Vec<Transform> = Vec::with_capacity(skeleton.bones.len());
+        // Each bone's orientation relative to the rig at bind time, for rigid parts.
+        let mut bind_rotation: Vec<Quat> = Vec::with_capacity(skeleton.bones.len());
         for (i, bone) in skeleton.bones.iter().enumerate() {
             let parent = bone.parent.filter(|&p| p < i);
             let e = commands
@@ -224,7 +270,9 @@ pub fn attach_actors(
                 ))
                 .id();
             bone_entities.push(e);
-            bind_world.push(parent.map_or(bone.local, |p| bind_world[p].mul_transform(bone.local)));
+            bind_rotation.push(parent.map_or(bone.local.rotation, |p| {
+                bind_rotation[p] * bone.local.rotation
+            }));
             by_name.entry(bone.name.to_ascii_lowercase()).or_insert(i);
         }
         let find = |name: &str| by_name.get(&name.to_ascii_lowercase()).copied();
@@ -236,10 +284,21 @@ pub fn attach_actors(
                 continue;
             };
             for (index, piece) in pieces.iter().enumerate() {
+                // Bare skin on clothes is painted with the stock body textures;
+                // show the wearer's own instead.
+                let texture = part.texture.clone().or_else(|| {
+                    let own = piece
+                        .imported
+                        .material
+                        .textures
+                        .base_color
+                        .and_then(|s| models.pool.resolve(s))?;
+                    appearance.skin[skin_slot(own)?].clone()
+                });
                 let key = (
                     part.model.to_ascii_lowercase(),
                     index,
-                    part.texture.clone(),
+                    texture.clone(),
                     part.tint,
                 );
                 let material = match cache.materials.get(&key) {
@@ -247,7 +306,7 @@ pub fn attach_actors(
                     None => {
                         let mut m = models.material(
                             &piece.imported,
-                            part.texture.as_deref(),
+                            texture.as_deref(),
                             &data,
                             &mut images,
                         );
@@ -278,15 +337,31 @@ pub fn attach_actors(
                         ));
                     }
                     None => {
-                        // Rigid parts are modelled in place on the bind-pose body;
-                        // ride on their bone from where they sit.
-                        let (parent, transform) = match find(part.bone) {
+                        // Rigid parts are modelled around their bone's pivot, not in
+                        // place on the body (eyes, ears, mouths and hair sit within a
+                        // few units of the NIF's origin), but with the skeleton's
+                        // axes rather than the bone's. So they ride on the bone with
+                        // its bind rotation undone. The bone is the one the NIF
+                        // names in its `Prn` extra data (hair and helmets: the head;
+                        // shields: the left forearm), else the one the simulation
+                        // chose.
+                        let bone = piece.prn.as_deref().unwrap_or(part.bone);
+                        // Face parts (no `Prn`) keep only the root node's offset: the
+                        // mouth, teeth and tongue NIFs' roots carry a quarter turn
+                        // that would stand the mouth on its side.
+                        let local = if piece.prn.is_none() && part.bone == oo_sim::actor::HEAD_BONE
+                        {
+                            Transform {
+                                rotation: Quat::IDENTITY,
+                                ..piece.transform
+                            }
+                        } else {
+                            piece.transform
+                        };
+                        let (parent, transform) = match find(bone) {
                             Some(i) => (
                                 bone_entities[i],
-                                Transform::from_matrix(
-                                    bind_world[i].to_matrix().inverse()
-                                        * piece.transform.to_matrix(),
-                                ),
+                                Transform::from_rotation(bind_rotation[i].inverse()) * local,
                             ),
                             None => (rig, piece.transform),
                         };
@@ -304,7 +379,7 @@ pub fn attach_actors(
         if bind_pose_only.0 {
             continue;
         }
-        if let Some(clip) = cache.clip(IDLE, &data) {
+        if let Some(clip) = cache.clip(&idle_for(&appearance.skeleton), &data) {
             let bones = skeleton
                 .bones
                 .iter()

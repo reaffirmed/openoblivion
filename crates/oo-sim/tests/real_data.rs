@@ -674,3 +674,210 @@ fn tutorial_prison_items_and_containers() {
     act(&mut app, PlayerAction::CloseContainer);
     assert_eq!(open(&app), None);
 }
+
+/// Every actor in the prison: who spawns, and that every body part's model and
+/// texture override exists in the archives.
+#[test]
+fn tutorial_prison_actors() {
+    let Some(data) = data_dir() else {
+        eprintln!("OO_DATA not set to an Oblivion Data directory; skipping");
+        return;
+    };
+    let mut app = app(data);
+    run(&mut app, 1);
+    let actors: Vec<(u32, u32, oo_sim::Appearance)> = app
+        .world_mut()
+        .query::<(&PlacedRef, &oo_sim::BaseForm, &oo_sim::Appearance)>()
+        .iter(app.world())
+        .map(|(p, b, a)| (p.0, b.0, a.clone()))
+        .collect();
+    let world = app.world().resource::<WorldData>();
+    let files = app.world().resource::<oo_sim::GameData>();
+    let mut missing = Vec::new();
+    let mut names = Vec::new();
+    for (reference, base, appearance) in &actors {
+        let name = world
+            .actors
+            .npcs
+            .get(base)
+            .map(|n| n.name.clone())
+            .or_else(|| world.actors.creatures.get(base).map(|c| c.name.clone()))
+            .unwrap_or_default();
+        println!(
+            "{reference:08X} {name}: skeleton {}, scale {}",
+            appearance.skeleton, appearance.scale
+        );
+        names.push(name);
+        let mut check = |path: String| {
+            if files.read(&path).is_none() {
+                missing.push(path);
+            }
+        };
+        check(format!("meshes\\{}", appearance.skeleton));
+        for p in &appearance.parts {
+            println!(
+                "    {} on {}{}{}",
+                p.model,
+                p.bone,
+                p.texture
+                    .as_ref()
+                    .map_or(String::new(), |t| format!(", texture {t}")),
+                p.tint.map_or(String::new(), |t| format!(", tint {t:?}"))
+            );
+            check(format!("meshes\\{}", p.model));
+            if let Some(t) = &p.texture {
+                check(format!("textures\\{t}"));
+            }
+        }
+    }
+    missing.sort();
+    missing.dedup();
+    println!("missing files: {missing:?}");
+    assert!(names.iter().any(|n| n == "Valen Dreth"));
+    assert!(missing.is_empty(), "missing: {missing:?}");
+}
+
+/// Diagnostic: every actor reference in the prison with its enable state.
+/// Run with OO_TRACE=1.
+#[test]
+fn trace_prison_actors() {
+    let (Some(data), Some(_)) = (data_dir(), std::env::var_os("OO_TRACE")) else {
+        return;
+    };
+    let mut app = app(data);
+    run(&mut app, 1);
+    let world = app.world().resource::<WorldData>();
+    let cell = oo_formats::world::interior_cell(&world.order, CELL)
+        .unwrap()
+        .unwrap();
+    let by_id: std::collections::HashMap<u32, &oo_formats::world::Reference> =
+        cell.references.iter().map(|r| (r.form_id, r)).collect();
+    for r in &cell.references {
+        let tag = r.tag.to_string();
+        if tag != "ACHR"
+            && tag != "ACRE"
+            && !by_id
+                .values()
+                .any(|c| c.enable_parent.is_some_and(|p| p.reference == r.form_id))
+        {
+            continue;
+        }
+        let base_name = world
+            .actors
+            .npcs
+            .get(&r.base)
+            .map(|n| n.name.clone())
+            .unwrap_or_default();
+        println!(
+            "{tag} {:08X} base {:08X} {base_name:?} disabled={} parent={:?} at {:?}",
+            r.form_id,
+            r.base,
+            r.initially_disabled,
+            r.enable_parent.map(|p| (
+                format!("{:08X}", p.reference),
+                p.opposite,
+                by_id
+                    .get(&p.reference)
+                    .map(|q| (q.tag.to_string(), q.initially_disabled))
+            )),
+            r.position
+        );
+    }
+}
+
+/// Diagnostic: creatures spawned in the cells after the prison. OO_TRACE=1.
+#[test]
+fn trace_creatures_after_prison() {
+    let (Some(data), Some(_)) = (data_dir(), std::env::var_os("OO_TRACE")) else {
+        return;
+    };
+    for cell in [
+        "ImperialDungeon02",
+        "ImperialDungeon03",
+        "ImperialDungeon04",
+    ] {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, TransformPlugin))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(FRAME))
+            .add_plugins(SimPlugin(WorldConfig {
+                data_dir: Some(data.clone()),
+                plugins: vec!["Oblivion.esm".into()],
+                cell: Some(cell.into()),
+            }));
+        run(&mut app, 1);
+        let found: Vec<(u32, oo_sim::Appearance, Vec3)> = app
+            .world_mut()
+            .query::<(&oo_sim::BaseForm, &oo_sim::Appearance, &Transform)>()
+            .iter(app.world())
+            .map(|(b, a, t)| (b.0, a.clone(), t.translation))
+            .collect();
+        let world = app.world().resource::<WorldData>();
+        for (base, a, at) in found {
+            if let Some(c) = world.actors.creatures.get(&base) {
+                let parts: Vec<&str> = a.parts.iter().map(|p| p.model.as_str()).collect();
+                println!(
+                    "{cell}: {} ({}) at {at}, parts {parts:?}",
+                    c.name, a.skeleton
+                );
+            }
+        }
+    }
+}
+
+/// Actors are solid: walking at the Assassin who stands beside the prison's
+/// spawn point stops short of him instead of passing through.
+#[test]
+fn tutorial_prison_actors_are_solid() {
+    const ASSASSIN: u32 = 0x00014A30;
+    let Some(data) = data_dir() else {
+        eprintln!("OO_DATA not set to an Oblivion Data directory; skipping");
+        return;
+    };
+    let mut app = app(data);
+    run(&mut app, 120);
+    let player = player(&mut app);
+    let target = app
+        .world_mut()
+        .query::<(&PlacedRef, &Transform)>()
+        .iter(app.world())
+        .find(|(p, _)| p.0 == ASSASSIN)
+        .map(|(_, t)| t.translation)
+        .expect("the Assassin should be in the prison");
+    let (start, _, _) = state(&app, player);
+    let dir = (target - start).with_y(0.0).normalize();
+    {
+        let mut e = app.world_mut().entity_mut(player);
+        let mut i = e.get_mut::<PlayerIntent>().unwrap();
+        i.yaw = (-dir.x).atan2(-dir.z);
+        i.movement = Vec2::Y;
+    }
+    let mut closest = f32::INFINITY;
+    for _ in 0..180 {
+        run(&mut app, 1);
+        let (p, _, _) = state(&app, player);
+        closest = closest.min((target - p).xz().length());
+    }
+    let (end, _, _) = state(&app, player);
+    let before = (target - start).xz().length();
+    println!("closest approach to the Assassin: {closest:.1}");
+    assert!(
+        closest >= 2.0 * PLAYER_RADIUS - 2.0,
+        "walked into the Assassin: {closest:.1} units from his centre"
+    );
+    let after = (target - end).xz().length();
+    // The other two (at least) along the way are the other Assassins, so the
+    // player may stop at any of them; what matters is not overlapping one.
+    let nearest = app
+        .world_mut()
+        .query::<(&oo_sim::Actor, &Transform)>()
+        .iter(app.world())
+        .map(|(_, t)| (t.translation - end).xz().length())
+        .fold(f32::INFINITY, f32::min);
+    println!(
+        "walked at the Assassin: {before:.0} -> {after:.0} units away; nearest actor {nearest:.0}"
+    );
+    assert!(
+        nearest >= 2.0 * PLAYER_RADIUS - 2.0,
+        "the player overlaps an actor ({nearest:.0} units from its centre)"
+    );
+}

@@ -29,6 +29,10 @@ pub struct Appearance {
     /// Applied to the whole actor (the race's height).
     pub scale: f32,
     pub parts: Vec<BodyPart>,
+    /// The race's skin for bare upper body, lower body, hands and feet, in that
+    /// order, relative to `textures\`. Clothes paint their bare skin with the
+    /// default Imperial textures; the wearer's race replaces them.
+    pub skin: [Option<String>; 4],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -96,6 +100,10 @@ pub fn npc_appearance(data: &ActorData, npc: &NpcInfo, equipment: &[u32]) -> App
         .filter_map(|id| data.wearables.get(id))
         .collect();
     let covered = worn.iter().fold(0, |acc, w| acc | w.slots);
+    let skin = BODY.map(|(_, index, _)| {
+        race.and_then(|r| r.body[sex].get(&index))
+            .and_then(|p| p.texture.clone())
+    });
     let mut parts = Vec::new();
     let part = |model: &str, texture: Option<&str>, bone| BodyPart {
         model: model.to_owned(),
@@ -184,6 +192,7 @@ pub fn npc_appearance(data: &ActorData, npc: &NpcInfo, equipment: &[u32]) -> App
             .unwrap_or_else(|| DEFAULT_SKELETON.into()),
         scale: if scale > 0.0 { scale } else { 1.0 },
         parts,
+        skin,
     }
 }
 
@@ -205,5 +214,6 @@ pub fn creature_appearance(creature: &CreatureInfo) -> Option<Appearance> {
         skeleton,
         scale: 1.0,
         parts,
+        skin: Default::default(),
     })
 }
