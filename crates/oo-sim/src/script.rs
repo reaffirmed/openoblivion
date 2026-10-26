@@ -212,6 +212,9 @@ pub struct ScriptState {
     pub character: Option<crate::character::Character>,
     /// The player's attributes and skills from those choices, once made.
     pub player_stats: Option<oo_formats::actors::Stats>,
+    /// How much the player has used each skill, in skill-index order; the
+    /// class menu suggests a class from it.
+    pub skill_use: [f32; 21],
     /// A character-creation menu is up (the client says so): the game is in
     /// menu mode, so `GameMode` scripts, AI and fighting wait.
     pub menu_open: bool,
@@ -603,6 +606,9 @@ impl Host for GameHost<'_> {
             "GetIsRace" => flag(facts.race == form(0)),
             "GetIsSex" => flag(facts.female == (arg_number(args, 0) as u16 == 1)),
             "GetIsClass" => flag(facts.class == Some(form(0))),
+            "GetIsClassDefault" => {
+                flag(facts.class == Some(crate::character::suggested_class(&self.state.skill_use)))
+            }
             "GetPCIsRace" => flag(player.race == form(0)),
             "GetPCIsSex" => flag(player.female == (arg_number(args, 0) as u16 == 1)),
             "GetPCIsClass" => flag(player.class == Some(form(0))),

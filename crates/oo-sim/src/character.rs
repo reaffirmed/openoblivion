@@ -217,6 +217,90 @@ pub fn npc_level(stats: &Stats, player_level: i16) -> i16 {
     }
 }
 
+/// The placeholder class the player has until choosing one.
+pub const CHARGEN_CLASS: u32 = 0x0002_30E6;
+
+/// The class the class menu suggests from how the player has used their
+/// skills; see `docs/reverse-engineering/character-creation.md`. The
+/// classes' form IDs are the `iClass*` settings' built-in values, which no
+/// vanilla plugin changes.
+pub fn suggested_class(skill_use: &[f32; 21]) -> u32 {
+    const WARRIOR: u32 = 0x0002_3787;
+    const MAGE: u32 = 0x0001_05D6;
+    const THIEF: u32 = 0x0002_378F;
+    const ROGUE: u32 = 0x0002_378C;
+    const SCOUT: u32 = 0x0002_378A;
+    const ARCHER: u32 = 0x0002_378B;
+    const CRUSADER: u32 = 0x0002_3789;
+    const KNIGHT: u32 = 0x0000_0836;
+    const BARBARIAN: u32 = 0x0002_3788;
+    const NIGHTBLADE: u32 = 0x0002_3C08;
+    const WITCHHUNTER: u32 = 0x0002_3998;
+    const SPELLSWORD: u32 = 0x0002_3C07;
+    const HEALER: u32 = 0x0000_0910;
+    const BATTLEMAGE: u32 = 0x0002_3997;
+    const SORCERER: u32 = 0x0002_37AC;
+    const BARD: u32 = 0x0001_C824;
+    const MONK: u32 = 0x0002_37A9;
+    const PILGRIM: u32 = 0x0000_0832;
+    const ASSASSIN: u32 = 0x0002_3793;
+    const ACROBAT: u32 = 0x0002_37A8;
+    const AGENT: u32 = 0x0002_3792;
+
+    let mut totals = [0.0f32; 3];
+    for (skill, &p) in skill_use.iter().enumerate() {
+        if p > 0.0 {
+            totals[usize::from(specialization(skill))] += p;
+        }
+    }
+    let total: f32 = totals.iter().sum();
+    let sevenths = |x: f32| {
+        if total > 0.0 {
+            (7.0 * x / total + 0.5).floor() as i32
+        } else {
+            0
+        }
+    };
+    let (c, m, s) = (
+        sevenths(totals[0]),
+        sevenths(totals[1]),
+        sevenths(totals[2]),
+    );
+    if c >= 7 {
+        return WARRIOR;
+    }
+    if m >= 7 {
+        return MAGE;
+    }
+    if s >= 7 {
+        return THIEF;
+    }
+    // Later rules win over earlier ones.
+    let mut class = None;
+    match c {
+        3 if m == 2 && s == 2 => class = Some(ROGUE),
+        4 => class = Some(if s == 2 { SCOUT } else { ARCHER }),
+        5 => class = Some(if m == 2 { CRUSADER } else { KNIGHT }),
+        6 => class = Some(BARBARIAN),
+        _ => {}
+    }
+    match m {
+        3 if c == 2 && s == 2 => class = Some(NIGHTBLADE),
+        4 => class = Some(if s == 2 { WITCHHUNTER } else { SPELLSWORD }),
+        5 => class = Some(if s == 2 { HEALER } else { BATTLEMAGE }),
+        6 => class = Some(SORCERER),
+        _ => {}
+    }
+    match s {
+        3 if c < 4 && m < 4 => class = Some(BARD),
+        4 => class = Some(if c == 2 { MONK } else { PILGRIM }),
+        5 => class = Some(if c == 1 { ASSASSIN } else { ACROBAT }),
+        6 => class = Some(AGENT),
+        _ => {}
+    }
+    class.unwrap_or(ACROBAT)
+}
+
 /// Applies the player's choices from the character-creation menus, and
 /// keeps the player's maximum health, magicka and fatigue in line with them.
 pub(crate) fn apply_choices(
@@ -314,6 +398,19 @@ mod tests {
         assert_eq!(stats.skills[0], 10);
         // Alchemy (magic): 5.
         assert_eq!(stats.skills[7], 5);
+    }
+
+    #[test]
+    fn suggests_a_class_from_skill_use() {
+        let mut used = [0.0; 21];
+        used[Stats::BLADE] = 10.0;
+        assert_eq!(suggested_class(&used), 0x0002_3787); // Warrior
+        // 4 combat, 1 magic, 2 stealth sevenths: Scout.
+        used[Stats::BLADE] = 4.0;
+        used[7] = 1.0;
+        used[Stats::MARKSMAN] = 2.0;
+        assert_eq!(suggested_class(&used), 0x0002_378A);
+        assert_eq!(suggested_class(&[0.0; 21]), 0x0002_37A8); // Acrobat
     }
 
     #[test]

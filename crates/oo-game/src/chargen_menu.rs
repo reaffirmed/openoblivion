@@ -160,7 +160,11 @@ pub fn update_chargen(
         let current = match next {
             ChargenMenu::Race => Some(character.race),
             ChargenMenu::Birthsign => character.birthsign,
-            ChargenMenu::Class => character.class,
+            // A class is suggested from skill use until a real one is chosen.
+            ChargenMenu::Class => character
+                .class
+                .filter(|c| list.iter().any(|(id, _)| id == c))
+                .or(Some(oo_sim::character::suggested_class(&state.skill_use))),
         };
         *screen = ChargenScreen {
             open: Some(next),

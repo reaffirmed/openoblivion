@@ -173,6 +173,44 @@ pub fn weapons(order: &LoadOrder) -> Result<HashMap<u32, WeaponInfo>> {
     Ok(out)
 }
 
+/// Arrows (`AMMO` `DATA`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AmmoInfo {
+    /// Flight speed multiplier, 1 for most.
+    pub speed: f32,
+    pub flags: u32,
+    /// Added to the bow's damage.
+    pub damage: u16,
+}
+
+/// Every arrow's numbers, by global form ID.
+pub fn ammo(order: &LoadOrder) -> Result<HashMap<u32, AmmoInfo>> {
+    let mut out = HashMap::new();
+    for_each_top_record(order, &[b"AMMO"], |index, r| {
+        let id = order.global(index, r.form_id);
+        if r.is_deleted() {
+            out.remove(&id);
+            return Ok(());
+        }
+        for f in r.fields()?.iter() {
+            let f = f?;
+            if f.tag.0 == *b"DATA" && f.data.len() >= 18 {
+                let d = f.data;
+                out.insert(
+                    id,
+                    AmmoInfo {
+                        speed: f32::from_le_bytes(d[0..4].try_into().unwrap()),
+                        flags: u32_at(d, 4),
+                        damage: u16::from_le_bytes([d[16], d[17]]),
+                    },
+                );
+            }
+        }
+        Ok(())
+    })?;
+    Ok(out)
+}
+
 /// One line of a container's or leveled list's contents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stack {

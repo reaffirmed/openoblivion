@@ -229,6 +229,8 @@ pub fn equip(world: &WorldData, equipment: &mut Equipment, item: u32) {
     }
     if world.weapons.contains_key(&item) {
         equipment.0.retain(|e| !world.weapons.contains_key(e));
+    } else if world.ammo.contains_key(&item) {
+        equipment.0.retain(|e| !world.ammo.contains_key(e));
     } else if let Some(w) = world.actors.wearables.get(&item) {
         equipment.0.retain(|e| {
             world

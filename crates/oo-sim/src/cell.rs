@@ -76,13 +76,14 @@ pub struct SpawnPoint {
 #[derive(Resource)]
 pub struct WorldData {
     pub order: LoadOrder,
-    models: HashMap<u32, String>,
+    pub models: HashMap<u32, String>,
     reference_cells: HashMap<u32, u32>,
     cell_names: HashMap<u32, String>,
     coc_marker: Option<u32>,
     lights: HashMap<u32, Light>,
     pub items: HashMap<u32, ItemInfo>,
     pub weapons: HashMap<u32, WeaponInfo>,
+    pub ammo: HashMap<u32, oo_formats::items::AmmoInfo>,
     /// Classes and birthsigns.
     pub characters: oo_formats::character::CharacterData,
     pub containers: HashMap<u32, ContainerInfo>,
@@ -246,6 +247,7 @@ fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
         lights: lights(&order)?,
         items: items(&order)?,
         weapons: weapons(&order)?,
+        ammo: oo_formats::items::ammo(&order)?,
         characters: oo_formats::character::character_data(&order)?,
         containers: containers(&order)?,
         leveled_items: leveled_items(&order)?,

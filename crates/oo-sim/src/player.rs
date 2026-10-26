@@ -44,6 +44,8 @@ pub struct PlayerIntent {
     pub attack: bool,
     /// Hold up a guard.
     pub block: bool,
+    /// The attack button is down: a bow draws while it's held.
+    pub attack_held: bool,
 }
 
 /// The player's position at the last two simulation steps. The simulation runs

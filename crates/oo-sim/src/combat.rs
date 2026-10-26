@@ -16,8 +16,10 @@ use oo_formats::settings::Setting;
 
 use crate::actor::{Actor, Equipment};
 use crate::ai::Ai;
-use crate::cell::{PlacedRef, WorldData};
+use crate::cell::{CellMember, Model, PlacedRef, WorldData};
 use crate::character::npc_level;
+use crate::inventory::Inventory;
+use crate::physics::NoCollision;
 use crate::player::{EYE_HEIGHT, PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent};
 use crate::script::{PLAYER_BASE, PLAYER_REF, ScriptState, event};
 
@@ -35,6 +37,8 @@ pub struct Vitals {
     pub dead: bool,
     /// Who dealt the killing blow, for `OnDeath`.
     pub killer: u32,
+    /// Seconds an essential actor stays knocked out.
+    pub unconscious: f32,
 }
 
 impl Vitals {
@@ -48,6 +52,7 @@ impl Vitals {
             max_fatigue: fatigue,
             dead: false,
             killer: 0,
+            unconscious: 0.0,
         }
     }
 }
@@ -60,7 +65,40 @@ pub struct Fighter {
     cooldown: f32,
     /// Raising a shield or fists (the player's right mouse button).
     pub blocking: bool,
+    /// Seconds a bow has been drawn.
+    draw: f32,
 }
+
+/// An essential actor lying knocked out.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct KnockedOut;
+
+/// An arrow in flight.
+#[derive(Component, Debug, Clone)]
+pub struct Arrow {
+    shooter: u32,
+    /// Left out of the arrow's own collision checks.
+    shooter_body: Entity,
+    velocity: Vec3,
+    /// Health it takes from whoever it hits.
+    damage: f32,
+    /// Seconds in flight.
+    age: f32,
+}
+
+/// Arrows that hit someone since combat last ran.
+#[derive(Resource, Debug, Default)]
+pub struct ArrowHits(Vec<Blow>);
+
+/// Seconds to draw a bow fully, at speed 1.
+const BOW_DRAW: f32 = 1.0;
+/// Units per second of a fully drawn arrow at speed 1 (an estimate until the
+/// RE notes give it).
+const ARROW_SPEED: f32 = 2500.0;
+/// Units per second squared.
+const ARROW_GRAVITY: f32 = 700.0;
+/// An arrow that hasn't hit anything by then drops out of the world.
+const ARROW_LIFETIME: f32 = 10.0;
 
 /// A body on the floor.
 #[derive(Component, Debug, Clone, Copy)]
@@ -272,10 +310,18 @@ fn fall(transform: &mut Transform) {
     transform.rotation *= Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
 }
 
-/// One swing: who swung at whom.
-struct Blow {
+/// Getting up after being knocked out.
+fn get_up(transform: &mut Transform) {
+    transform.rotation *= Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+}
+
+/// One blow: who struck whom, and for how much if that was settled already
+/// (an arrow's damage is fixed when it's loosed).
+#[derive(Debug)]
+pub struct Blow {
     attacker: u32,
     target: u32,
+    damage: Option<f32>,
 }
 
 type FighterView = (
@@ -284,6 +330,7 @@ type FighterView = (
     &'static Actor,
     &'static mut Transform,
     &'static mut Fighter,
+    Has<KnockedOut>,
 );
 
 /// A step of fighting: regeneration, the player's swings, actors choosing
@@ -297,9 +344,19 @@ pub(crate) fn run_combat(
     rapier: ReadRapierContext,
     parents: Query<&ChildOf>,
     mut actors: Query<FighterView, (Without<Player>, Without<Dead>)>,
-    mut players: Query<(Entity, &Transform, &mut PlayerIntent, &mut Fighter), With<Player>>,
+    mut players: Query<
+        (
+            Entity,
+            &Transform,
+            &mut PlayerIntent,
+            &mut Fighter,
+            &mut Inventory,
+        ),
+        With<Player>,
+    >,
     mut ai: Query<&mut Ai>,
     equipment: Query<(Option<&PlacedRef>, &Equipment, Has<Player>)>,
+    mut hits: ResMut<ArrowHits>,
 ) {
     let Some(world) = world else { return };
     let dt = time.delta_secs();
@@ -372,27 +429,74 @@ pub(crate) fn run_combat(
             (v.magicka + v.max_magicka * (magicka_base + magicka_mult * w) * dt).min(v.max_magicka);
     }
 
-    let mut blows = Vec::new();
+    let mut blows: Vec<Blow> = std::mem::take(&mut hits.0);
     let reach = setting(&world.settings, "fCombatDistance", COMBAT_DISTANCE);
 
     // The player's swing.
     let player_alive = state.vitals.get(&PLAYER_REF).is_none_or(|v| !v.dead);
     let mut player_feet = None;
-    if let Ok((entity, transform, mut intent, mut fighter)) = players.single_mut() {
+    if let Ok((entity, transform, mut intent, mut fighter, mut inventory)) = players.single_mut() {
         let feet = transform.translation - Vec3::Y * (PLAYER_HALF_HEIGHT + PLAYER_RADIUS);
         player_feet = Some(feet);
         fighter.cooldown = (fighter.cooldown - dt).max(0.0);
         fighter.blocking = intent.block && player_alive;
         let swing = std::mem::take(&mut intent.attack);
         let held = weapon(PLAYER_REF);
-        let bow = equipped.get(&PLAYER_REF).is_some_and(|e| {
-            e.iter().any(|i| {
-                world
-                    .weapons
-                    .get(i)
-                    .is_some_and(|w| w.kind == WeaponKind::Bow)
-            })
+        let bow = equipped.get(&PLAYER_REF).and_then(|e| {
+            e.iter()
+                .filter_map(|i| world.weapons.get(i))
+                .find(|w| w.kind == WeaponKind::Bow)
         });
+        let arrow = equipped.get(&PLAYER_REF).and_then(|e| {
+            e.iter()
+                .find(|i| world.ammo.contains_key(i) && inventory.count(**i) > 0)
+                .copied()
+        });
+        // A bow draws while the button is held and looses on release, harder
+        // the longer it was drawn.
+        if let Some(bow) = bow
+            && player_alive
+        {
+            if intent.attack_held && arrow.is_some() && !fighter.blocking {
+                fighter.draw += dt;
+            } else if fighter.draw > 0.0
+                && let Some(arrow) = arrow
+            {
+                let drawn = (fighter.draw * bow.speed.max(0.1) / BOW_DRAW).min(1.0);
+                fighter.draw = 0.0;
+                inventory.add(arrow, -1);
+                let ammo = world.ammo[&arrow];
+                let both = WeaponInfo {
+                    damage: bow.damage + ammo.damage,
+                    ..bow.clone()
+                };
+                let stats = records(&world, PLAYER_BASE).map(|(s, _)| s.clone());
+                let v = state.vitals.get(&PLAYER_REF).copied().unwrap_or_default();
+                let damage = stats.map_or(0.0, |s| {
+                    weapon_damage(&world.settings, &s, &v, &both) * drawn
+                });
+                let eye = feet + Vec3::Y * EYE_HEIGHT;
+                let dir =
+                    Quat::from_euler(EulerRot::YXZ, intent.yaw, intent.pitch, 0.0) * Vec3::NEG_Z;
+                let speed = ARROW_SPEED * ammo.speed.max(0.1) * (0.4 + 0.6 * drawn);
+                let mut arrow_entity = commands.spawn((
+                    Arrow {
+                        shooter: PLAYER_REF,
+                        shooter_body: entity,
+                        velocity: dir * speed,
+                        damage,
+                        age: 0.0,
+                    },
+                    Transform::from_translation(eye + dir * 30.0).looking_to(dir, Vec3::Y),
+                    CellMember,
+                    NoCollision,
+                ));
+                if let Some(model) = world.models.get(&arrow) {
+                    arrow_entity.insert(Model(model.clone()));
+                }
+            }
+        }
+        let bow = bow.is_some();
         if swing && player_alive && !bow && !fighter.blocking && fighter.cooldown == 0.0 {
             fighter.cooldown = PLAYER_SWING / held.map_or(1.0, |w| w.speed.max(0.1));
             let reach = reach * held.map_or(1.0, |w| w.reach.max(0.1));
@@ -416,6 +520,7 @@ pub(crate) fn run_combat(
                 blows.push(Blow {
                     attacker: PLAYER_REF,
                     target,
+                    damage: None,
                 });
             }
         }
@@ -428,18 +533,40 @@ pub(crate) fn run_combat(
         .chain(player_feet.map(|p| (PLAYER_REF, p)))
         .collect();
     let position = |r: u32| positions.iter().find(|p| p.0 == r).map(|p| p.1);
-    for (entity, placed, actor, mut transform, mut fighter) in &mut actors {
+    for (entity, placed, actor, mut transform, mut fighter, knocked) in &mut actors {
         let base = match *actor {
             Actor::Npc(b) | Actor::Creature(b) => b,
         };
         let Some((stats, _)) = records(&world, base) else {
             continue;
         };
+        // Knocked out: lie still until the time is up, then get up.
+        if let Some(v) = state.vitals.get_mut(&placed.0)
+            && (v.unconscious > 0.0 || knocked)
+        {
+            v.unconscious = (v.unconscious - dt).max(0.0);
+            if v.unconscious == 0.0 {
+                get_up(&mut transform);
+                commands.entity(entity).remove::<KnockedOut>();
+            } else if !knocked {
+                fall(&mut transform);
+                commands.entity(entity).insert(KnockedOut);
+            }
+            if let Ok(mut ai) = ai.get_mut(entity) {
+                ai.chase = None;
+                ai.fighting = true;
+            }
+            continue;
+        }
         fighter.cooldown = (fighter.cooldown - dt).max(0.0);
         let here = transform.translation;
-        // Drop a target that's gone or dead.
+        // Drop a target that's gone, dead or knocked out.
         if let Some(&t) = state.fighting.get(&placed.0)
-            && (position(t).is_none() || state.vitals.get(&t).is_some_and(|v| v.dead))
+            && (position(t).is_none()
+                || state
+                    .vitals
+                    .get(&t)
+                    .is_some_and(|v| v.dead || v.unconscious > 0.0))
         {
             state.fighting.remove(&placed.0);
         }
@@ -471,6 +598,7 @@ pub(crate) fn run_combat(
                     blows.push(Blow {
                         attacker: placed.0,
                         target,
+                        damage: None,
                     });
                 }
             } else {
@@ -501,10 +629,11 @@ pub(crate) fn run_combat(
         let Some((stats, attack)) = base_of(blow.attacker).and_then(|b| records(&world, b)) else {
             continue;
         };
-        let (mut health, mut fatigue) = match (attack, weapon(blow.attacker)) {
-            (Some(damage), _) => (damage, 0.0),
-            (None, Some(w)) => (weapon_damage(&world.settings, stats, &attacker_v, w), 0.0),
-            (None, None) => hand_damage(&world.settings, stats, &attacker_v),
+        let (mut health, mut fatigue) = match (blow.damage, attack, weapon(blow.attacker)) {
+            (Some(damage), ..) => (damage, 0.0),
+            (None, Some(damage), _) => (damage, 0.0),
+            (None, None, Some(w)) => (weapon_damage(&world.settings, stats, &attacker_v, w), 0.0),
+            (None, None, None) => hand_damage(&world.settings, stats, &attacker_v),
         };
         let target_stats = base_of(blow.target).and_then(|b| records(&world, b));
         if blow.target == PLAYER_REF
@@ -521,15 +650,28 @@ pub(crate) fn run_combat(
         let Some(v) = state.vitals.get_mut(&blow.target) else {
             continue;
         };
-        if v.dead {
+        if v.dead || v.unconscious > 0.0 {
             continue;
         }
         v.health -= health;
         v.fatigue = (v.fatigue - fatigue).max(0.0);
-        // Essential actors can't die; until being knocked out exists they
-        // stay on their feet with a sliver of health.
-        if essential {
-            v.health = v.health.max(1.0);
+        // Essential actors are knocked out instead of dying; see
+        // `docs/reverse-engineering/combat-and-levelling.md`.
+        if essential && v.health <= 0.0 {
+            v.health = (v.max_health
+                * setting(&world.settings, "fEssentialHealthPercentReGain", 0.3))
+            .max(1.0);
+            v.unconscious = setting(&world.settings, "fEssentialDeathTime", 10.0);
+            state.fighting.remove(&blow.target);
+            state.raise(blow.target, blow.attacker, event::KNOCKOUT);
+            let name = base_of(blow.target)
+                .and_then(|b| world.actors.npcs.get(&b))
+                .map_or("", |n| n.name.as_str());
+            let down = world
+                .setting("sEssentialCharacterDown")
+                .unwrap_or("is unconscious.");
+            state.messages.push(format!("{name} {down}"));
+            continue;
         }
         if v.health <= 0.0 {
             v.health = 0.0;
@@ -541,6 +683,18 @@ pub(crate) fn run_combat(
             blow.attacker, blow.target, v.health
         );
         let died = v.dead;
+        // Skill use, for the class the class menu suggests: one use per
+        // landed blow or blocked one, until `SKIL` use values are read.
+        if blow.attacker == PLAYER_REF {
+            let skill = match (blow.damage, weapon(PLAYER_REF)) {
+                (Some(_), _) => Stats::MARKSMAN,
+                (None, Some(w)) => w.kind.skill(),
+                (None, None) => Stats::HAND_TO_HAND,
+            };
+            state.skill_use[skill] += 1.0;
+        } else if blow.target == PLAYER_REF && player_blocking {
+            state.skill_use[Stats::BLOCK] += 1.0;
+        }
         state.raise(blow.target, blow.attacker, event::HIT);
         if blow.target == PLAYER_REF {
             if died {
@@ -553,7 +707,7 @@ pub(crate) fn run_combat(
     }
 
     // Whoever died this step, by a blow or a script's Kill, falls.
-    for (entity, placed, _, mut transform, _) in &mut actors {
+    for (entity, placed, _, mut transform, _, _) in &mut actors {
         let Some(v) = state.vitals.get(&placed.0) else {
             continue;
         };
@@ -568,6 +722,70 @@ pub(crate) fn run_combat(
         if let Ok(mut ai) = ai.get_mut(entity) {
             ai.chase = None;
             ai.fighting = false;
+        }
+    }
+}
+
+/// Moves arrows along their arc. One that hits an actor is a blow for the
+/// next combat step; one that hits anything else sticks where it hit.
+pub(crate) fn fly_arrows(
+    mut commands: Commands,
+    time: Res<Time>,
+    rapier: ReadRapierContext,
+    parents: Query<&ChildOf>,
+    targets: Query<&PlacedRef, With<Actor>>,
+    mut arrows: Query<(Entity, &mut Transform, &mut Arrow)>,
+    mut hits: ResMut<ArrowHits>,
+) {
+    let dt = time.delta_secs();
+    let Ok(rapier) = rapier.single() else { return };
+    for (entity, mut transform, mut arrow) in &mut arrows {
+        arrow.age += dt;
+        if arrow.age > ARROW_LIFETIME {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let from = transform.translation;
+        let step = arrow.velocity * dt;
+        arrow.velocity.y -= ARROW_GRAVITY * dt;
+        let length = step.length();
+        let hit = (length > 0.0)
+            .then(|| {
+                rapier.cast_ray(
+                    from,
+                    step / length,
+                    length,
+                    true,
+                    QueryFilter::default().exclude_rigid_body(arrow.shooter_body),
+                )
+            })
+            .flatten();
+        match hit {
+            Some((collider, distance)) => {
+                let target = std::iter::once(collider)
+                    .chain(parents.iter_ancestors(collider))
+                    .find_map(|e| targets.get(e).ok())
+                    .map(|p| p.0);
+                if let Some(target) = target {
+                    hits.0.push(Blow {
+                        attacker: arrow.shooter,
+                        target,
+                        damage: Some(arrow.damage),
+                    });
+                    commands.entity(entity).despawn();
+                } else {
+                    // Stuck in a wall or the floor.
+                    transform.translation = from + step / length * distance;
+                    commands.entity(entity).remove::<Arrow>();
+                }
+            }
+            None => {
+                transform.translation = from + step;
+                if arrow.velocity.length_squared() > 0.0 {
+                    let dir = arrow.velocity.normalize();
+                    transform.look_to(dir, Vec3::Y);
+                }
+            }
         }
     }
 }

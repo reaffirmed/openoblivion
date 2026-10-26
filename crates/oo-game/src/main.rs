@@ -376,6 +376,7 @@ fn player_input(
         intent.attack = true;
     }
     intent.block = buttons.pressed(MouseButton::Right);
+    intent.attack_held = buttons.pressed(MouseButton::Left);
     if keys.just_pressed(KeyCode::KeyN) {
         intent.noclip = !intent.noclip;
         info!("noclip {}", if intent.noclip { "on" } else { "off" });

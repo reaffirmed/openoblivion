@@ -66,6 +66,7 @@ impl Plugin for SimPlugin {
             .init_resource::<script::ScriptState>()
             .init_resource::<script::Pending>()
             .init_resource::<trigger::PhantomCache>()
+            .init_resource::<combat::ArrowHits>()
             .add_message::<animated::PlaySound>()
             .add_systems(Update, (trigger::attach_zones, combat::attach_fighters))
             // The simulation steps at a fixed rate, independent of framerate.
@@ -82,6 +83,7 @@ impl Plugin for SimPlugin {
                     dialogue::update_conversations,
                     character::apply_choices,
                     inventory::handle_actions,
+                    combat::fly_arrows.run_if(character::in_game_mode),
                     combat::run_combat.run_if(character::in_game_mode),
                     script::run_quests.run_if(character::in_game_mode),
                     trigger::update_triggers.run_if(character::in_game_mode),

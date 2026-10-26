@@ -118,10 +118,15 @@ fn to_collider(shape: &CollisionShape) -> Option<Collider> {
 }
 
 /// Gives every newly spawned [`Model`] entity its collision shapes, as fixed bodies.
+/// A model that's only drawn, never collided with (arrows in flight).
+#[derive(Component, Debug, Clone, Copy)]
+pub struct NoCollision;
+
+#[allow(clippy::type_complexity)]
 fn attach_colliders(
     mut commands: Commands,
     data: Option<Res<GameData>>,
-    added: Query<(Entity, &Model), Added<Model>>,
+    added: Query<(Entity, &Model), (Added<Model>, Without<NoCollision>)>,
     mut cache: ResMut<CollisionCache>,
     mut animated: ResMut<AnimatedModels>,
 ) {
