@@ -237,6 +237,41 @@ fn or_binds_tighter_than_and() {
     assert_eq!(call.2, [Value::Form(QUEST)]);
 }
 
+#[test]
+fn reports_failing_only_on_disposition() {
+    let mut world = World::default();
+    let low_disposition = Condition {
+        op: CompareOp::GreaterOrEqual,
+        ..condition(0x104C, [0, 0], 50.0, false)
+    };
+    let female = condition(0x1046, [1, 0], 1.0, false);
+    let r = oo_script::conditions::check(
+        &[low_disposition.clone(), female],
+        Some(0x30),
+        Some(PLAYER),
+        &mut world,
+    );
+    assert!(!r.pass && r.only_disposition);
+    // GetDisposition's empty actor parameter became the other party.
+    let call = world
+        .calls
+        .iter()
+        .find(|c| c.1 == "GetDisposition")
+        .unwrap();
+    assert_eq!(
+        (call.0, &call.2[..]),
+        (Some(0x30), &[Value::Form(PLAYER)][..])
+    );
+    let male = condition(0x1046, [0, 0], 1.0, false);
+    let r = oo_script::conditions::check(
+        &[low_disposition, male],
+        Some(0x30),
+        Some(PLAYER),
+        &mut world,
+    );
+    assert!(!r.pass && !r.only_disposition);
+}
+
 /// A statement calling a command on a reference: a 16-bit 0x001C, the
 /// reference-list index, then the command. From ARSwitch01SCRIPT's
 /// `target.Activate mySelf 1`.
