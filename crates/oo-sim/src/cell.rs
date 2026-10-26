@@ -284,39 +284,31 @@ fn unknown_cell_message(order: &LoadOrder, editor_id: &str) -> String {
     )
 }
 
-/// Whether a reference is in the world. Scripts' changes win. Otherwise a
-/// reference flagged initially disabled stays disabled until a script enables
-/// it or its enable parent; an unflagged one follows its enable parent (or
-/// does the opposite). Parents outside the cell aren't loaded yet, so those
-/// references go by their own flag.
+/// Whether a reference is in the world. Scripts' changes win; otherwise a
+/// reference with an enable parent takes the parent's state (or the opposite),
+/// whatever its own initially-disabled flag says, and failing that it goes by
+/// that flag. Parents outside the cell aren't loaded yet, so those references
+/// go by their own flag. (The prison's assassins 2 to 4 are flagged but follow
+/// assassin 1, who is enabled; one of them starts the ambush at stage 22.)
 fn is_enabled(r: &Reference, cell: &HashMap<u32, &Reference>, changes: &WorldChanges) -> bool {
-    /// (enabled, whether a script decided it)
     fn go(
         r: &Reference,
         cell: &HashMap<u32, &Reference>,
         changes: &WorldChanges,
         depth: u8,
-    ) -> (bool, bool) {
+    ) -> bool {
         if let Some(&enabled) = changes.enabled.get(&r.form_id) {
-            return (enabled, true);
+            return enabled;
         }
         // Parents can chain; a cycle is a broken plugin.
         match r.enable_parent {
             Some(p) if depth < 16 && cell.contains_key(&p.reference) => {
-                let (parent, scripted) = go(cell[&p.reference], cell, changes, depth + 1);
-                let follows = parent != p.opposite;
-                if scripted || !r.initially_disabled {
-                    (follows, scripted)
-                } else {
-                    // Flagged under an enabled parent: hidden until a
-                    // script enables one of them.
-                    (false, false)
-                }
+                go(cell[&p.reference], cell, changes, depth + 1) != p.opposite
             }
-            _ => (!r.initially_disabled, false),
+            _ => !r.initially_disabled,
         }
     }
-    go(r, cell, changes, 0).0
+    go(r, cell, changes, 0)
 }
 
 /// Gives an `ACHR`/`ACRE` entity what it needs: which actor it is, what it
@@ -808,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn initially_disabled_child_waits_for_a_script() {
+    fn a_child_follows_its_parent_over_its_own_flag() {
         let parent = reference(1, false, None);
         let flagged = reference(2, true, Some(1));
         let follower = reference(3, false, Some(4));
@@ -818,11 +810,10 @@ mod tests {
             .map(|r| (r.form_id, r))
             .collect();
         let mut changes = WorldChanges::default();
-        assert!(is_enabled(&parent, &cell, &changes));
-        assert!(!is_enabled(&flagged, &cell, &changes));
-        assert!(!is_enabled(&follower, &cell, &changes));
-        changes.enabled.insert(1, true);
         assert!(is_enabled(&flagged, &cell, &changes));
+        assert!(!is_enabled(&follower, &cell, &changes));
+        changes.enabled.insert(1, false);
+        assert!(!is_enabled(&flagged, &cell, &changes));
         changes.enabled.insert(4, true);
         assert!(is_enabled(&follower, &cell, &changes));
     }
