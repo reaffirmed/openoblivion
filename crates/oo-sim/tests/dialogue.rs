@@ -120,7 +120,12 @@ fn order() -> LoadOrder {
         ],
     );
     // Stage 20's result enables the gate.
-    let enable_gate = [&[0x1C][..], &1u16.to_le_bytes(), &stmt(ENABLE, &[])].concat();
+    let enable_gate = [
+        &0x1Cu16.to_le_bytes()[..],
+        &1u16.to_le_bytes(),
+        &stmt(ENABLE, &[]),
+    ]
+    .concat();
     let quest = record(
         b"QUST",
         QUEST,
