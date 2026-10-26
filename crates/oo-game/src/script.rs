@@ -35,6 +35,8 @@
 //!                                              # (through load doors it goes through too)
 //! t58 follow off
 //! t59 god                                   # the player's health stays full
+//! t60 door 00026C11                         # go through a load door here, from anywhere
+//! t61 travel 000248B2                       # walk there over the path grid and open it
 //! t60 quit
 //! ```
 
@@ -47,6 +49,7 @@ use bevy::math::DVec2;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::PrimaryWindow;
+use oo_sim::cell::LoadDoor;
 
 #[derive(Debug, Clone)]
 enum Action {
@@ -62,6 +65,10 @@ enum Action {
     Follow(Option<(u32, f32)>),
     /// Keep the player's health full from now on.
     God,
+    /// Go through a load door in this cell straight away, wherever the player is.
+    Door(u32),
+    /// Walk to a door over the cell's path grid, as the AI would, and open it.
+    Travel(u32),
     Move(f64, f64),
     Click,
     Wheel(f32),
@@ -233,6 +240,12 @@ fn load(path: &Path) -> anyhow::Result<Vec<(When, Action)>> {
             ),
             "click" => Action::Click,
             "god" => Action::God,
+            "travel" => Action::Travel(
+                u32::from_str_radix(words.next().ok_or_else(bad)?, 16).map_err(|_| bad())?,
+            ),
+            "door" => Action::Door(
+                u32::from_str_radix(words.next().ok_or_else(bad)?, 16).map_err(|_| bad())?,
+            ),
             "wheel" => Action::Wheel(words.next().ok_or_else(bad)?.parse()?),
             "shot" => Action::Shot(words.next().ok_or_else(bad)?.into()),
             "quit" => Action::Quit,
@@ -350,10 +363,12 @@ fn run_script(
     time: Res<Time>,
     fixed: Res<Time<Fixed>>,
     player: Query<&Transform, With<oo_sim::Player>>,
-    actors: Query<(&oo_sim::PlacedRef, &Transform), Without<oo_sim::Player>>,
+    actors: Query<(&oo_sim::PlacedRef, &Transform, Option<&LoadDoor>), Without<oo_sim::Player>>,
     world: Option<Res<oo_sim::cell::WorldData>>,
     mut state: ResMut<oo_sim::script::ScriptState>,
     mut intents: Query<&mut oo_sim::PlayerIntent, With<oo_sim::Player>>,
+    cell: Option<Res<oo_sim::cell::CurrentCell>>,
+    mut transition: ResMut<oo_sim::cell::PendingTransition>,
 ) {
     script.frame += 1;
     for key in std::mem::take(&mut script.held_keys) {
@@ -410,8 +425,8 @@ fn run_script(
     } else if let Some((r, near)) = script.follow
         && let Ok(at) = player.single()
     {
-        match actors.iter().find(|(p, _)| p.0 == r) {
-            Some((_, t)) => {
+        match actors.iter().find(|(p, ..)| p.0 == r) {
+            Some((_, t, _)) => {
                 script.follow_lost = false;
                 let to = t.translation.xz();
                 let heading = match script.follow_seen {
@@ -478,8 +493,8 @@ fn run_script(
                     info!("script frame {frame}: player at {}", t.translation);
                 }
             }
-            Action::Where(Some(r)) => match actors.iter().find(|(p, _)| p.0 == r) {
-                Some((_, t)) => info!("script frame {frame}: {r:08X} at {}", t.translation),
+            Action::Where(Some(r)) => match actors.iter().find(|(p, ..)| p.0 == r) {
+                Some((_, t, _)) => info!("script frame {frame}: {r:08X} at {}", t.translation),
                 None => info!("script frame {frame}: {r:08X} isn't loaded"),
             },
             Action::Face(to) => {
@@ -502,6 +517,54 @@ fn run_script(
                 }
             }
             Action::God => script.god = true,
+            Action::Door(r) => match actors.iter().find(|(p, ..)| p.0 == r) {
+                Some((
+                    _,
+                    _,
+                    Some(LoadDoor {
+                        cell: Some(cell),
+                        arrival,
+                        ..
+                    }),
+                )) => {
+                    transition.0 = Some((*cell, *arrival));
+                }
+                _ => warn!("script: {r:08X} isn't a load door to an interior here"),
+            },
+            Action::Travel(r) => {
+                let door = actors.iter().find(|(p, ..)| p.0 == r);
+                match (door, player.single()) {
+                    (Some((_, t, _)), Ok(at)) => {
+                        // The way the AI would go: over the cell's path grid.
+                        let to = t.translation;
+                        let path = match cell.as_deref() {
+                            Some(c) if !c.path_points.is_empty() => oo_sim::ai::find_path(
+                                &c.path_points,
+                                &c.path_edges,
+                                at.translation,
+                                to,
+                            ),
+                            _ => {
+                                warn!("script: no path grid here, walking straight to {r:08X}");
+                                vec![to]
+                            }
+                        };
+                        info!("script: travelling to {r:08X} over {} points", path.len());
+                        // Stop short of the door itself, then face it and open it.
+                        let last = path.len().saturating_sub(1);
+                        for p in &path[..last] {
+                            script.goto.push_back((p.xz(), GOTO_SECONDS));
+                        }
+                        let from = path
+                            .get(last.wrapping_sub(1))
+                            .map_or(at.translation.xz(), |p| p.xz());
+                        let near = to.xz() - (to.xz() - from).normalize_or_zero() * 60.0;
+                        script.goto.push_back((near, GOTO_SECONDS));
+                        script.open_door = Some(to.xz());
+                    }
+                    _ => warn!("script: {r:08X} isn't loaded here"),
+                }
+            }
             Action::Click => {
                 mouse.press(MouseButton::Left);
                 script.held_click = true;
@@ -572,8 +635,8 @@ fn run_script(
                     None => player.single().ok().map(|t| t.translation),
                     Some(id) => actors
                         .iter()
-                        .find(|(r, _)| r.0 == id)
-                        .map(|(_, t)| t.translation),
+                        .find(|(r, ..)| r.0 == id)
+                        .map(|(_, t, _)| t.translation),
                 };
                 let pass = position.is_some_and(|p| p.distance(at) <= radius);
                 check(&mut script, pass, || {
