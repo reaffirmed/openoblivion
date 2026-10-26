@@ -33,6 +33,7 @@ use crate::player::{
 use crate::script::{ScriptData, ScriptState, Scripted};
 use crate::{GameData, WorldConfig};
 use oo_formats::packages::{Package, packages};
+use oo_formats::settings::{Setting, game_settings};
 
 /// A reference placed in the world. Its form ID is stable across machines
 /// that have the same plugins, which makes it a natural network ID.
@@ -84,6 +85,18 @@ pub struct WorldData {
     pub scripting: ScriptData,
     pub packages: HashMap<u32, Package>,
     pub doors: HashMap<u32, DoorInfo>,
+    /// Game settings (`GMST`) by lower-case editor ID.
+    pub settings: HashMap<String, Setting>,
+}
+
+impl WorldData {
+    /// A string game setting, such as a UI message.
+    pub fn setting(&self, editor_id: &str) -> Option<&str> {
+        match self.settings.get(&editor_id.to_ascii_lowercase())? {
+            Setting::String(s) => Some(s),
+            _ => None,
+        }
+    }
 }
 
 /// A reference that starts locked (`XLOC`).
@@ -207,6 +220,7 @@ fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
         scripting: ScriptData::load(&order)?,
         packages: packages(&order)?,
         doors: doors(&order)?,
+        settings: game_settings(&order)?,
         order,
     })
 }

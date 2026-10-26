@@ -42,24 +42,23 @@ pub enum AnimRequest {
     Open(bool),
     /// Play an animation group by its code (`PlayGroup`).
     Group(u16),
-    /// Rattle a locked door, if its model has a `Locked` sequence.
-    Locked,
 }
 
-/// A sound the simulation wants played. Nothing plays them yet; the client
-/// will once there's audio.
+/// A sound the simulation wants played, for the client to play.
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlaySound {
-    /// The reference it comes from.
+    /// The reference it comes from; heard by the player, it plays without
+    /// position.
     pub source: u32,
-    pub sound: SoundCue,
+    pub sound: SoundRef,
 }
 
+/// A sound record (`SOUN`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SoundCue {
-    DoorLocked,
-    DoorOpen,
-    DoorClose,
+pub enum SoundRef {
+    Form(u32),
+    /// Found by editor ID, as the game finds some built-in ones.
+    EditorId(&'static str),
 }
 
 /// Animation group names by code; see `docs/reverse-engineering/actors-animation.md`.
@@ -343,11 +342,6 @@ pub(crate) fn animate_objects(
                     };
                     let now = if anim.play(name) { moving } else { settled };
                     state.doors.insert(placed.0, now);
-                }
-                AnimRequest::Locked => {
-                    if !anim.play("Locked") {
-                        debug!("{:08X} has no Locked sequence", placed.0);
-                    }
                 }
                 AnimRequest::Group(code) => {
                     let name = ANIM_GROUPS.get(usize::from(code)).copied().unwrap_or("");

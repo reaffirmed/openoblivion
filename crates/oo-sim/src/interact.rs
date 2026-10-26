@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 
 use crate::actor::Actor;
-use crate::animated::{AnimRequest, Door, PlaySound, SoundCue};
+use crate::animated::{AnimRequest, Door, PlaySound, SoundRef};
 use crate::cell::{LoadDoor, PendingTransition, PlacedRef, WorldData};
 use crate::dialogue::Conversation;
 use crate::inventory::{
@@ -15,6 +15,10 @@ use crate::script::{PLAYER_REF, Pending, ScriptState, Scripted};
 
 /// How far away the player can activate things (Oblivion's iActivatePickLength).
 pub const ACTIVATE_DISTANCE: f32 = 150.0;
+
+/// The lockpick and the Skeleton Key, fixed by `Oblivion.esm`.
+pub const LOCKPICK: u32 = 0x0000_000A;
+pub const SKELETON_KEY: u32 = 0x0000_000B;
 
 /// The placed reference a player is looking at, if it's within reach.
 #[derive(Component, Debug, Default, Clone, Copy)]
@@ -115,41 +119,51 @@ pub(crate) fn activate(
             state.activated.insert(placed.0, by);
             continue;
         }
-        // Locked doors and containers open only with the key; picking locks
-        // isn't implemented yet.
+        // Locked doors and containers; see
+        // `docs/reverse-engineering/doors-and-animated-objects.md`. Picking
+        // locks isn't implemented yet.
         if (inner_door.is_some() || door.is_some() || container.is_some())
-            && let Some(lock) = state.locks.get_mut(&placed.0)
+            && let Some(lock) = state.locks.get(&placed.0).copied()
             && lock.locked
         {
-            let has_key = by == PLAYER_REF && lock.key != 0 && inventory.count(lock.key) > 0;
-            if !has_key {
-                if by == PLAYER_REF {
-                    let level = lock.level;
-                    let name = inner_door
-                        .and_then(|Door(base)| world.doors.get(base))
-                        .map(|d| d.name.clone())
-                        .or_else(|| {
-                            container.and_then(|Container(base)| {
-                                world.containers.get(base).map(|c| c.name.clone())
-                            })
-                        })
-                        .filter(|n| !n.is_empty())
-                        .unwrap_or_else(|| "door".to_owned());
-                    state.messages.push(if level >= 100 {
-                        format!("This {name} is locked. It requires a key.")
-                    } else {
-                        format!("This {name} is locked. Picking locks isn't implemented yet.")
-                    });
-                    requests.animations.push((placed.0, AnimRequest::Locked));
-                    sounds.write(PlaySound {
-                        source: placed.0,
-                        sound: SoundCue::DoorLocked,
-                    });
-                }
+            if by != PLAYER_REF {
                 continue;
             }
-            lock.locked = false;
-            state.messages.push("Unlocked with the key.".to_owned());
+            if lock.key != 0 && inventory.count(lock.key) > 0 {
+                if let Some(l) = state.locks.get_mut(&placed.0) {
+                    l.locked = false;
+                }
+                let key = world.items.get(&lock.key).map_or("", |i| i.name.as_str());
+                let message = format!("{}{key}.", world.setting("sOpenWithKey").unwrap_or(""));
+                state.messages.push(message);
+            } else {
+                let has_picks = inventory.count(LOCKPICK) > 0 || inventory.count(SKELETON_KEY) > 0;
+                let setting = if lock.level >= 100 {
+                    Some("sImpossibleLock")
+                } else if !has_picks && lock.key != 0 {
+                    Some("sNoLockPickKey")
+                } else if !has_picks {
+                    Some("sNoLockPick")
+                } else {
+                    None
+                };
+                match setting {
+                    Some(id) => {
+                        let text = world.setting(id).unwrap_or(id).to_owned();
+                        state.messages.push(text);
+                    }
+                    None => info!("the lockpicking menu isn't implemented yet"),
+                }
+                sounds.write(PlaySound {
+                    source: placed.0,
+                    sound: SoundRef::EditorId(if container.is_some() {
+                        "DRSChestLocked"
+                    } else {
+                        "DRSLocked"
+                    }),
+                });
+                continue;
+            }
         }
         // Doors open and close for anyone.
         if inner_door.is_some() {
@@ -157,14 +171,19 @@ pub(crate) fn activate(
             requests
                 .animations
                 .push((placed.0, AnimRequest::Open(!open.is_open())));
-            sounds.write(PlaySound {
-                source: placed.0,
-                sound: if open.is_open() {
-                    SoundCue::DoorClose
+            if let Some(info) = inner_door.and_then(|Door(base)| world.doors.get(base)) {
+                let sound = if open.is_open() {
+                    info.close_sound
                 } else {
-                    SoundCue::DoorOpen
-                },
-            });
+                    info.open_sound
+                };
+                if sound != 0 {
+                    sounds.write(PlaySound {
+                        source: placed.0,
+                        sound: SoundRef::Form(sound),
+                    });
+                }
+            }
             continue;
         }
         // Only the player's activations do anything else yet.

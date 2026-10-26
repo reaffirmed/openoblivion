@@ -160,6 +160,9 @@ pub struct DoorInfo {
     pub name: String,
     /// `FNAM`: see the constants.
     pub flags: u8,
+    /// Sounds (`SOUN`) for opening (`SNAM`) and closing (`ANAM`), or 0.
+    pub open_sound: u32,
+    pub close_sound: u32,
 }
 
 impl DoorInfo {
@@ -191,6 +194,12 @@ pub fn doors(order: &LoadOrder) -> Result<HashMap<u32, DoorInfo>> {
                     match &f.tag.0 {
                         b"FULL" => door.name = f.zstring(),
                         b"FNAM" => door.flags = f.data.first().copied().unwrap_or(0),
+                        b"SNAM" if f.data.len() >= 4 => {
+                            door.open_sound = order.global(index, u32_at(f.data, 0));
+                        }
+                        b"ANAM" if f.data.len() >= 4 => {
+                            door.close_sound = order.global(index, u32_at(f.data, 0));
+                        }
                         _ => {}
                     }
                 }

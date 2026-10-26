@@ -84,6 +84,8 @@ pub struct Ai {
     pub home: Vec3,
     /// The travel or escort destination was reached.
     pub arrived: bool,
+    /// The package raised its done event.
+    pub finished: bool,
     /// Points still to walk through.
     pub path: Vec<Vec3>,
     /// Where `path` leads, to replan when the goal moves.
@@ -403,6 +405,7 @@ pub(crate) fn run_ai(
                 }
                 ai.current = picked;
                 ai.arrived = false;
+                ai.finished = false;
                 ai.path.clear();
                 ai.goal = None;
             }
@@ -444,6 +447,38 @@ pub(crate) fn run_ai(
                         } else if !waiting {
                             goal = Some(to);
                             speed = pace;
+                        }
+                    }
+                }
+                // Follow first goes to its place, then finishes once the one
+                // it follows comes within its distance; see
+                // `docs/reverse-engineering/ai-packages.md`.
+                PackageKind::Follow if !ai.finished => {
+                    let place = p
+                        .location
+                        .and_then(|_| destination(p, &ai, here, &positions));
+                    match place {
+                        Some((to, radius)) if !ai.arrived && !reached(here, to, radius) => {
+                            goal = Some(to);
+                            speed = pace;
+                        }
+                        _ => {
+                            ai.arrived = true;
+                            let target = package_target(p).unwrap_or(PLAYER_REF);
+                            let within = if p.target_count > 0 {
+                                p.target_count as f32
+                            } else {
+                                FOLLOW_DISTANCE
+                            };
+                            if positions
+                                .get(&target)
+                                .is_some_and(|t| t.distance(here) <= within)
+                            {
+                                ai.finished = true;
+                                if let Some(current) = ai.current {
+                                    state.raise(placed.0, current, event::PACKAGE_DONE);
+                                }
+                            }
                         }
                     }
                 }
