@@ -247,7 +247,11 @@ fn walk_children(
             }
         }
 
-        walk_children(doc, eval, child, child_origin, child_clip, out, rect);
+        // An invisible tile hides its whole subtree: list rows switch off
+        // through their row rect's `visible` (user8), not their texts'.
+        if visible {
+            walk_children(doc, eval, child, child_origin, child_clip, out, rect);
+        }
         let _ = parent_rect;
     }
 }

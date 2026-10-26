@@ -7,6 +7,7 @@ mod actor;
 mod lighting;
 mod menu;
 mod model;
+mod script;
 mod xml_menu;
 mod xml_ui;
 
@@ -61,6 +62,9 @@ struct Args {
     /// costs (the compass redraws as the heading changes).
     #[arg(long, allow_negative_numbers = true)]
     spin: Option<f32>,
+    /// Scripted input and screenshots, for testing (see `script.rs`).
+    #[arg(long)]
+    script: Option<PathBuf>,
     /// Log frames per second and frame time every second.
     #[arg(long)]
     fps: bool,
@@ -175,6 +179,9 @@ fn main() {
     );
     if let Some(camera) = args.camera {
         app.insert_resource(CameraStart(camera));
+    }
+    if let Some(path) = args.script {
+        app.add_plugins(script::ScriptPlugin(path));
     }
     if let Some(degrees_per_second) = args.spin {
         app.insert_resource(Spin(degrees_per_second))

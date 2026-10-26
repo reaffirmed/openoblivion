@@ -262,6 +262,14 @@ impl MenuRenderer {
         })
     }
 
+    /// A trait's value as this renderer evaluates it (overrides applied), by
+    /// tile name. For inspecting what will be drawn.
+    pub fn trait_value(&self, tile: &str, trait_name: &str) -> Option<Scalar> {
+        let idx = *self.doc.name_index.get(&tile.to_lowercase())?;
+        let mut eval = EvalState::new(&self.doc, self.screen, &self.strings, &self.overrides);
+        Some(eval.trait_value(idx, &trait_name.to_lowercase()))
+    }
+
     /// Set an engine-side trait override on a named tile.
     ///
     /// The HUD contract (from vanilla XML comments):
@@ -553,7 +561,16 @@ impl MenuRenderer {
                 }
             }
             match Rgba8::decode_dds(&bytes) {
-                Some(img) => {
+                Some(mut img) => {
+                    // Lower-resolution sets cover the same layout with fewer
+                    // texels.
+                    img.units_per_texel = if path.starts_with("textures\\menus80\\") {
+                        1.25
+                    } else if path.starts_with("textures\\menus50\\") {
+                        2.0
+                    } else {
+                        1.0
+                    };
                     let img = Arc::new(img);
                     self.decoded_bytes += img.pixels.len();
                     self.decoded.insert(path.clone(), Arc::clone(&img));

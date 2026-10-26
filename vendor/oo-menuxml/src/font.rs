@@ -13,20 +13,21 @@
 //!               NUL-padded — 296-byte header total
 //! 296     56×256 glyph records, 14 f32s each:
 //!   [0]  left bearing (0 across the vanilla corpus)
-//!   [1]  v0 (atlas top edge, top-down V — verified against atlas ink)
-//!   [2]  u0
-//!   [3]  v1
-//!   [4]  u0 (corner repetition; [1]==[5], [2]==[4], [3]==[7], [6]==[8])
-//!   [5]  v0
-//!   [6]  u1
-//!   [7]  v1
-//!   [8]  u1
-//!   [9]  glyph height, texels
-//!   [10] glyph width, texels
+//!   [1]  u0  ┐ corner 1 (u, v); the four corners are (u0, v0), (u1, v0),
+//!   [2]  v0  ┘ (u0, v1), (u1, v1), so [1]==[5], [2]==[4], [3]==[7], [6]==[8]
+//!   [3]  u1    (top-down V; verified by rendering words from the atlas —
+//!   [4]  v0     the transposed reading draws stripes)
+//!   [5]  u0
+//!   [6]  v1
+//!   [7]  u1
+//!   [8]  v1
+//!   [9]  glyph width, texels (the u span: 'R' is 24 wide, 26 tall)
+//!   [10] glyph height, texels
 //!   [11] 0 across the corpus
-//!   [12] y offset (−1 for inked glyphs; the space glyph parks its
-//!        advance here — 11 — with [13] left at 0)
-//!   [13] horizontal advance (0 for control chars / space)
+//!   [12] spacing after the cell: −1 for inked glyphs, the whole advance
+//!        (11) for the space, which has no cell
+//!   [13] how far the cell reaches above the baseline (13 for 'u', 21
+//!        for 'A', 3 for '.'), not an advance: the pen moves [9] + [12]
 //! ```
 //!
 //! The companion `.tex` is `u32 width, u32 height, width*height*4` raw
@@ -101,23 +102,26 @@ impl Font {
             let f = |i: usize| {
                 f32::from_le_bytes(fnt[base + i * 4..base + i * 4 + 4].try_into().unwrap())
             };
-            let v0 = f(1);
-            let u0 = f(2);
-            let v1 = f(3);
-            let u1 = f(6);
-            let width = f(10);
-            let height = f(9);
-            let y_offset = f(12);
-            // Advance lives at [13]; the space glyph alone parks it at
-            // [12] with [13] zero (verified across the vanilla corpus:
-            // every inked glyph has [12] == −1 and [13] > 0, space has
-            // [12] == 11 and [13] == 0).
-            let advance = if f(13) != 0.0 {
-                f(13)
-            } else if c == b' ' as usize {
-                y_offset
+            // The corners are (u, v) pairs: [1]/[2], [3]/[4], [5]/[6], [7]/[8].
+            // Reading [1] as v drew every glyph from the transposed spot in
+            // the atlas (verified by rendering words from Kingthings Regular
+            // both ways; only this one is legible).
+            let u0 = f(1);
+            let v0 = f(2);
+            let u1 = f(3);
+            let v1 = f(6);
+            let width = f(9);
+            let height = f(10);
+            // [12] is spacing added to the cell width: −1 for inked glyphs (a
+            // one-texel overlap), the whole advance (11) for the space. [13]
+            // is not an advance but how far the cell reaches above the
+            // baseline: 13 for x-height letters (u, o), 21-22 for tall ones
+            // (A, i, l), 3 for '.'. Read as an advance it scattered words and
+            // stacked narrow letters on their neighbours.
+            let advance = if width > 0.0 {
+                width + f(12)
             } else {
-                0.0
+                f(12).max(0.0)
             };
             glyphs.push(Glyph {
                 u0,
@@ -127,9 +131,21 @@ impl Font {
                 width,
                 height,
                 advance,
-                y_offset: if c == b' ' as usize { 0.0 } else { y_offset },
+                // Above-baseline extent for now; turned into an offset from
+                // the line's top once the font's baseline is known.
+                y_offset: f(13),
                 inked: width > 0.0 && height > 0.0,
             });
+        }
+        // Every glyph's cell sits with its [13] above one shared baseline:
+        // the tallest glyph's.
+        let baseline = glyphs
+            .iter()
+            .filter(|g| g.inked)
+            .map(|g| g.y_offset)
+            .fold(0.0, f32::max);
+        for g in &mut glyphs {
+            g.y_offset = if g.inked { baseline - g.y_offset } else { 0.0 };
         }
         Ok(Self {
             point_size,

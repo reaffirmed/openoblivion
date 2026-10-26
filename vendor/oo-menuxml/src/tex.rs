@@ -22,6 +22,10 @@ pub struct Rgba8 {
     pub height: u32,
     /// `width * height * 4` bytes.
     pub pixels: Vec<u8>,
+    /// Menu units one texel covers at natural size: 1 for the base `Menus`
+    /// set, 1.25 for `Menus80`, 2 for `Menus50`. Layouts are authored in
+    /// base-set units whichever set the art was loaded from.
+    pub units_per_texel: f32,
 }
 
 impl Rgba8 {
@@ -30,6 +34,7 @@ impl Rgba8 {
             width,
             height,
             pixels: vec![0; (width as usize) * (height as usize) * 4],
+            units_per_texel: 1.0,
         }
     }
 
@@ -71,6 +76,7 @@ impl Rgba8 {
             width,
             height,
             pixels: bytes[8..8 + expect].to_vec(),
+            units_per_texel: 1.0,
         })
     }
 

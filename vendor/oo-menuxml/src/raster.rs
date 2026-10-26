@@ -199,7 +199,7 @@ impl Framebuffer {
         let (draw_w, draw_h) = if tiled || zoom < 0.0 {
             (dst.w, dst.h)
         } else {
-            let scale = if zoom <= 0.0 { 1.0 } else { zoom / 100.0 };
+            let scale = tex.units_per_texel * if zoom <= 0.0 { 1.0 } else { zoom / 100.0 };
             (tex.width as f32 * scale, tex.height as f32 * scale)
         };
         // Clip chain: outer clip window ∩ the tile's own rect.
@@ -247,6 +247,16 @@ impl Framebuffer {
         let th = tex.height as i64;
         let scroll_x = crop.0 as i64;
         let scroll_y = crop.1 as i64;
+        // Tiles repeat at natural size: a lower-resolution set's texel spans
+        // more than one unit, and `crop` scrolls in units.
+        let upt = f64::from(tex.units_per_texel);
+        let to_texel = |units: i64| {
+            if upt == 1.0 {
+                units
+            } else {
+                (units as f64 / upt).floor() as i64
+            }
+        };
 
         for py in rows {
             let v = (py as f32 - dst.y) / draw_h;
@@ -255,20 +265,14 @@ impl Framebuffer {
             // in a debug build). A wrapped index is still a valid
             // `rem_euclid` operand.
             let ty = if tiled {
-                scroll_y
-                    .wrapping_add(py)
-                    .wrapping_sub(dst.y as i64)
-                    .rem_euclid(th)
+                to_texel(scroll_y.wrapping_add(py).wrapping_sub(dst.y as i64)).rem_euclid(th)
             } else {
                 (src_y0 + v * src_h) as i64
             };
             for px in cols.clone() {
                 let u = (px as f32 - dst.x) / draw_w;
                 let tx = if tiled {
-                    scroll_x
-                        .wrapping_add(px)
-                        .wrapping_sub(dst.x as i64)
-                        .rem_euclid(tw)
+                    to_texel(scroll_x.wrapping_add(px).wrapping_sub(dst.x as i64)).rem_euclid(tw)
                 } else {
                     (src_x0 + u * src_w) as i64
                 };
@@ -404,6 +408,7 @@ mod once_white {
                 width: 1,
                 height: 1,
                 pixels: vec![255, 255, 255, 255],
+                units_per_texel: 1.0,
             })
         }
     }

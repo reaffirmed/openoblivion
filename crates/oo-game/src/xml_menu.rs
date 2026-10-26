@@ -322,6 +322,12 @@ fn fill_row(
     let icon = info
         .and_then(|i| i.icon.as_deref())
         .map_or(String::new(), |i| format!("Menus\\Icons\\{i}"));
+    // The inventory row draws its icon from user6. The container row draws
+    // user0, and user6 is the icon it swaps to while user10 marks the row
+    // hovered (in the inventory, user10 is the equipped marker).
+    if prefix.starts_with("cont_") {
+        menu.set_str(&row, "user0", &icon);
+    }
     menu.set_str(&row, "user6", &icon);
     menu.set_str(
         &row,
@@ -440,6 +446,9 @@ pub fn update_menu_overlay(
     }
     xml.set_num(parent, "user0", stacks.len() as f32);
     if in_container {
+        // Haggling is for merchants; the game hides the button otherwise
+        // (it has no `visible` of its own and sits on top of Take All).
+        xml.set_num("cont_button_haggle", "visible", 1.0);
         // The container's own box, or the player's inventory page.
         xml.set_num("ContainerMenu", "user7", if menu.right { 0.0 } else { 2.0 });
         let name = open
@@ -457,6 +466,9 @@ pub fn update_menu_overlay(
     let hovered = cursor.and_then(|p| xml.hit(p));
     let names: Vec<String> =
         hovered.map_or(Vec::new(), |t| xml.names(t).map(str::to_owned).collect());
+    if mouse.just_pressed(MouseButton::Left) {
+        debug!("click at {cursor:?} UI units: tiles {names:?}");
+    }
     let hovered_row = names
         .iter()
         .find_map(|n| n.strip_prefix(prefix).and_then(|i| i.parse::<usize>().ok()))
