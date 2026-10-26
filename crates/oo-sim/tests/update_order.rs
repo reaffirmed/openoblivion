@@ -254,6 +254,8 @@ fn count_unready(
 /// steps (a slow frame, or the frame after a load), the steps after the load
 /// must already see the new cell's actors ready: colliders, trigger zones and
 /// fighting state are attached at the start of each step, not once per frame.
+/// Checked here through fighting state; colliders and zones run in the same
+/// schedule but need NIFs, which synthetic data doesn't have.
 #[test]
 fn a_cell_load_is_ready_by_the_next_step() {
     let dir = write_data_dir();
@@ -357,7 +359,8 @@ fn walk_and_trace(frame: Duration, seconds: f32) -> Vec<Vec3> {
 
 /// The same input over the same simulated time gives the same result,
 /// whether the renderer runs at 60 or 20 frames a second: the player spawns,
-/// falls onto the floor, walks, then runs.
+/// falls onto a floor that exists from the start, walks, then runs. A guard
+/// against gameplay creeping into `Update`; it loads no cell mid-run.
 #[test]
 fn the_outcome_does_not_depend_on_the_framerate() {
     let fast = walk_and_trace(Duration::from_micros(16_667), 3.0);
