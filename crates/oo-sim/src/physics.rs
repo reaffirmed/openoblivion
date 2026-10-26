@@ -126,7 +126,7 @@ pub struct NoCollision;
 fn attach_colliders(
     mut commands: Commands,
     data: Option<Res<GameData>>,
-    added: Query<(Entity, &Model), (Added<Model>, Without<NoCollision>)>,
+    added: Query<(Entity, &Model, &Transform), (Added<Model>, Without<NoCollision>)>,
     mut cache: ResMut<CollisionCache>,
     mut animated: ResMut<AnimatedModels>,
 ) {
@@ -153,10 +153,29 @@ fn attach_colliders(
             }
         }
     };
-    for (entity, model) in &added {
+    for (entity, model, placed) in &added {
+        let watching = watched
+            .as_deref()
+            .is_some_and(|w| model.0.to_ascii_lowercase().contains(w));
+        if watching {
+            info!(
+                "{} placed at {} rotation {:?} scale {}",
+                model.0, placed.translation, placed.rotation, placed.scale
+            );
+        }
         // Animated models get colliders that ride on their nodes.
         if let Some(anims) = animated.load(&model.0, &data) {
             log_parts(&model.0, &mut anims.colliders.iter().map(|(_, p)| p));
+            if watching {
+                let pose = ObjectAnimation::new(anims.clone()).pose();
+                for (node, _) in &anims.colliders {
+                    info!(
+                        "{} collision node {node} posed at {:?}",
+                        model.0,
+                        pose.get(*node)
+                    );
+                }
+            }
             let anim = ObjectAnimation::new(anims.clone());
             let pose = anim.pose();
             commands
