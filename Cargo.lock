@@ -4577,6 +4577,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "oo-script"
+version = "0.1.0"
+dependencies = [
+ "oo-formats",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "oo-sim"
 version = "0.1.0"
 dependencies = [

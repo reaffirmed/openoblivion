@@ -11,6 +11,7 @@ rust-version = "1.97.1"
 [workspace.dependencies]
 oo-formats = { path = "crates/oo-formats" }
 oo-sim = { path = "crates/oo-sim" }
+oo-script = { path = "crates/oo-script" }
 anyhow = "1"
 thiserror = "2"
 flate2 = "1"

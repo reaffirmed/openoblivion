@@ -3,9 +3,10 @@
 mod common;
 
 use common::{field, group, record, zstr};
-use oo_formats::dialogue::{Comparand, CompareOp, Info, ScriptRef, TopicKind, dialogue_data};
+use oo_formats::dialogue::{Comparand, CompareOp, Info, TopicKind, dialogue_data};
 use oo_formats::esm::{Plugin, flags};
 use oo_formats::load_order::LoadOrder;
+use oo_formats::scripts::ScriptRef;
 
 const QUEST: u32 = 0x10;
 const TOPIC: u32 = 0x20;

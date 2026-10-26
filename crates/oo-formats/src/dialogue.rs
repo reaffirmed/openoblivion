@@ -10,6 +10,7 @@ use crate::commands::{self, ParamKind};
 use crate::esm::{Field, GroupKind, Node, Record};
 use crate::items::u32_at;
 use crate::load_order::LoadOrder;
+use crate::scripts::{ScriptCode, ScriptReader};
 use crate::{Error, Result};
 
 /// The kind of topic (`DIAL` `DATA`).
@@ -99,25 +100,6 @@ pub struct Condition {
     pub on_target: bool,
 }
 
-/// A compiled script attached to a record (dialogue results, quest stages).
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct ResultScript {
-    /// The compiled bytecode (`SCDA`).
-    pub compiled: Vec<u8>,
-    /// The source text (`SCTX`), which mods may ship without bytecode.
-    pub source: String,
-    /// The script's reference list, which the bytecode indexes from 1.
-    pub refs: Vec<ScriptRef>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScriptRef {
-    /// A form (`SCRO`), global.
-    Form(u32),
-    /// A local variable of the script (`SCRV`).
-    Local(u32),
-}
-
 /// One spoken response within a line (`TRDT` and its texts).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Response {
@@ -139,7 +121,7 @@ pub struct Info {
     pub choices: Vec<u32>,
     /// Topics the player learns from hearing this line (`NAME`).
     pub add_topics: Vec<u32>,
-    pub result: Option<ResultScript>,
+    pub result: Option<ScriptCode>,
 }
 
 impl Info {
@@ -164,7 +146,7 @@ pub struct StageEntry {
     pub flags: u8,
     pub conditions: Vec<Condition>,
     pub log: String,
-    pub result: Option<ResultScript>,
+    pub result: Option<ScriptCode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -459,44 +441,4 @@ fn condition(f: &Field<'_>, global: &dyn Fn(u32) -> u32) -> Result<Condition> {
         or: kind & 0x01 != 0,
         on_target: kind & 0x02 != 0,
     })
-}
-
-/// Collects `SCHR`/`SCDA`/`SCTX`/`SCRO`/`SCRV` into a [`ResultScript`].
-#[derive(Default)]
-struct ScriptReader {
-    script: Option<ResultScript>,
-}
-
-impl ScriptReader {
-    fn field(&mut self, f: &Field<'_>, global: &dyn Fn(u32) -> u32) {
-        let s = || ResultScript::default();
-        match &f.tag.0 {
-            b"SCHR" => {
-                self.script.get_or_insert_with(s);
-            }
-            b"SCDA" => self.script.get_or_insert_with(s).compiled = f.data.to_vec(),
-            b"SCTX" => {
-                self.script.get_or_insert_with(s).source = String::from_utf8_lossy(f.data)
-                    .trim_end_matches('\0')
-                    .into()
-            }
-            b"SCRO" if f.data.len() >= 4 => self
-                .script
-                .get_or_insert_with(s)
-                .refs
-                .push(ScriptRef::Form(global(u32_at(f.data, 0)))),
-            b"SCRV" if f.data.len() >= 4 => self
-                .script
-                .get_or_insert_with(s)
-                .refs
-                .push(ScriptRef::Local(u32_at(f.data, 0))),
-            _ => {}
-        }
-    }
-
-    fn finish(&mut self) -> Option<ResultScript> {
-        self.script
-            .take()
-            .filter(|s| !s.compiled.is_empty() || !s.source.trim().is_empty())
-    }
 }

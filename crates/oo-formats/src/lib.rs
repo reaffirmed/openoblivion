@@ -10,6 +10,7 @@ pub mod dialogue;
 pub mod esm;
 pub mod items;
 pub mod load_order;
+pub mod scripts;
 pub mod world;
 
 mod error;
