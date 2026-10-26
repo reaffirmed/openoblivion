@@ -9,6 +9,7 @@ use bevy_rapier3d::control::{CharacterAutostep, CharacterLength};
 use bevy_rapier3d::prelude::*;
 
 use crate::interact::LookingAt;
+use crate::inventory::{Inventory, OpenContainer, PlayerActions};
 use crate::{SpawnPoint, UNITS_PER_METRE};
 
 /// Capsule size: about 1.83 m tall (128 units) with a 0.3 m radius.
@@ -108,6 +109,9 @@ pub fn spawn_player(mut commands: Commands, spawn: Option<Res<SpawnPoint>>) {
         },
         PlayerMotion::default(),
         LookingAt::default(),
+        Inventory::default(),
+        OpenContainer::default(),
+        PlayerActions::default(),
         StepPositions::at(centre),
         Transform::from_translation(centre),
         RigidBody::KinematicPositionBased,

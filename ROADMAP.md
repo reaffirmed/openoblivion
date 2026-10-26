@@ -59,7 +59,19 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
 - [x] Plugin load order and record overrides
 - [x] Fixed-timestep simulation, interpolated rendering
 - [x] Cell lighting (`XCLL` ambient, directional and fog; a point light per `LIGH` reference, with flicker and pulse). Brightness needs tuning against the original.
-- [ ] Lights at their mesh's attach point, shadows from the brightest lights
+- [ ] Lights at their mesh's attach point
+- [ ] Vanilla-exact lighting by running the game's own shaders, the way iw4L does for
+      MW2: at load time, read the compiled Direct3D 9 shaders from the player's own
+      `Data/Shaders/shaderpackage*.sdp`, translate the shader bytecode to WGSL and feed
+      them the constants the original engine set (lights, `XCLL` ambient and fog,
+      material). No shader code ships in this repository; it only exists on the
+      player's machine. Steps: an `.sdp` reader, an SM 2.0/3.0 bytecode decoder and
+      WGSL emitter (tested against shaders we compile ourselves), a Bevy material
+      that binds the translated shaders, then side-by-side screenshots against the
+      original.
+- [ ] A lighting setting: "Vanilla" (the default, 1:1 through the translated shaders)
+      or "Enhanced", an optional modern renderer with shadows, ambient occlusion and
+      physically based falloff.
 - [ ] Doors that open (animated `DOOR` references), not just load doors
 - [ ] Dynamic clutter (Havok bodies Oblivion simulates, like the prison's chains)
 

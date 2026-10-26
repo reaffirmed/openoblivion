@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use bevy::prelude::*;
 use oo_sim::{CurrentCell, LoadDoor, Model, PlacedRef, Player, SimPlugin, WorldConfig};
 
+const EYE_HEIGHT: f32 = 115.0;
+
 fn field(tag: &[u8; 4], data: &[u8]) -> Vec<u8> {
     let mut out = tag.to_vec();
     out.extend_from_slice(&(data.len() as u16).to_le_bytes());
@@ -85,6 +87,9 @@ fn cell(form_id: u32, edid: &str, full: &str, refs: Vec<Vec<u8>>) -> Vec<Vec<u8>
 const COC_MARKER: u32 = 0x32;
 const WALL: u32 = 0x10;
 const DOOR: u32 = 0x11;
+const LOCKPICK: u32 = 0x20;
+const CHEST: u32 = 0x21;
+const COINS: u32 = 0x22;
 
 fn write_data_dir() -> PathBuf {
     let mut hedr = floats(&[1.0]);
@@ -125,6 +130,34 @@ fn write_data_dir() -> PathBuf {
         )],
     );
 
+    let items = group(
+        *b"MISC",
+        0,
+        &[
+            record(b"MISC", 0, LOCKPICK, &[field(b"FULL", &zstr("Lockpick"))]),
+            record(b"MISC", 0, COINS, &[field(b"FULL", &zstr("Gold"))]),
+        ],
+    );
+    let cnto = |item: u32, count: i32| {
+        let mut d = item.to_le_bytes().to_vec();
+        d.extend_from_slice(&count.to_le_bytes());
+        field(b"CNTO", &d)
+    };
+    let chests = group(
+        *b"CONT",
+        0,
+        &[record(
+            b"CONT",
+            0,
+            CHEST,
+            &[
+                field(b"FULL", &zstr("Chest")),
+                cnto(LOCKPICK, 3),
+                cnto(COINS, 25),
+            ],
+        )],
+    );
+
     let mut cells = cell(
         0x100,
         "TestPrisonCell",
@@ -145,6 +178,9 @@ fn write_data_dir() -> PathBuf {
                 0.0,
                 Some((0x201, [500.0, 600.0, 70.0], 0.0)),
             ),
+            // A lockpick at eye height, 80 units in front of the player.
+            refr(0x104, LOCKPICK, [90.0, 20.0, EYE_HEIGHT], 0.0, None),
+            refr(0x105, CHEST, [10.0, -60.0, 0.0], 0.0, None),
         ],
     );
     cells.extend(cell(
@@ -168,11 +204,14 @@ fn write_data_dir() -> PathBuf {
         &[group([0; 4], 2, &[group([0; 4], 3, &cells)])],
     );
 
-    let dir = std::env::temp_dir().join(format!("oo-sim-test-{}", std::process::id()));
+    // Tests run in parallel, so each gets its own directory.
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("oo-sim-test-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("Oblivion.esm"),
-        [header, stats, doors, cells].concat(),
+        [header, stats, doors, items, chests, cells].concat(),
     )
     .unwrap();
     dir
@@ -180,7 +219,11 @@ fn write_data_dir() -> PathBuf {
 
 fn app(dir: PathBuf) -> App {
     let mut app = App::new();
+    // The simulation runs in FixedUpdate, so each update must advance the clock.
     app.add_plugins((MinimalPlugins, TransformPlugin))
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(20),
+        ))
         .add_plugins(SimPlugin(WorldConfig {
             data_dir: Some(dir),
             plugins: vec!["Oblivion.esm".into()],
@@ -188,6 +231,165 @@ fn app(dir: PathBuf) -> App {
         }));
     app.update();
     app
+}
+
+fn player(app: &mut App) -> Entity {
+    app.world_mut()
+        .query_filtered::<Entity, With<Player>>()
+        .single(app.world())
+        .unwrap()
+}
+
+/// Goes through the load door that leads to `cell`.
+fn go_to(app: &mut App, cell: u32) {
+    let arrival = app
+        .world_mut()
+        .query::<&LoadDoor>()
+        .iter(app.world())
+        .find(|d| d.cell == Some(cell))
+        .unwrap()
+        .arrival;
+    app.world_mut()
+        .resource_mut::<oo_sim::cell::PendingTransition>()
+        .0 = Some((cell, arrival));
+    for _ in 0..3 {
+        app.update();
+    }
+    assert_eq!(app.world().resource::<CurrentCell>().form_id, cell);
+}
+
+#[test]
+fn picks_up_items_and_uses_containers() {
+    use bevy_rapier3d::prelude::{Collider, RigidBody};
+    use oo_sim::{
+        Inventory, OpenContainer, PlayerAction, PlayerActions, PlayerIntent, WorldChanges,
+    };
+
+    let dir = write_data_dir();
+    let mut app = app(dir.clone());
+    // No NIFs here, so give the floor and the lockpick colliders by hand.
+    app.world_mut().spawn((
+        RigidBody::Fixed,
+        Collider::cuboid(1000.0, 10.0, 1000.0),
+        Transform::from_xyz(0.0, -10.0, 0.0),
+    ));
+    let lockpick = app
+        .world_mut()
+        .query::<(Entity, &PlacedRef)>()
+        .iter(app.world())
+        .find(|(_, r)| r.0 == 0x104)
+        .map(|(e, _)| e)
+        .unwrap();
+    app.world_mut()
+        .entity_mut(lockpick)
+        .insert(Collider::ball(15.0));
+    for _ in 0..30 {
+        app.update();
+    }
+
+    // Activate while looking at it: it goes into the inventory and out of the world.
+    let player = player(&mut app);
+    let looking = app
+        .world()
+        .entity(player)
+        .get::<oo_sim::LookingAt>()
+        .unwrap()
+        .0;
+    assert_eq!(looking, Some(lockpick));
+    app.world_mut()
+        .entity_mut(player)
+        .get_mut::<PlayerIntent>()
+        .unwrap()
+        .activate = true;
+    for _ in 0..2 {
+        app.update();
+    }
+    let count = |app: &App, item| {
+        app.world()
+            .entity(player)
+            .get::<Inventory>()
+            .unwrap()
+            .count(item)
+    };
+    assert_eq!(count(&app, LOCKPICK), 1);
+    assert!(!refs_in_world(&mut app).contains(&0x104));
+    assert!(
+        app.world()
+            .resource::<WorldChanges>()
+            .removed
+            .contains(&0x104)
+    );
+
+    // It stays gone after leaving and coming back.
+    go_to(&mut app, 0x200);
+    go_to(&mut app, 0x100);
+    assert_eq!(refs_in_world(&mut app), [0x101, 0x102, 0x103, 0x105]);
+
+    // Open the chest, take one lockpick, then everything, then put some gold back.
+    let player = self::player(&mut app);
+    let act = |app: &mut App, actions: Vec<PlayerAction>| {
+        app.world_mut()
+            .entity_mut(player)
+            .get_mut::<PlayerActions>()
+            .unwrap()
+            .0 = actions;
+        for _ in 0..2 {
+            app.update();
+        }
+    };
+    app.world_mut()
+        .entity_mut(player)
+        .get_mut::<OpenContainer>()
+        .unwrap()
+        .0 = Some(0x105);
+    act(
+        &mut app,
+        vec![PlayerAction::Take {
+            item: LOCKPICK,
+            count: 1,
+        }],
+    );
+    assert_eq!(count(&app, LOCKPICK), 2);
+    act(&mut app, vec![PlayerAction::TakeAll]);
+    assert_eq!((count(&app, LOCKPICK), count(&app, COINS)), (4, 25));
+    act(
+        &mut app,
+        vec![PlayerAction::Put {
+            item: COINS,
+            count: 10,
+        }],
+    );
+    assert_eq!(count(&app, COINS), 15);
+    // Taking more than is there takes what there is.
+    act(
+        &mut app,
+        vec![PlayerAction::Take {
+            item: COINS,
+            count: 99,
+        }],
+    );
+    assert_eq!(count(&app, COINS), 25);
+    act(
+        &mut app,
+        vec![
+            PlayerAction::Put {
+                item: COINS,
+                count: 5,
+            },
+            PlayerAction::CloseContainer,
+        ],
+    );
+    assert_eq!(
+        app.world().entity(player).get::<OpenContainer>().unwrap().0,
+        None
+    );
+    let chest = &app.world().resource::<WorldChanges>().containers[&0x105];
+    assert_eq!(
+        chest.iter().map(|s| (s.item, s.count)).collect::<Vec<_>>(),
+        [(COINS, 5)]
+    );
+
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 fn refs_in_world(app: &mut App) -> Vec<u32> {
@@ -211,7 +413,7 @@ fn loads_cell_spawns_player_at_marker_and_takes_load_door() {
         (cell.form_id, cell.name.as_deref()),
         (0x100, Some("Imperial Prison"))
     );
-    assert_eq!(refs_in_world(&mut app), [0x101, 0x102, 0x103]);
+    assert_eq!(refs_in_world(&mut app), [0x101, 0x102, 0x103, 0x104, 0x105]);
 
     // Marker models are never drawn.
     let models: Vec<String> = app
@@ -266,8 +468,9 @@ fn loads_cell_spawns_player_at_marker_and_takes_load_door() {
     app.world_mut()
         .resource_mut::<oo_sim::cell::PendingTransition>()
         .0 = Some((0x200, door.arrival));
-    app.update();
-    app.update();
+    for _ in 0..3 {
+        app.update();
+    }
 
     let cell = app.world().resource::<CurrentCell>().clone();
     assert_eq!(cell.editor_id, "TestCorridor");

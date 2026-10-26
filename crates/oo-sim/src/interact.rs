@@ -3,7 +3,10 @@
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 
-use crate::cell::{LoadDoor, PendingTransition, PlacedRef};
+use crate::cell::{LoadDoor, PendingTransition, PlacedRef, WorldData};
+use crate::inventory::{
+    Container, Inventory, Item, OpenContainer, WorldChanges, container_contents, pick_up,
+};
 use crate::player::{EYE_HEIGHT, PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent};
 
 /// How far away the player can activate things (Oblivion's iActivatePickLength).
@@ -46,15 +49,48 @@ pub(crate) fn update_looking_at(
 }
 
 pub(crate) fn activate(
+    mut commands: Commands,
     mut pending: ResMut<PendingTransition>,
+    world: Option<Res<WorldData>>,
+    mut changes: ResMut<WorldChanges>,
     doors: Query<&LoadDoor>,
-    mut players: Query<(&mut PlayerIntent, &LookingAt), With<Player>>,
+    targets: Query<(&PlacedRef, Option<&Item>, Option<&Container>)>,
+    mut players: Query<
+        (
+            &mut PlayerIntent,
+            &LookingAt,
+            &mut Inventory,
+            &mut OpenContainer,
+        ),
+        With<Player>,
+    >,
 ) {
-    for (mut intent, looking) in &mut players {
+    for (mut intent, looking, mut inventory, mut open) in &mut players {
         if !std::mem::take(&mut intent.activate) {
             continue;
         }
         let Some(target) = looking.0 else { continue };
+        if let Ok((placed, item, container)) = targets.get(target) {
+            if let Some(Item(base)) = item {
+                pick_up(
+                    &mut commands,
+                    &mut changes,
+                    &mut inventory,
+                    target,
+                    placed.0,
+                    *base,
+                );
+                if let Some(info) = world.as_ref().and_then(|w| w.items.get(base)) {
+                    info!("picked up {}", info.name);
+                }
+                continue;
+            }
+            if let (Some(Container(base)), Some(world)) = (container, world.as_ref()) {
+                container_contents(&mut changes, world, placed.0, *base);
+                open.0 = Some(placed.0);
+                continue;
+            }
+        }
         if let Ok(door) = doors.get(target) {
             match door.cell {
                 Some(cell) => {

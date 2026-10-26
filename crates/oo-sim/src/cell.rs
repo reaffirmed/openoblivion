@@ -12,12 +12,14 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use byroredux_core::math::coord::{euler_zup_to_quat_yup, zup_to_yup_pos};
+use oo_formats::items::{ContainerInfo, ItemInfo, LeveledList, containers, items, leveled_items};
 use oo_formats::load_order::LoadOrder;
 use oo_formats::world::{
     Cell, CellLighting, Light, form_id_by_editor_id, interior_cell, interior_cell_by_form_id,
     interior_cell_ids, interior_cell_names, interior_reference_cells, lights, model_paths,
 };
 
+use crate::inventory::{Container, Item, WorldChanges};
 use crate::player::{
     PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent, PlayerMotion, StepPositions,
 };
@@ -66,6 +68,9 @@ pub struct WorldData {
     cell_names: HashMap<u32, String>,
     coc_marker: Option<u32>,
     lights: HashMap<u32, Light>,
+    pub items: HashMap<u32, ItemInfo>,
+    pub containers: HashMap<u32, ContainerInfo>,
+    pub leveled_items: HashMap<u32, LeveledList>,
 }
 
 /// The interior cell that's loaded now.
@@ -97,7 +102,11 @@ fn heading_to_yaw(z_rotation: f32) -> f32 {
     -z_rotation
 }
 
-pub(crate) fn load_world(mut commands: Commands, config: Res<WorldConfig>) {
+pub(crate) fn load_world(
+    mut commands: Commands,
+    config: Res<WorldConfig>,
+    changes: Res<WorldChanges>,
+) {
     let Some(dir) = &config.data_dir else {
         warn!("no Data directory given; the world is empty");
         return;
@@ -136,7 +145,7 @@ pub(crate) fn load_world(mut commands: Commands, config: Res<WorldConfig>) {
     match &config.cell {
         Some(editor_id) => match interior_cell(&world.order, editor_id) {
             Ok(Some(cell)) => {
-                if let Some(spawn) = spawn_cell(&mut commands, &world, &cell) {
+                if let Some(spawn) = spawn_cell(&mut commands, &world, &changes, &cell) {
                     commands.insert_resource(spawn);
                 }
             }
@@ -156,6 +165,9 @@ fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
         // The marker the `coc` console command drops you at.
         coc_marker: form_id_by_editor_id(&order, "COCMarkerHeading")?,
         lights: lights(&order)?,
+        items: items(&order)?,
+        containers: containers(&order)?,
+        leveled_items: leveled_items(&order)?,
         order,
     })
 }
@@ -176,7 +188,12 @@ fn unknown_cell_message(order: &LoadOrder, editor_id: &str) -> String {
 
 /// Spawns a cell's references and returns where a player arriving without a
 /// destination (no load door) should stand.
-fn spawn_cell(commands: &mut Commands, world: &WorldData, cell: &Cell) -> Option<SpawnPoint> {
+fn spawn_cell(
+    commands: &mut Commands,
+    world: &WorldData,
+    changes: &WorldChanges,
+    cell: &Cell,
+) -> Option<SpawnPoint> {
     // Positions of everything with a model, for a fallback spawn point.
     let mut placed = Vec::new();
     let mut spawn = None;
@@ -184,6 +201,10 @@ fn spawn_cell(commands: &mut Commands, world: &WorldData, cell: &Cell) -> Option
     // Load doors out of here that lead to another interior: (destination cell, door there).
     let mut exits = Vec::new();
     for r in &cell.references {
+        // Picked up, or otherwise gone for good.
+        if changes.removed.contains(&r.form_id) {
+            continue;
+        }
         let translation = Vec3::from(zup_to_yup_pos(r.position));
         let [rx, ry, rz] = r.rotation;
         let transform = Transform {
@@ -219,6 +240,12 @@ fn spawn_cell(commands: &mut Commands, world: &WorldData, cell: &Cell) -> Option
             );
             entity.insert(Model(model.clone()));
             placed.push(translation);
+        }
+        if world.items.contains_key(&r.base) {
+            entity.insert(Item(r.base));
+        }
+        if world.containers.contains_key(&r.base) {
+            entity.insert(Container(r.base));
         }
         if let Some(light) = world.lights.get(&r.base) {
             debug!(
@@ -323,6 +350,7 @@ pub(crate) fn apply_transition(
     mut commands: Commands,
     mut pending: ResMut<PendingTransition>,
     world: Option<Res<WorldData>>,
+    changes: Res<WorldChanges>,
     members: Query<Entity, With<CellMember>>,
     mut players: Query<
         (
@@ -352,7 +380,7 @@ pub(crate) fn apply_transition(
     for entity in &members {
         commands.entity(entity).despawn();
     }
-    spawn_cell(&mut commands, &world, &cell);
+    spawn_cell(&mut commands, &world, &changes, &cell);
     for (mut transform, mut intent, mut motion, mut steps) in &mut players {
         transform.translation =
             arrival.position + Vec3::Y * (PLAYER_HALF_HEIGHT + PLAYER_RADIUS + 1.0);

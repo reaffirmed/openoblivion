@@ -8,6 +8,7 @@
 pub mod cell;
 pub mod data;
 pub mod interact;
+pub mod inventory;
 pub mod physics;
 pub mod player;
 
@@ -20,6 +21,9 @@ pub use cell::{
 };
 pub use data::GameData;
 pub use interact::LookingAt;
+pub use inventory::{
+    Container, Inventory, Item, OpenContainer, PlayerAction, PlayerActions, WorldChanges,
+};
 pub use player::{EYE_HEIGHT, Player, PlayerIntent, PlayerMotion, StepPositions};
 
 /// Bethesda units per metre.
@@ -46,16 +50,20 @@ impl Plugin for SimPlugin {
         app.insert_resource(self.0.clone())
             .add_plugins((physics::PhysicsPlugin, player::PlayerPlugin))
             .init_resource::<cell::PendingTransition>()
+            .init_resource::<WorldChanges>()
+            // The simulation steps at a fixed rate, independent of framerate.
+            .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
             .add_systems(Startup, cell::load_world)
             .add_systems(
-                Update,
+                FixedUpdate,
                 (
                     interact::update_looking_at,
                     interact::activate,
+                    inventory::handle_actions,
                     cell::apply_transition,
                 )
                     .chain()
-                    .after(player::move_player),
+                    .after(bevy_rapier3d::prelude::PhysicsSet::Writeback),
             );
     }
 }
