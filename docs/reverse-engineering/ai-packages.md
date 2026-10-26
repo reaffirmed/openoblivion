@@ -57,7 +57,7 @@ Day-of-week codes: 0 Sunday … 6 Saturday, plus 7 weekdays (Mon–Fri), 8 weeke
 
 Each package runs a fixed **list of AI procedures**, one step at a time; the package-done
 event (`OnPackageDone`) is raised when the step index moves past the last procedure.
-**[exact]** for the lists below (read from the executable's table).
+**[exact, exe]** for the lists below (read from the executable's table).
 
 **Correction:** an earlier version of this note indexed the lists by `PKDT` type. They are
 not: a package carries a separate *procedure-list index*, chosen from its type (and, for
@@ -80,7 +80,7 @@ some types, from what its target and location are) the first time the package is
 | 10 Flee (not combat) | 35 | flee-non-combat |
 | 11 Cast magic | 34 | choose-cast |
 
-Procedure names are the public OBSE names for the stored codes **[medium]** (the codes
+Procedure names are the public OBSE names for the stored codes **[medium, inf]** (the codes
 and their order are exact; that each name fits what its code does was checked for
 follow, ambush-wait and activate). A Follow or Escort package whose target is missing
 gets no list and the game logs that it "is missing necessary Target Or Location Info".
@@ -96,16 +96,16 @@ flag, the picker also raises the done event once the scheduled window ends, for 
 
 The follow step completes, and so the package is done, when the package has a location
 of kind *near reference* or *in cell* and the follower **is at that location** (within
-the radius for *near reference*). **[high]** Without such a location a Follow package
+the radius for *near reference*). **[high, exe]** Without such a location a Follow package
 never finishes on its own. If the target is gone (deleted or disabled) the step also
-completes. **[high]**
+completes. **[high, exe]**
 
 **Package `0004D84E` (`CGEmperorToMarkerB`):** type 1 Follow, flags `0x401004`,
 location *near reference* `CGMarkerBEmperor` radius 70, target `RenoteRef` (follow
 distance 90), condition `GetStage CharacterGen == 15`. `CGEmperorScript` sets stage 16 in
 `OnPackageDone CGEmperorToMarkerB`. So: the Emperor follows Renote, and the done event
 fires once **the Emperor** is within 70 units of the marker. There is no separate travel
-step. **[high]**
+step. **[high, exe]**
 
 ### Ambush
 
@@ -129,8 +129,8 @@ activate:    walk to the target and activate it; for an actor target that is a
              finishing the activation ends the list → package done
 ```
 
-**[high]** for the 200-unit and radius + 300 checks, the 10 s retry, and the order;
-**[medium]** for "within the location radius" being measured actor-to-target (the
+**[high, exe]** for the 200-unit and radius + 300 checks, the 10 s retry, and the order;
+**[medium, inf]** for "within the location radius" being measured actor-to-target (the
 distance call is clear, which reference it is taken from less so) and for activation of
 an actor being a dialogue start. A dead target ends the wait without activating.
 
@@ -143,7 +143,7 @@ stops it from being picked again that day.
 ### Find with an actor target
 
 For a Find package whose target is a specific reference, the list depends on the target's
-base form type. **[exact]**
+base form type. **[exact, exe]**
 
 | Target is | List |
 |-----------|------|
@@ -161,13 +161,13 @@ So a Find package aimed at an NPC does the following:
 It never attacks. Fighting comes only from the combat check that runs whenever the actor
 detects someone (the fight score in
 [combat-and-levelling.md](combat-and-levelling.md#starting-combat-on-sight)). Detection
-and that check run independently of the current package. **[high]**
+and that check run independently of the current package. **[high, exe]**
 
 ### Use item at
 
 List: acquire → travel → use-item-at. The package's **target** says what to use (an
 object, a base object or an object type, with a count), and its **location** is where
-and on what (the location reference). **[high]**
+and on what (the location reference). **[high, exe]**
 
 ```
 use-item-at, each update:
@@ -187,8 +187,8 @@ finish = move the step index 2 forward, past the end of the list → package don
 
 The activation is a real activation of the location reference with the actor as the
 activating reference. So the reference's `OnActivate` block runs and `IsActionRef <actor>`
-is true there, exactly as when the activate procedure activates something. **[high]** for
-the activator path, the counter, the 2000-unit gate and the finish; **[medium]** for the
+is true there, exactly as when the activate procedure activates something. **[high, exe]** for
+the activator path, the counter, the 2000-unit gate and the finish; **[medium, inf]** for the
 other kinds (read only far enough to name them).
 
 ### Flags
@@ -213,7 +213,7 @@ checked against the executable):
 | 24 | 0x1000000 | no idle anims |
 
 So `0x1404` = must complete + once per day + skip fallout behaviour, and `0x401004` =
-must complete + skip fallout behaviour + defensive combat. **[high]**
+must complete + skip fallout behaviour + defensive combat. **[high, exe]**
 
 ## Evidence
 

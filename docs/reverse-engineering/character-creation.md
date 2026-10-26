@@ -12,7 +12,7 @@ as in the README.
 Before the player picks a class, the player has the placeholder class
 `CharactergenClass` (`000230E6`, set by `iClassCharactergenClass`). While that is still
 the player's class, opening the class menu suggests a class from **how the player has
-used their skills so far** (in the tutorial dungeon). **[high]**
+used their skills so far** (in the tutorial dungeon). **[high, exe]**
 
 ```
 for each of the 21 skills with skill-use progress p > 0:
@@ -24,7 +24,7 @@ S = round(7 × stealth / T)
 ```
 
 `p` is the player's accumulated skill-use progress toward the next skill level.
-**[medium]** for exactly which counter it is; the arithmetic is **[exact]**.
+**[medium, inf]** for exactly which counter it is; the arithmetic is **[exact, exe]**.
 
 The class is then picked. Later rules override earlier ones:
 
@@ -48,7 +48,7 @@ else:
     nothing matched: Acrobat
 ```
 
-**[exact]** for the table. Each class comes from a game setting holding its form ID
+**[exact, exe]** for the table. Each class comes from a game setting holding its form ID
 (`iClassWarrior` etc.). No vanilla plugin overrides them:
 
 | Class | Form ID | Class | Form ID |
@@ -66,10 +66,10 @@ else:
 | Mage | `000105D6` | | |
 
 `iClassPriest` exists but is never suggested. The suggestion is also what the
-`GetIsClassDefault` condition compares against. **[high]**
+`GetIsClassDefault` condition compares against. **[high, exe]**
 
 `ShowClassMenu` opens the menu with this suggestion when the player's current class
-isn't one of the playable ones; otherwise it opens on the current class. **[medium]**
+isn't one of the playable ones; otherwise it opens on the current class. **[medium, inf]**
 (the "playable" reading of the class flag)
 
 ## Custom class
@@ -77,7 +77,7 @@ isn't one of the playable ones; otherwise it opens on the current class. **[medi
 A custom class is created as the form named by `iPlayerCustomClass`. The custom-class
 screen has steps for specialization, favoured attributes and major skills (their order is
 not pinned yet), then the name, then a confirmation box
-"`<prompt> <class name> <suffix>?`" built from game settings. **[medium]**
+"`<prompt> <class name> <suffix>?`" built from game settings. **[medium, inf]**
 
 ## Open
 

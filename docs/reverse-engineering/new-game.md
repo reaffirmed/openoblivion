@@ -38,7 +38,7 @@ separate developer shortcut and aren't used by the normal new-game path.
 
 ## The first race menu
 
-The opening race/sex menu comes from the engine, not a script. **[high]**
+The opening race/sex menu comes from the engine, not a script. **[high, exe]**
 
 - The new-game routine sets a flag on the player (step 4).
 - When any move of the player finishes, the move routine checks that flag. Here the move
@@ -50,7 +50,7 @@ The opening race/sex menu comes from the engine, not a script. **[high]**
 - The movie plays over the top, so the player sees the movie first and the menu after.
 
 The menu is opened through **the same routine as `ShowRaceMenu`**, with the same argument.
-There is no separate chargen variant of the menu. **[high]** That routine only opens the
+There is no separate chargen variant of the menu. **[high, exe]** That routine only opens the
 menu when the interface is ready. It first resets a few player and camera states, and
 closes the race menu if one is already open.
 
@@ -66,7 +66,7 @@ closes the race menu if one is already open.
   - recomputes the stats;
   - refreshes the player's derived values, model and HUD.
 - In both cases it then refreshes the inventory and the active spell, and sets the
-  player's *in character generation* state from how the menu was opened. **[medium]**
+  player's *in character generation* state from how the menu was opened. **[medium, inf]**
   for that last step.
 
 `CGSewerExitScript` reopens the menus with `ShowRaceMenu`, `ShowBirthSignMenu` and

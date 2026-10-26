@@ -234,10 +234,10 @@ after calling a function on a null reference".
 The melee hit routine sets the target's `OnHit` (and `OnHitWith`) flags **before** it
 applies the damage. If that damage kills the target, the death routine then sets
 `OnDeath` (and `OnMurder` where it applies). So a one-blow kill leaves both flags set when
-the target's script next runs. **[high]**
+the target's script next runs. **[high, exe]**
 
 The flags are only read on that next run, and every block tests its own flag. So both
-`OnHit` and `OnDeath` run, in the order the blocks appear in the script. **[medium]**
+`OnHit` and `OnDeath` run, in the order the blocks appear in the script. **[medium, inf]**
 for "in that same run": that follows from the event-list rules above, not from tracing a
 dead actor's script update.
 
@@ -258,7 +258,7 @@ GetStage quest   → quest.stage, i.e. the highest stage ever set
 GetStageDone quest n → whether stage n has run
 ```
 
-**[exact]** So in the tutorial, `SetStage CharacterGen 23` while the quest is at 24 does
+**[exact, exe]** So in the tutorial, `SetStage CharacterGen 23` while the quest is at 24 does
 run stage 23's results (if 23 hasn't run before) and marks 23 done, but `GetStage`
 keeps returning 24. A stage that already ran **does not run again** unless the quest has
 the *Allow repeated stages* flag (`0x08`). A completed quest isn't set running again

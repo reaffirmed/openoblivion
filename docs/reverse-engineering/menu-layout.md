@@ -80,8 +80,8 @@ A text tile with no colour in the XML (e.g. `race_template_button_text` in
 plain white glyphs (every opaque texel of `kingthings_regular` is 255, 255, 255), so the
 ink colour comes entirely from these traits. The colour is not inherited from the parent
 tile; it is a per-tile default (XML can still copy a parent's value with
-`<copy src="parent()" ...>`). **[exact]** for the text default (read from the text tile's
-initialiser and its class name); **[high]** for the 255 defaults of the other kinds.
+`<copy src="parent()" ...>`). **[exact, exe]** for the text default (read from the text tile's
+initialiser and its class name); **[high, exe]** for the 255 defaults of the other kinds.
 Text also starts with an empty string.
 
 ## Evidence

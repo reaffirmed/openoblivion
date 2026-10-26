@@ -89,7 +89,7 @@ The game's compiled shaders (`Data\Shaders\shaderpackage*.sdp`) were disassemble
 Windows D3DCompiler (`D3DDisassemble`), splitting the packages with the public layout
 documented by lojack5's `oblivionsdp`: u32 version (100), u32 shader count, u32 data size,
 then per shader a 256-byte name, u32 size and the bytecode. All 653 shaders in package 019
-(the Shader Model 3 set) disassemble. **[exact]**
+(the Shader Model 3 set) disassemble. **[exact, data]**
 
 The point-light path doesn't evaluate a formula; it reads **attenuation textures**:
 
@@ -100,7 +100,7 @@ pixel shader:    atten = AttMapXY(uvXY).rgb × AttMapZ(uvZ).rgb
                  light = saturate(N · L) × PSLightColor.rgb × atten
 ```
 
-**[exact]** (read from e.g. the `SLS1003` vertex and `SLS1001` pixel shader). So the curve
+**[exact, data]** (read from e.g. the `SLS1003` vertex and `SLS1001` pixel shader). So the curve
 is whatever those two textures hold, sampled across the cube of side 2·radius around the
 light; outside the radius the coordinates leave [0, 1] and the result depends on the
 textures' edge texels and addressing mode.
@@ -108,7 +108,7 @@ textures' edge texels and addressing mode.
 ### The attenuation texture
 
 The textures are not files: the shader manager builds them at startup, next to its other
-lookup textures (normalisation cube faces, flat normal maps). **[high]** It fills one
+lookup textures (normalisation cube faces, flat normal maps). **[high, exe]** It fills one
 128 × 128 RGB texture, the same value in all three channels:
 
 ```
@@ -118,12 +118,12 @@ for each texel (x, y), x and y in 0…127:
     value = floor(255 × (1 − r2))
 ```
 
-**[exact]** for the fill. The fill has a second mode that stores `r2` itself; which mode
+**[exact, exe]** for the fill. The fill has a second mode that stores `r2` itself; which mode
 is used comes from a renderer setting that isn't identified yet. The `1 − r2` mode is the
-one that makes sense for a light. **[medium]**
+one that makes sense for a light. **[medium, inf]**
 
 The same texture object is stored in both texture slots that the attenuation maps come
-from. **[high]** for both slots holding it; **[medium]** for those slots being
+from. **[high, exe]** for both slots holding it; **[medium, inf]** for those slots being
 `AttMapXY` and `AttMapZ`.
 
 Putting it together, with `d` the offset from the light divided by its radius:
@@ -134,7 +134,7 @@ atten = (1 − min(dx² + dy², 1)) × (1 − min(dz², 1))     (both factors 8-
 
 This is a quadratic falloff to zero at the radius along each axis. Its shape is a product
 of a disc and a slab, not a sphere: for example, at d = (0.7, 0, 0.7) it gives
-0.51 × 0.51 ≈ 0.26, while a spherical 1 − |d|² would give 0.02. **[high]**
+0.51 × 0.51 ≈ 0.26, while a spherical 1 − |d|² would give 0.02. **[high, exe]**
 
 ## Open
 
