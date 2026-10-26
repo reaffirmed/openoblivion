@@ -252,16 +252,24 @@ pub fn starting_vitals(
 /// How far a melee swing reaches: `fCombatDistance` × the weapon's reach
 /// (`fHandReachMult` unarmed) × the actor's scale.
 ///
-/// Creatures without a weapon use their own reach value per the RE notes, but
-/// how the record's `RNAM` byte maps to that factor isn't confirmed, so they
-/// reach like a reach-1 weapon for now.
-pub fn melee_reach(gmst: &Settings, weapon: Option<&WeaponInfo>, creature: bool, scale: f32) -> f32 {
-    let r = match weapon {
-        Some(w) => w.reach,
-        None if creature => 1.0,
-        None => setting(gmst, "fHandReachMult", 0.5),
+/// A creature without a weapon uses its own reach (`RNAM`). Vanilla's values
+/// (60 for the tutorial zombie, 96 for its rats, 52 to 120 elsewhere) only
+/// make sense as units, so they're taken as units rather than as a factor of
+/// `fCombatDistance`; 0 falls back to a reach-1 weapon.
+pub fn melee_reach(
+    gmst: &Settings,
+    weapon: Option<&WeaponInfo>,
+    creature_reach: Option<u8>,
+    scale: f32,
+) -> f32 {
+    let distance = setting(gmst, "fCombatDistance", COMBAT_DISTANCE);
+    let reach = match (weapon, creature_reach) {
+        (Some(w), _) => distance * w.reach,
+        (None, Some(r)) if r > 0 => f32::from(r),
+        (None, Some(_)) => distance,
+        (None, None) => distance * setting(gmst, "fHandReachMult", 0.5),
     };
-    setting(gmst, "fCombatDistance", COMBAT_DISTANCE) * r * scale
+    reach * scale
 }
 
 fn records(world: &WorldData, base: u32) -> Option<(&Stats, Option<f32>)> {
@@ -514,7 +522,7 @@ pub(crate) fn run_combat(
         let bow = bow.is_some();
         if swing && player_alive && !bow && !fighter.blocking && fighter.cooldown == 0.0 {
             fighter.cooldown = PLAYER_SWING / held.map_or(1.0, |w| w.speed.max(0.1));
-            let reach = melee_reach(&world.settings, held, false, 1.0);
+            let reach = melee_reach(&world.settings, held, None, 1.0);
             let eye = feet + Vec3::Y * EYE_HEIGHT;
             let dir = Quat::from_euler(EulerRot::YXZ, intent.yaw, intent.pitch, 0.0) * Vec3::NEG_Z;
             let hit = rapier.single().ok().and_then(|rapier| {
@@ -607,8 +615,11 @@ pub(crate) fn run_combat(
                 transform.rotation = Quat::from_rotation_y((-flat.x).atan2(-flat.z));
             }
             let held = weapon(placed.0);
-            let creature = matches!(actor, Actor::Creature(_));
-            let reach = melee_reach(&world.settings, held, creature, transform.scale.x);
+            let creature_reach = match *actor {
+                Actor::Creature(b) => world.actors.creatures.get(&b).map(|c| c.combat.reach),
+                Actor::Npc(_) => None,
+            };
+            let reach = melee_reach(&world.settings, held, creature_reach, transform.scale.x);
             if flat.length() <= reach {
                 if fighter.cooldown == 0.0 {
                     fighter.cooldown = ACTOR_SWING / held.map_or(1.0, |w| w.speed.max(0.1));
@@ -829,8 +840,9 @@ mod tests {
     #[test]
     fn melee_reach_follows_the_formula() {
         let gmst = world();
-        assert_eq!(melee_reach(&gmst, None, false, 1.0), 64.0);
-        assert_eq!(melee_reach(&gmst, None, true, 2.0), 256.0);
+        assert_eq!(melee_reach(&gmst, None, None, 1.0), 64.0);
+        assert_eq!(melee_reach(&gmst, None, Some(96), 0.5), 48.0);
+        assert_eq!(melee_reach(&gmst, None, Some(0), 2.0), 256.0);
         let spear = WeaponInfo {
             kind: WeaponKind::BluntTwoHand,
             speed: 1.0,
@@ -840,7 +852,7 @@ mod tests {
             damage: 10,
             model: None,
         };
-        assert!((melee_reach(&gmst, Some(&spear), false, 1.0) - 166.4).abs() < 1e-3);
+        assert!((melee_reach(&gmst, Some(&spear), None, 1.0) - 166.4).abs() < 1e-3);
     }
 
     #[test]

@@ -96,7 +96,10 @@ pub fn pick_response(
 ) -> Option<Pick> {
     let d = &data.dialogue;
     let topic = d.topics.get(&topic)?;
-    // Quests in the order their lines first appear.
+    // Quests by priority, highest first, then in the order their lines
+    // first appear. The RE notes leave open whether the game sorts by
+    // priority at load; it must, for CharacterGen's (90) line for the Emperor
+    // to beat Generic's (0) "What do you want?" as it does in the game.
     let mut quests: Vec<u32> = Vec::new();
     for id in &topic.infos {
         if let Some(i) = d.infos.get(id)
@@ -105,6 +108,7 @@ pub fn pick_response(
             quests.push(i.quest);
         }
     }
+    quests.sort_by_key(|q| std::cmp::Reverse(d.quests.get(q).map_or(0, |q| q.priority)));
     let mut randoms = Vec::new();
     let mut low_disposition = None;
     'scan: for quest in quests {
@@ -395,7 +399,10 @@ pub(crate) fn update_conversations(
                 );
                 continue;
             };
-            debug!("{speaker:08X} says {info:08X} for topic {topic:08X}");
+            let text = data.dialogue.infos.get(&info).map_or(String::new(), |i| {
+                i.responses.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join(" ")
+            });
+            info!("{speaker:08X} says {info:08X} for topic {topic:08X}: {text:?}");
             effects.extend(say(data, &mut state, &facts, info, speaker));
             talk.line = Some((topic, info));
             let line = data.dialogue.infos.get(&info);
