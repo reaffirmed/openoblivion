@@ -82,8 +82,29 @@ previous topic" when matching choices) and `INFOGENERAL` (`0xD7`, rumours; shown
 once per conversation and with its own bookkeeping on the speaker).
 
 **Disposition refusals.** When a response comes back marked "disposition too low" (see
-above) and isn't itself flagged *Info Refusal*, the menu replaces it with a response from
-the game's built-in refusal topic, so the NPC refuses instead of answering.
+above) and isn't itself flagged *Info Refusal* (`INFO` flag `0x10`), the menu replaces it
+with a response picked from the built-in topic **`InfoRefusal`** (form ID `0x118`), using
+the same picker with the same speaker (subject) and player (target). If that topic yields
+nothing, the original response stays; if it yields one, the entry then refers to
+`InfoRefusal` and its response instead of the clicked topic.
+
+## Built-in topics
+
+The engine finds its special topics by (type, index) in a fixed table; each entry is a
+hard-coded form ID in Oblivion.esm:
+
+| Type | Topics (form ID) |
+|------|------------------|
+| 0 topic | `GREETING` (`0xC8`) |
+| 1 conversation | `HELLO` (`0xD2`), `ANY` (`0xD3`), `GOODBYE` (`0xD4`), `Idle Chatter` (`0xD5`), `SPELL HELP` (`0xD6`), `INFO GENERAL` (`0xD7`) |
+| 2 combat | `Attack` (`0xDC`), `Hit`, `Flee`, `Steal`, `Trespass`, `Yield`, `AcceptYield`, `Pickpocket`, `Assault`, `Murder`, `PowerAttack`, `AssaultNoCrime`, `MurderNoCrime`, `PickpocketNoCrime`, `StealNoCrime`, `TrespassNoCrime` (`0xEB`), consecutive IDs |
+| 3 persuasion | `AdmireSuccess` (`0xF0`) … `BribeNoMoney` (`0x103`), consecutive; then `ADMIRE_HATE` (`0xAA`) … `PERSUASION_EXIT` (`0xBC`), consecutive |
+| 4 detection | `Noticed` (`0x104`), `Seen`, `Unseen`, `Lost` (`0x107`) |
+| 5 service | `ServiceRefusal` (`0x10E`), `BarterStart`, `BarterFail`, `Repair`, `Travel`, `Training`, `BarterBuyItem`, `BarterSellItem`, `BarterExit`, `BarterStolen` (`0x117`), `RepairExit` (`0x11D`), `Recharge` (`0x120`), `RechargeExit` (`0x121`), `TrainingExit` (`0x124`) |
+| 6 miscellaneous | `InfoRefusal` (`0x118`), `Idle` (`0x119`), `ObserveCombat` (`0x11A`), `Corpse` (`0x11B`), `TimeToGo` (`0x11C`) |
+
+Within a type the index is the position in this list (e.g. type 3 index 0 is
+`AdmireSuccess`).
 
 ## Evidence
 
@@ -95,7 +116,8 @@ the game's built-in refusal topic, so the NPC refuses instead of answering.
 | Retry for topic types 2, 3, 4, 6 | Executable: picker | confirmed (the player state: unknown) |
 | Known-topic list, conversation start, topic-list filter | Executable: `AddTopic`, the conversation starter and the topic-list builder | confirmed |
 | Special topic IDs | Executable constants; Oblivion.esm editor IDs | confirmed |
-| Refusal substitution | Executable: the topic-entry builder | likely (which built-in topic: not named yet) |
+| Refusal substitution via `InfoRefusal` | Executable: the topic-entry builder and the built-in topic table | confirmed |
+| Built-in topic table | Executable: the (type, index) topic table with its form IDs and names | confirmed |
 
 ## Open
 
