@@ -228,8 +228,7 @@ pub(crate) fn update_menu(
     for (column, mut text) in &mut texts {
         let wanted = match (*column, menu.container) {
             (MenuText::Help, true) => {
-                "[W/S] Choose   [A/D] Switch side   [Space] Move   [T] Take all   [Tab] Close"
-                    .into()
+                "[W/S] Choose  [A/D] Side  [Space] Move  [T] Take all  [Tab] Close".into()
             }
             (MenuText::Help, false) => "[W/S] Choose   [Tab] Close".into(),
             (MenuText::Column(true), _) => listing(

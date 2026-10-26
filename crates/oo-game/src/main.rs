@@ -309,8 +309,8 @@ struct ActivatePrompt;
 struct CellLabel;
 
 fn setup_hud(mut commands: Commands) {
-    // Crosshair.
     commands.spawn((
+        Crosshair,
         Node {
             position_type: PositionType::Absolute,
             left: percent(50),
@@ -345,6 +345,10 @@ fn setup_hud(mut commands: Commands) {
     ));
 }
 
+/// The dot in the middle of the screen. Hidden while a menu is up.
+#[derive(Component)]
+struct Crosshair;
+
 fn update_hud(
     players: Query<&LookingAt, With<Player>>,
     doors: Query<&LoadDoor>,
@@ -352,7 +356,15 @@ fn update_hud(
     world: Option<Res<WorldData>>,
     menu: Res<menu::Menu>,
     mut prompt: Query<&mut Text, With<ActivatePrompt>>,
+    mut crosshair: Query<&mut Visibility, With<Crosshair>>,
 ) {
+    if let Ok(mut visibility) = crosshair.single_mut() {
+        visibility.set_if_neq(if menu.is_open() {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
+    }
     if let (Ok(looking), Ok(mut text)) = (players.single(), prompt.single_mut()) {
         let wanted = looking
             .0

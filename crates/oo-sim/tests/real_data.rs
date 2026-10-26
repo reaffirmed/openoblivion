@@ -14,10 +14,13 @@ use std::time::Duration;
 use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
+use oo_sim::cell::WorldData;
+use oo_sim::inventory::container_contents;
 use oo_sim::player::{PLAYER_HALF_HEIGHT, PLAYER_RADIUS};
 use oo_sim::{
-    CurrentCell, EYE_HEIGHT, LoadDoor, LookingAt, Player, PlayerIntent, PlayerMotion, SimPlugin,
-    WorldConfig,
+    Container, CurrentCell, EYE_HEIGHT, Inventory, Item, LoadDoor, LookingAt, OpenContainer,
+    PlacedRef, Player, PlayerAction, PlayerActions, PlayerIntent, PlayerMotion, SimPlugin,
+    WorldChanges, WorldConfig,
 };
 
 const CELL: &str = "ImperialDungeon01";
@@ -423,4 +426,251 @@ fn trace_stair_profile() {
         }
     };
     app.world_mut().run_system_once(probe).unwrap();
+}
+
+/// Puts the player near `target` in noclip and turns them until the activation
+/// ray lands on it. Tries a ring of spots around the target at a few heights.
+fn look_at(app: &mut App, player: Entity, target: Entity) -> bool {
+    let centre = app
+        .world()
+        .entity(target)
+        .get::<Transform>()
+        .unwrap()
+        .translation;
+    for height in [10.0f32, 30.0, 0.0, 60.0] {
+        let aim = centre + Vec3::Y * height;
+        for angle in (0..16).map(|i| i as f32 * 22.5) {
+            let offset = Quat::from_rotation_y(angle.to_radians()) * Vec3::NEG_Z * 80.0;
+            let eye = aim + offset + Vec3::Y * 40.0;
+            let dir = (aim - eye).normalize();
+            {
+                let mut e = app.world_mut().entity_mut(player);
+                e.get_mut::<Transform>().unwrap().translation =
+                    eye - Vec3::Y * EYE_HEIGHT + Vec3::Y * (PLAYER_HALF_HEIGHT + PLAYER_RADIUS);
+                let mut i = e.get_mut::<PlayerIntent>().unwrap();
+                i.noclip = true;
+                i.movement = Vec2::ZERO;
+                i.yaw = (-dir.x).atan2(-dir.z);
+                i.pitch = dir.y.asin();
+            }
+            run(app, 2);
+            if app.world().entity(player).get::<LookingAt>().unwrap().0 == Some(target) {
+                // In `oo-game --camera` form, to look at the same thing by hand.
+                println!(
+                    "  aimed from --camera={:.0},{:.0},{:.0},{:.1},{:.1}",
+                    eye.x,
+                    eye.y,
+                    eye.z,
+                    (-dir.x).atan2(-dir.z).to_degrees(),
+                    dir.y.asin().to_degrees()
+                );
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn activate(app: &mut App, player: Entity) {
+    app.world_mut()
+        .entity_mut(player)
+        .get_mut::<PlayerIntent>()
+        .unwrap()
+        .activate = true;
+    run(app, 2);
+}
+
+/// Takes the load door in the current cell that leads to `cell`.
+fn take_door_to(app: &mut App, player: Entity, cell: u32) {
+    let door = app
+        .world_mut()
+        .query::<(Entity, &LoadDoor)>()
+        .iter(app.world())
+        .find(|(_, d)| d.cell == Some(cell))
+        .map(|(e, _)| e)
+        .unwrap_or_else(|| panic!("no load door to {cell:08X}"));
+    assert!(
+        look_at(app, player, door),
+        "couldn't aim at the door to {cell:08X}"
+    );
+    activate(app, player);
+    assert_eq!(app.world().resource::<CurrentCell>().form_id, cell);
+}
+
+fn item_name(world: &WorldData, item: u32) -> Option<String> {
+    world
+        .items
+        .get(&item)
+        .map(|i| i.name.clone())
+        .filter(|n| !n.is_empty())
+}
+
+/// What a container holds, resolving its leveled lists the way opening it would,
+/// without opening it.
+fn peek_contents(app: &mut App, reference: u32, base: u32) -> Vec<oo_formats::items::Stack> {
+    app.world_mut()
+        .resource_scope(|world, data: Mut<WorldData>| {
+            let mut changes = world.resource::<WorldChanges>().clone();
+            container_contents(&mut changes, &data, reference, base).clone()
+        })
+}
+
+/// Items lying around the prison can be picked up, and stay picked up after
+/// leaving the cell and coming back. Containers resolve to named items, and
+/// taking and putting moves stacks between them and the inventory.
+#[test]
+fn tutorial_prison_items_and_containers() {
+    const PRISON: u32 = 0x0001FBB9;
+    const SUBTERRANE: u32 = 0x00022288;
+    let Some(data) = data_dir() else {
+        eprintln!("OO_DATA not set to an Oblivion Data directory; skipping");
+        return;
+    };
+    let mut app = app(data);
+    run(&mut app, 3);
+    let player = player(&mut app);
+
+    // Every loose item in the cell should have a name.
+    let items: Vec<(Entity, u32, u32)> = app
+        .world_mut()
+        .query::<(Entity, &PlacedRef, &Item)>()
+        .iter(app.world())
+        .map(|(e, p, i)| (e, p.0, i.0))
+        .collect();
+    let names: Vec<String> = items
+        .iter()
+        .map(|(_, _, b)| {
+            item_name(app.world().resource(), *b).unwrap_or_else(|| format!("{b:08X} (no name)"))
+        })
+        .collect();
+    println!("{} loose items: {names:?}", items.len());
+    assert!(!items.is_empty(), "the prison has loose items");
+    assert!(names.iter().all(|n| !n.ends_with("(no name)")));
+
+    // Pick up the first one the activation ray can land on.
+    let (entity, reference, base) = items
+        .iter()
+        .copied()
+        .find(|&(e, _, _)| look_at(&mut app, player, e))
+        .expect("couldn't aim at any loose item");
+    let taken = item_name(app.world().resource(), base).unwrap();
+    activate(&mut app, player);
+    println!("took {taken} ({reference:08X})");
+    assert!(
+        app.world().get_entity(entity).is_err(),
+        "a picked-up item should leave the world"
+    );
+    assert_eq!(
+        app.world()
+            .entity(player)
+            .get::<Inventory>()
+            .unwrap()
+            .count(base),
+        1
+    );
+
+    // Out to the Subterrane and back: still gone.
+    take_door_to(&mut app, player, SUBTERRANE);
+    take_door_to(&mut app, player, PRISON);
+    let respawned = app
+        .world_mut()
+        .query::<&PlacedRef>()
+        .iter(app.world())
+        .any(|p| p.0 == reference);
+    println!("back in the prison; {taken} respawned: {respawned}");
+    assert!(
+        !respawned,
+        "a picked-up item came back on re-entering the cell"
+    );
+
+    // Every container's contents, resolved, should be named items.
+    let containers: Vec<(Entity, u32, u32)> = app
+        .world_mut()
+        .query::<(Entity, &PlacedRef, &Container)>()
+        .iter(app.world())
+        .map(|(e, p, c)| (e, p.0, c.0))
+        .collect();
+    println!("{} containers", containers.len());
+    let mut unnamed = Vec::new();
+    for &(_, reference, base) in &containers {
+        let contents = peek_contents(&mut app, reference, base);
+        let world = app.world().resource::<WorldData>();
+        let cname = world
+            .containers
+            .get(&base)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+        let listed: Vec<String> = contents
+            .iter()
+            .map(|s| {
+                let n = item_name(world, s.item).unwrap_or_else(|| {
+                    unnamed.push(s.item);
+                    format!("{:08X}", s.item)
+                });
+                format!("{n} x{}", s.count)
+            })
+            .collect();
+        println!("  {cname} ({reference:08X}): {listed:?}");
+    }
+    assert!(
+        unnamed.is_empty(),
+        "contents with no item name: {unnamed:08X?}"
+    );
+
+    // Open the first non-empty container the ray can land on; take all, put one back.
+    let (_, reference, _) = containers
+        .iter()
+        .copied()
+        .find(|&(e, reference, base)| {
+            !peek_contents(&mut app, reference, base).is_empty() && look_at(&mut app, player, e)
+        })
+        .expect("no non-empty container could be aimed at");
+    activate(&mut app, player);
+    let open = |app: &App| app.world().entity(player).get::<OpenContainer>().unwrap().0;
+    assert_eq!(open(&app), Some(reference));
+    let contents =
+        |app: &App| app.world().resource::<WorldChanges>().containers[&reference].clone();
+    let before = contents(&app);
+    let carried = app
+        .world()
+        .entity(player)
+        .get::<Inventory>()
+        .unwrap()
+        .0
+        .len();
+    let act = |app: &mut App, action: PlayerAction| {
+        app.world_mut()
+            .entity_mut(player)
+            .get_mut::<PlayerActions>()
+            .unwrap()
+            .0
+            .push(action);
+        run(app, 2);
+    };
+    act(&mut app, PlayerAction::TakeAll);
+    let inventory = app
+        .world()
+        .entity(player)
+        .get::<Inventory>()
+        .unwrap()
+        .0
+        .clone();
+    println!(
+        "took all {} stacks; carrying {} stacks",
+        before.len(),
+        inventory.len()
+    );
+    assert!(contents(&app).is_empty());
+    assert!(inventory.len() > carried);
+    act(
+        &mut app,
+        PlayerAction::Put {
+            item: before[0].item,
+            count: 1,
+        },
+    );
+    assert_eq!(contents(&app).len(), 1);
+    assert_eq!(contents(&app)[0].count, 1);
+    act(&mut app, PlayerAction::CloseContainer);
+    assert_eq!(open(&app), None);
 }
