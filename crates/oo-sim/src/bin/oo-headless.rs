@@ -25,6 +25,7 @@ fn main() {
     App::new()
         .add_plugins((
             MinimalPlugins.set(ScheduleRunnerPlugin::run_once()),
+            TransformPlugin,
             LogPlugin::default(),
         ))
         .add_plugins(SimPlugin(WorldConfig {

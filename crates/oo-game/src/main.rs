@@ -1,6 +1,6 @@
 //! OpenOblivion: a from-scratch engine for Oblivion's data files, on Bevy.
 //!
-//! Loads one interior cell from your Data directory and lets you fly around it.
+//! Loads one interior cell from your Data directory and lets you walk around it.
 //! The world itself lives in `oo-sim`; this crate only draws it and takes input.
 
 mod model;
@@ -10,10 +10,17 @@ use std::path::PathBuf;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+use bevy_rapier3d::render::{DebugRenderContext, RapierDebugRenderPlugin};
 use clap::Parser;
-use oo_sim::{SimPlugin, SpawnPoint, UNITS_PER_METRE, WorldConfig};
+use oo_sim::{
+    CurrentCell, EYE_HEIGHT, LoadDoor, LookingAt, Player, PlayerIntent, SimPlugin, UNITS_PER_METRE,
+    WorldConfig,
+};
 
 use crate::model::ModelCache;
+
+const MOUSE_SENSITIVITY: f32 = 0.002;
 
 #[derive(Parser)]
 #[command(about = "Run OpenOblivion")]
@@ -24,19 +31,19 @@ struct Args {
     /// The plugin to load. Only one for now: form IDs from other plugins aren't remapped yet.
     #[arg(long, default_value = "Oblivion.esm")]
     plugin: String,
-    /// Editor ID of the interior cell to load, e.g. "ICMarketDistrictTheGildedCarafe".
+    /// Editor ID of the interior cell to load (`oo-inspect esm-cells` lists them).
     #[arg(long)]
     cell: Option<String>,
     /// Save a screenshot here once the cell has loaded, then quit. For testing.
     #[arg(long)]
     screenshot: Option<PathBuf>,
-    /// Start the camera here instead of above the cell's centre: "x,y,z,yaw,pitch",
-    /// in engine units (Y up) and degrees.
+    /// Put the player's eyes here instead of at the cell's spawn point, in noclip:
+    /// "x,y,z,yaw,pitch", in engine units (Y up) and degrees.
     #[arg(long, value_delimiter = ',', allow_negative_numbers = true)]
     camera: Option<Vec<f32>>,
 }
 
-/// Where `--camera` puts the camera, if it was given.
+/// Where `--camera` puts the player's eyes, if it was given.
 #[derive(Resource)]
 struct CameraStart(Vec<f32>);
 
@@ -63,14 +70,32 @@ fn main() {
         plugin: args.plugin,
         cell: args.cell,
     }))
+    .add_plugins(RapierDebugRenderPlugin {
+        enabled: false,
+        ..default()
+    })
     .init_resource::<ModelCache>()
     .insert_resource(GlobalAmbientLight {
         brightness: 400.0,
         ..default()
     })
-    // After the sim's Startup systems, so the spawn point exists.
-    .add_systems(PostStartup, setup_scene)
-    .add_systems(Update, (model::attach_models, fly_camera));
+    .add_systems(Startup, (setup_scene, setup_hud))
+    .add_systems(
+        Update,
+        (
+            model::attach_models,
+            grab_cursor,
+            (player_input, follow_player)
+                .chain()
+                .before(oo_sim::player::move_player),
+            debug_keys,
+            update_hud,
+        ),
+    )
+    .add_systems(
+        PostStartup,
+        place_camera_start.after(oo_sim::player::spawn_player),
+    );
     if let Some(camera) = args.camera {
         app.insert_resource(CameraStart(camera));
     }
@@ -79,6 +104,23 @@ fn main() {
             .add_systems(Update, take_screenshot);
     }
     app.run();
+}
+
+/// Applies `--camera`: moves the player there and turns on noclip so they stay put.
+fn place_camera_start(
+    start: Option<Res<CameraStart>>,
+    mut players: Query<(&mut Transform, &mut PlayerIntent), With<Player>>,
+) {
+    let (Some(start), Ok((mut transform, mut intent))) = (start, players.single_mut()) else {
+        return;
+    };
+    let c = &start.0;
+    let feet = Vec3::new(c[0], c[1], c[2]) - Vec3::Y * EYE_HEIGHT;
+    transform.translation =
+        feet + Vec3::Y * (oo_sim::player::PLAYER_HALF_HEIGHT + oo_sim::player::PLAYER_RADIUS);
+    intent.yaw = c[3].to_radians();
+    intent.pitch = c[4].to_radians();
+    intent.noclip = true;
 }
 
 /// Waits for models and textures to settle, saves one screenshot, then exits.
@@ -97,40 +139,7 @@ fn take_screenshot(mut commands: Commands, mut frames: Local<u32>, target: Res<S
         );
 }
 
-#[derive(Component)]
-struct FlyCamera {
-    yaw: f32,
-    pitch: f32,
-}
-
-fn setup_scene(
-    mut commands: Commands,
-    spawn: Option<Res<SpawnPoint>>,
-    camera_start: Option<Res<CameraStart>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let (mut yaw, mut pitch) = (0.0, -0.2);
-    let start = match spawn {
-        Some(s) => s.0,
-        None => {
-            // Nothing loaded: a placeholder floor so there's something to look at.
-            let size = 50.0 * UNITS_PER_METRE;
-            commands.spawn((
-                Mesh3d(meshes.add(Plane3d::default().mesh().size(size, size))),
-                MeshMaterial3d(materials.add(Color::srgb(0.32, 0.45, 0.25))),
-            ));
-            Vec3::new(0.0, 2.0 * UNITS_PER_METRE, 10.0 * UNITS_PER_METRE)
-        }
-    };
-    let start = match camera_start.as_deref() {
-        Some(CameraStart(c)) => {
-            yaw = c[3].to_radians();
-            pitch = c[4].to_radians();
-            Vec3::new(c[0], c[1], c[2])
-        }
-        None => start,
-    };
+fn setup_scene(mut commands: Commands) {
     commands.spawn((
         DirectionalLight {
             shadow_maps_enabled: true,
@@ -141,60 +150,161 @@ fn setup_scene(
     commands.spawn((
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection {
+            fov: 75f32.to_radians(),
             near: 1.0,
             far: 500.0 * UNITS_PER_METRE,
             ..default()
         }),
-        Transform::from_translation(start),
-        FlyCamera { yaw, pitch },
     ));
 }
 
-/// WASD to move, Space/Ctrl for up/down, Shift to go faster, hold right mouse to look.
-fn fly_camera(
-    time: Res<Time>,
+/// Click to capture the mouse, Escape to release it.
+fn grab_cursor(
+    mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
-    buttons: Res<ButtonInput<MouseButton>>,
-    mouse: Res<AccumulatedMouseMotion>,
-    mut query: Query<(&mut Transform, &mut FlyCamera)>,
+    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
-    let Ok((mut transform, mut cam)) = query.single_mut() else {
+    let Ok(mut cursor) = cursor.single_mut() else {
+        return;
+    };
+    if mouse.just_pressed(MouseButton::Left) {
+        cursor.grab_mode = CursorGrabMode::Locked;
+        cursor.visible = false;
+    }
+    if keys.just_pressed(KeyCode::Escape) {
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
+    }
+}
+
+/// Keyboard and mouse to [`PlayerIntent`], with Oblivion's default bindings:
+/// WASD, Shift to run (Caps Lock toggles), E to jump, Space to activate.
+/// N toggles noclip.
+fn player_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<AccumulatedMouseMotion>,
+    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    mut always_run: Local<bool>,
+    mut players: Query<&mut PlayerIntent, With<Player>>,
+) {
+    let Ok(mut intent) = players.single_mut() else {
         return;
     };
 
-    if buttons.pressed(MouseButton::Right) {
-        cam.yaw -= mouse.delta.x * 0.003;
-        cam.pitch = (cam.pitch - mouse.delta.y * 0.003).clamp(-1.54, 1.54);
-    }
-    transform.rotation = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0);
-
-    let mut dir = Vec3::ZERO;
-    let forward = transform.forward().as_vec3();
-    let right = transform.right().as_vec3();
-    if keys.pressed(KeyCode::KeyW) {
-        dir += forward;
-    }
-    if keys.pressed(KeyCode::KeyS) {
-        dir -= forward;
-    }
-    if keys.pressed(KeyCode::KeyD) {
-        dir += right;
-    }
-    if keys.pressed(KeyCode::KeyA) {
-        dir -= right;
-    }
-    if keys.pressed(KeyCode::Space) {
-        dir += Vec3::Y;
-    }
-    if keys.pressed(KeyCode::ControlLeft) {
-        dir -= Vec3::Y;
+    if cursor
+        .single()
+        .is_ok_and(|c| c.grab_mode != CursorGrabMode::None)
+    {
+        intent.yaw -= mouse.delta.x * MOUSE_SENSITIVITY;
+        intent.pitch = (intent.pitch - mouse.delta.y * MOUSE_SENSITIVITY).clamp(-1.5, 1.5);
     }
 
-    let metres_per_sec = if keys.pressed(KeyCode::ShiftLeft) {
-        20.0
-    } else {
-        5.0
+    let axis = |pos: KeyCode, neg: KeyCode| {
+        keys.pressed(pos) as i8 as f32 - keys.pressed(neg) as i8 as f32
     };
-    transform.translation +=
-        dir.normalize_or_zero() * metres_per_sec * UNITS_PER_METRE * time.delta_secs();
+    intent.movement = Vec2::new(
+        axis(KeyCode::KeyD, KeyCode::KeyA),
+        axis(KeyCode::KeyW, KeyCode::KeyS),
+    );
+    if keys.just_pressed(KeyCode::CapsLock) {
+        *always_run = !*always_run;
+    }
+    intent.run = *always_run != keys.pressed(KeyCode::ShiftLeft);
+    intent.jump = keys.pressed(KeyCode::KeyE);
+    if keys.just_pressed(KeyCode::Space) {
+        intent.activate = true;
+    }
+    if keys.just_pressed(KeyCode::KeyN) {
+        intent.noclip = !intent.noclip;
+        info!("noclip {}", if intent.noclip { "on" } else { "off" });
+    }
+}
+
+/// First-person camera at the player's eyes.
+fn follow_player(
+    players: Query<(&Transform, &PlayerIntent), With<Player>>,
+    mut camera: Query<&mut Transform, (With<Camera3d>, Without<Player>)>,
+) {
+    let (Ok((player, intent)), Ok(mut camera)) = (players.single(), camera.single_mut()) else {
+        return;
+    };
+    // The player's transform is the capsule centre; eyes are measured from the feet.
+    let feet = player.translation
+        - Vec3::Y * (oo_sim::player::PLAYER_HALF_HEIGHT + oo_sim::player::PLAYER_RADIUS);
+    camera.translation = feet + Vec3::Y * EYE_HEIGHT;
+    camera.rotation = Quat::from_euler(EulerRot::YXZ, intent.yaw, intent.pitch, 0.0);
+}
+
+/// F3 shows collision shapes.
+fn debug_keys(keys: Res<ButtonInput<KeyCode>>, mut debug: ResMut<DebugRenderContext>) {
+    if keys.just_pressed(KeyCode::F3) {
+        debug.enabled = !debug.enabled;
+    }
+}
+
+#[derive(Component)]
+struct ActivatePrompt;
+
+#[derive(Component)]
+struct CellLabel;
+
+fn setup_hud(mut commands: Commands) {
+    // Crosshair.
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: percent(50),
+            top: percent(50),
+            width: px(4),
+            height: px(4),
+            margin: UiRect::all(px(-2)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.8)),
+    ));
+    commands.spawn((
+        ActivatePrompt,
+        Text::new(""),
+        TextLayout::justify(Justify::Center),
+        Node {
+            position_type: PositionType::Absolute,
+            top: percent(55),
+            width: percent(100),
+            ..default()
+        },
+    ));
+    commands.spawn((
+        CellLabel,
+        Text::new(""),
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(12),
+            top: px(8),
+            ..default()
+        },
+    ));
+}
+
+fn update_hud(
+    players: Query<&LookingAt, With<Player>>,
+    doors: Query<&LoadDoor>,
+    cell: Option<Res<CurrentCell>>,
+    mut prompt: Query<&mut Text, (With<ActivatePrompt>, Without<CellLabel>)>,
+    mut label: Query<&mut Text, (With<CellLabel>, Without<ActivatePrompt>)>,
+) {
+    if let (Ok(looking), Ok(mut text)) = (players.single(), prompt.single_mut()) {
+        let wanted = looking
+            .0
+            .and_then(|e| doors.get(e).ok())
+            .map(|d| format!("[Space] {}", d.label))
+            .unwrap_or_default();
+        if text.0 != wanted {
+            text.0 = wanted;
+        }
+    }
+    if let (Some(cell), Ok(mut text)) = (cell, label.single_mut())
+        && cell.is_changed()
+    {
+        text.0 = cell.name.clone().unwrap_or_else(|| cell.editor_id.clone());
+    }
 }

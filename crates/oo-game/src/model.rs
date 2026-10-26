@@ -194,14 +194,6 @@ fn to_bevy_mesh(m: &ImportedMesh) -> Mesh {
     mesh
 }
 
-/// Heading markers, X markers, door markers and the like have models so the
-/// editor can show them, but the game never draws them.
-fn is_editor_marker(model: &str) -> bool {
-    let file = model.rsplit(['\\', '/']).next().unwrap_or(model);
-    file.get(..6)
-        .is_some_and(|p| p.eq_ignore_ascii_case("marker"))
-}
-
 /// Gives every newly spawned [`Model`] entity its meshes, as children.
 pub fn attach_models(
     mut commands: Commands,
@@ -216,9 +208,6 @@ pub fn attach_models(
     let mut loaded = 0;
     for (entity, model) in &added {
         commands.entity(entity).insert(Visibility::default());
-        if is_editor_marker(&model.0) {
-            continue;
-        }
         let Some(parts) = cache.load(&model.0, &data, &mut meshes, &mut materials, &mut images)
         else {
             continue;

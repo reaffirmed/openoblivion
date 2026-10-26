@@ -4,7 +4,10 @@ mod common;
 
 use common::{field, group, record, zstr};
 use oo_formats::esm::{Plugin, Tag, flags};
-use oo_formats::world::{interior_cell, interior_cell_ids, model_paths};
+use oo_formats::world::{
+    Teleport, form_id_by_editor_id, interior_cell, interior_cell_by_form_id, interior_cell_ids,
+    interior_cell_names, interior_reference_cells, model_paths,
+};
 
 fn refr(
     form_id: u32,
@@ -26,6 +29,30 @@ fn refr(
     record(b"REFR", flags, form_id, &fields)
 }
 
+fn door(form_id: u32, base: u32, pos: [f32; 3], rot: [f32; 3], destination: u32) -> Vec<u8> {
+    let data: Vec<u8> = pos
+        .iter()
+        .chain(&rot)
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    let mut xtel = destination.to_le_bytes().to_vec();
+    xtel.extend(
+        [7.0f32, 8.0, 9.0, 0.0, 0.0, 3.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes()),
+    );
+    record(
+        b"REFR",
+        0,
+        form_id,
+        &[
+            field(b"NAME", &base.to_le_bytes()),
+            field(b"DATA", &data),
+            field(b"XTEL", &xtel),
+        ],
+    )
+}
+
 fn cell(
     form_id: u32,
     edid: &str,
@@ -39,7 +66,11 @@ fn cell(
     if !temporary.is_empty() {
         children.push(group(&form_id.to_le_bytes(), 9, &temporary));
     }
-    let mut out = vec![record(b"CELL", 0, form_id, &[field(b"EDID", &zstr(edid))])];
+    let mut fields = vec![field(b"EDID", &zstr(edid))];
+    if edid == "TestTavern" {
+        fields.push(field(b"FULL", &zstr("The Test Tavern")));
+    }
+    let mut out = vec![record(b"CELL", 0, form_id, &fields)];
     if !children.is_empty() {
         out.push(group(&form_id.to_le_bytes(), 6, &children));
     }
@@ -75,13 +106,19 @@ fn plugin() -> Plugin {
     subblock.extend(cell(
         0x200,
         "TestTavern",
-        vec![refr(0x201, 0x10, [1.0, 2.0, 3.0], [0.0, 0.0, 1.5], None, 0)],
+        vec![door(0x201, 0x10, [1.0, 2.0, 3.0], [0.0, 0.0, 1.5], 0x301)],
         vec![
             refr(0x202, 0x11, [4.0, 5.0, 6.0], [0.1, 0.2, 0.3], Some(2.0), 0),
             refr(0x203, 0x11, [0.0; 3], [0.0; 3], None, flags::DELETED),
         ],
     ));
-    subblock.extend(cell(0x300, "LastCell", vec![], vec![]));
+    subblock.extend(cell(
+        0x300,
+        "LastCell",
+        vec![],
+        vec![refr(0x301, 0x10, [9.0; 3], [0.0; 3], None, 0)],
+    ));
+    subblock.extend(cell(0x400, "TrailingCell", vec![], vec![]));
     let cells = group(
         b"CELL",
         0,
@@ -98,7 +135,7 @@ fn plugin() -> Plugin {
 fn lists_interior_cells() {
     assert_eq!(
         interior_cell_ids(&plugin()).unwrap(),
-        ["EmptyCell", "TestTavern", "LastCell"]
+        ["EmptyCell", "TestTavern", "LastCell", "TrailingCell"]
     );
 }
 
@@ -130,7 +167,7 @@ fn cells_without_children_work() {
             .is_empty()
     );
     assert!(
-        interior_cell(&plugin(), "LastCell")
+        interior_cell(&plugin(), "TrailingCell")
             .unwrap()
             .unwrap()
             .references
@@ -145,4 +182,54 @@ fn indexes_models() {
     assert_eq!(models.len(), 2);
     assert_eq!(models[&0x10], "Clutter\\Barrel01.NIF");
     assert_eq!(models[&0x11], "Arch\\Wall.nif");
+}
+
+#[test]
+fn finds_form_id_by_editor_id() {
+    let p = plugin();
+    assert_eq!(form_id_by_editor_id(&p, "barrel").unwrap(), Some(0x10));
+    assert_eq!(form_id_by_editor_id(&p, "TestTavern").unwrap(), Some(0x200));
+    assert_eq!(form_id_by_editor_id(&p, "Nothing").unwrap(), None);
+}
+
+#[test]
+fn reads_load_doors_and_finds_their_destination_cell() {
+    let p = plugin();
+    let tavern = interior_cell(&p, "TestTavern").unwrap().unwrap();
+    let teleport = tavern.references[0].teleport.unwrap();
+    assert_eq!(
+        teleport,
+        Teleport {
+            door: 0x301,
+            position: [7.0, 8.0, 9.0],
+            rotation: [0.0, 0.0, 3.0]
+        }
+    );
+    assert_eq!(tavern.references[1].teleport, None);
+
+    let cells = interior_reference_cells(&p).unwrap();
+    assert_eq!(cells[&0x201], 0x200);
+    assert_eq!(cells[&teleport.door], 0x300);
+    let destination = interior_cell_by_form_id(&p, cells[&teleport.door])
+        .unwrap()
+        .unwrap();
+    assert_eq!(destination.editor_id, "LastCell");
+    assert_eq!(destination.references.len(), 1);
+}
+
+#[test]
+fn reads_cell_names() {
+    let p = plugin();
+    assert_eq!(
+        interior_cell(&p, "TestTavern")
+            .unwrap()
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("The Test Tavern")
+    );
+    assert_eq!(interior_cell(&p, "LastCell").unwrap().unwrap().name, None);
+    let names = interior_cell_names(&p).unwrap();
+    assert_eq!(names[&0x200], "The Test Tavern");
+    assert_eq!(names[&0x300], "LastCell");
 }

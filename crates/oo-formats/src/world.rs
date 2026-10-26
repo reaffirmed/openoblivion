@@ -20,12 +20,25 @@ pub struct Reference {
     pub position: [f32; 3],
     pub rotation: [f32; 3],
     pub scale: f32,
+    /// Set on load doors: where activating this reference takes you.
+    pub teleport: Option<Teleport>,
+}
+
+/// A load door's destination (`XTEL`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Teleport {
+    /// The door reference on the other side.
+    pub door: u32,
+    pub position: [f32; 3],
+    pub rotation: [f32; 3],
 }
 
 #[derive(Debug, Clone)]
 pub struct Cell {
     pub form_id: u32,
     pub editor_id: String,
+    /// The in-game name (`FULL`), e.g. "Imperial Prison". Not every cell has one.
+    pub name: Option<String>,
     pub references: Vec<Reference>,
 }
 
@@ -38,6 +51,7 @@ impl Reference {
             position: [0.0; 3],
             rotation: [0.0; 3],
             scale: 1.0,
+            teleport: None,
         };
         let fields = r.fields()?;
         for field in fields.iter() {
@@ -50,6 +64,13 @@ impl Reference {
                     out.rotation = [f32_at(d, 12), f32_at(d, 16), f32_at(d, 20)];
                 }
                 b"XSCL" if d.len() >= 4 => out.scale = f32_at(d, 0),
+                b"XTEL" if d.len() >= 28 => {
+                    out.teleport = Some(Teleport {
+                        door: u32_at(d, 0),
+                        position: [f32_at(d, 4), f32_at(d, 8), f32_at(d, 12)],
+                        rotation: [f32_at(d, 16), f32_at(d, 20), f32_at(d, 24)],
+                    });
+                }
                 _ => {}
             }
         }
@@ -109,21 +130,89 @@ pub fn interior_cell_ids(plugin: &Plugin) -> Result<Vec<String>> {
 
 /// Finds an interior cell by editor ID (case-insensitive) and collects its references.
 pub fn interior_cell(plugin: &Plugin, editor_id: &str) -> Result<Option<Cell>> {
+    find_interior_cell(plugin, |cell| {
+        Ok(cell
+            .editor_id()?
+            .is_some_and(|id| id.eq_ignore_ascii_case(editor_id)))
+    })
+}
+
+/// Finds an interior cell by form ID and collects its references.
+pub fn interior_cell_by_form_id(plugin: &Plugin, form_id: u32) -> Result<Option<Cell>> {
+    find_interior_cell(plugin, |cell| Ok(cell.form_id == form_id))
+}
+
+/// Maps every reference in an interior cell to that cell's form ID. Reads only
+/// record headers, so it's quick enough to build at startup.
+pub fn interior_reference_cells(plugin: &Plugin) -> Result<HashMap<u32, u32>> {
+    let mut out = HashMap::new();
+    for_each_interior_cell(plugin, &mut |cell, children| {
+        if let Some(children) = children {
+            index_references(children.children(), cell.form_id, &mut out)?;
+        }
+        Ok(false)
+    })?;
+    Ok(out)
+}
+
+/// Maps every interior cell's form ID to its in-game name, falling back to its editor ID.
+pub fn interior_cell_names(plugin: &Plugin) -> Result<HashMap<u32, String>> {
+    let mut out = HashMap::new();
+    for_each_interior_cell(plugin, &mut |cell, _| {
+        let (editor_id, name) = cell_names(cell)?;
+        if let Some(n) = name.or(editor_id) {
+            out.insert(cell.form_id, n);
+        }
+        Ok(false)
+    })?;
+    Ok(out)
+}
+
+/// A cell's editor ID (`EDID`) and display name (`FULL`).
+fn cell_names(cell: &Record<'_>) -> Result<(Option<String>, Option<String>)> {
+    let (mut editor_id, mut name) = (None, None);
+    let fields = cell.fields()?;
+    for field in fields.iter() {
+        let field = field?;
+        match &field.tag.0 {
+            b"EDID" => editor_id = Some(field.zstring()),
+            b"FULL" => name = Some(field.zstring()).filter(|n| !n.is_empty()),
+            _ => {}
+        }
+    }
+    Ok((editor_id, name))
+}
+
+fn index_references(nodes: Nodes<'_>, cell: u32, out: &mut HashMap<u32, u32>) -> Result<()> {
+    for node in nodes {
+        match node? {
+            Node::Record(r) => {
+                out.insert(r.form_id, cell);
+            }
+            Node::Group(g) => index_references(g.children(), cell, out)?,
+        }
+    }
+    Ok(())
+}
+
+fn find_interior_cell(
+    plugin: &Plugin,
+    mut matches: impl FnMut(&Record<'_>) -> Result<bool>,
+) -> Result<Option<Cell>> {
     let mut found = None;
     for_each_interior_cell(plugin, &mut |cell, children| {
-        let Some(id) = cell.editor_id()? else {
-            return Ok(false);
-        };
-        if !id.eq_ignore_ascii_case(editor_id) {
+        if !matches(cell)? {
             return Ok(false);
         }
         let mut references = Vec::new();
         if let Some(children) = children {
             collect_references(children.children(), &mut references)?;
         }
+        let (editor_id, name) = cell_names(cell)?;
         found = Some(Cell {
             form_id: cell.form_id,
-            editor_id: id,
+            editor_id: editor_id.unwrap_or_default(),
+            name,
             references,
         });
         Ok(true)
@@ -210,4 +299,24 @@ fn u32_at(d: &[u8], at: usize) -> u32 {
 
 fn f32_at(d: &[u8], at: usize) -> f32 {
     f32::from_le_bytes(d[at..at + 4].try_into().unwrap())
+}
+
+/// Finds the form ID of the first record with this editor ID (case-insensitive).
+pub fn form_id_by_editor_id(plugin: &Plugin, editor_id: &str) -> Result<Option<u32>> {
+    let mut found = None;
+    let mut error = None;
+    plugin.for_each_record(|r| {
+        if found.is_some() || error.is_some() {
+            return;
+        }
+        match r.editor_id() {
+            Ok(Some(id)) if id.eq_ignore_ascii_case(editor_id) => found = Some(r.form_id),
+            Ok(_) => {}
+            Err(e) => error = Some(e),
+        }
+    })?;
+    match error {
+        Some(e) => Err(e),
+        None => Ok(found),
+    }
 }

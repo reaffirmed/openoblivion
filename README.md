@@ -45,28 +45,32 @@ libxkbcommon-dev` on Debian/Ubuntu).
 DATA="/path/to/Oblivion/Data"
 cargo test
 cargo run -p oo-inspect -- esm-cells "$DATA/Oblivion.esm" | less     # pick a cell
-cargo run -p oo-sim --bin oo-headless -- --data "$DATA" --cell ICMarketDistrictTheGildedCarafe
-cargo run -p oo-game --release -- --data "$DATA" --cell ICMarketDistrictTheGildedCarafe
+cargo run -p oo-sim --bin oo-headless -- --data "$DATA" --cell ImperialDungeon01
+cargo run -p oo-game --release -- --data "$DATA" --cell ImperialDungeon01
 ```
 
-In the game: WASD to move, Space/Ctrl for up/down, Shift for speed, hold right mouse to
-look. Interior lighting isn't implemented yet, so cells are lit by a flat ambient light.
+Controls follow Oblivion's defaults: click to capture the mouse (Escape releases it),
+WASD to move, Shift to run (Caps Lock toggles always-run), E to jump, Space to activate.
+Debug keys: N toggles noclip, F3 shows collision shapes. Interior lighting isn't
+implemented yet, so cells are lit by a flat ambient light.
 
 For testing without a person at the keyboard, `--screenshot shot.png` saves one frame
 once the cell has loaded and quits, and `--camera=x,y,z,yaw,pitch` (engine units, Y up,
-degrees) picks where the camera starts.
+degrees) puts the player's eyes there in noclip.
 
 ## Roadmap
 
 1. **Data files.** Plugin and BSA readers, interior cells and references (done).
-2. **One interior cell.** Draw every reference with its NIF meshes and DDS textures
-   (works on real game files). Next: cell lighting (`XCLL`, `LIGH`).
-3. **Co-op skeleton.** `bevy_replicon` host and client, two players walking around the
-   same cell.
-4. **Exteriors.** `LAND` heightmaps and texture layers, cell streaming in Tamriel.
-5. **Movement and collision.** Havok collision data from NIFs, a character controller.
-6. **Everything else.** Actors, animation (KF), AI packages, dialogue, the scripting
-   language, combat, magic, UI, save games.
+2. **Walk around.** NIF meshes and DDS textures, Havok collision, a first-person
+   character controller, load doors between interior cells. Meshes and textures work on
+   real game files; collision and doors are tested on synthetic data so far.
+3. **Interact.** Pick up items, containers, inventory, the activate prompt for each.
+4. **People.** NPCs standing where they're placed, then dialogue topics.
+5. **The tutorial.** Enough scripting, AI and combat to play from the prison cell to
+   the sewer exit. This is the first playable target.
+6. **Co-op skeleton.** `bevy_replicon` host and client in the same cells.
+7. **Exteriors and everything else.** `LAND` heightmaps and cell streaming, lighting,
+   animation, magic, UI, save games.
 
 ## Rules
 

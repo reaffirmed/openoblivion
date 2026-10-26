@@ -13,3 +13,5 @@ clap.workspace = true
 bevy = { workspace = true, default-features = false, features = ["std", "bevy_log"] }
 byroredux-core.workspace = true
 byroredux-bsa.workspace = true
+byroredux-nif.workspace = true
+bevy_rapier3d.workspace = true
