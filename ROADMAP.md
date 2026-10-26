@@ -79,7 +79,10 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
 ### 2. Play the tutorial dungeon, from the prison cell to the sewer exit
 
 - [x] Activate: pick up items, open containers (with placeholder text screens)
-- [ ] NPCs and creatures: skeletal meshes, idle animation (KF), equipment
+- [x] NPCs and creatures: skinned meshes on skeletons, race skin, hair, eyes, worn
+      equipment, idle animation (KF), collision
+- [ ] FaceGen faces (each NPC's own face shape and skin tone), layered hair
+- [ ] Creature collision sized to the creature (rats are player-sized pillars for now)
 - [ ] The real menus: Oblivion's own menu definitions from `Data/Menus/*.xml`, with
       the game's fonts (`.fnt`/`.tex`) and menu textures from the archives, drawn
       by a Bevy UI layer, with mouse and keyboard. HUD, inventory, containers,
