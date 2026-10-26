@@ -105,7 +105,7 @@ and starting health: see *Derived stats* below.
 
 ## Actor records
 
-Checked against every `NPC_` (2,482) and `CREA` (914) record in Oblivion.esm: **[exact]**
+Checked against every `NPC_` (2,482) and `CREA` (914) record in Oblivion.esm: **[exact, data]**
 
 | Subrecord | Size | Layout |
 |-----------|-----:|--------|
@@ -124,13 +124,13 @@ player health = trunc(End × fPCBaseHealthMult)  (built-in 2; not in the esm) at
 base fatigue  = Str + Wil + Agi + End
 ```
 
-**[high]** Every float-to-integer step in these truncates toward zero.
+**[high, exe]** Every float-to-integer step in these truncates toward zero.
 
 ## Auto-calculated stats
 
 NPCs with *auto-calc stats*, `SetLevel`, and the player's starting values all go through
 one routine. `L` is the actor's level **minus one**, `race` the actor's race (male or
-female values by the actor's sex), `class` its class. **[high]** unless tagged.
+female values by the actor's sex), `class` its class. **[high, exe]** unless tagged.
 
 **Attributes** (each of the 8; for NPCs other than the player, Personality is left as is):
 
@@ -156,7 +156,7 @@ s = min(s, 100), rounded to nearest
 These two round to nearest. Everything else here truncates.
 
 When the actor is the player and its class is the game's default placeholder class, the
-class parts are skipped: race values only. **[medium]** (which class that is)
+class parts are skipped: race values only. **[medium, inf]** (which class that is)
 
 **Health:**
 
@@ -175,10 +175,10 @@ others:
 ```
 
 **Magicka** = `trunc(Int + Int × fNPCBaseMagickaMult)` and **fatigue** = Str + Wil + Agi
-+ End, from the new attributes. **[high]** The player's own magicka is computed with
-`fPCBaseMagickaMult` elsewhere. **[medium]**
++ End, from the new attributes. **[high, exe]** The player's own magicka is computed with
+`fPCBaseMagickaMult` elsewhere. **[medium, inf]**
 
-`ACBS` magicka and fatigue are probably added on top as offsets. **[hypothesis]**, from
+`ACBS` magicka and fatigue are probably added on top as offsets. **[hypothesis, inf]**, from
 the field names.
 
 Vanilla values: `fPCBaseMagickaMult` 1.0 (built-in 0.5), `fNPCBaseMagickaMult` 1.5
@@ -206,7 +206,7 @@ piece = round(AR × (fArmorRatingBase + (fArmorRatingMax − fArmorRatingBase) �
 
 Vanilla: `fArmorRatingBase` 0.35, `fArmorRatingMax` 1.0, so a piece gives 35 % of its
 value at skill 0 and 100 % at skill 100 (luck 50 is neutral). The condition factor is
-`condition` itself (built-in base 0, mult 1). **[exact]** for the arithmetic; **[medium]**
+`condition` itself (built-in base 0, mult 1). **[exact, exe]** for the arithmetic; **[medium, inf]**
 for the two condition built-ins (both are set by code patterns my default extractor
 doesn't read, checked by hand) and for "round".
 
@@ -221,17 +221,17 @@ total += the actor's Shield effect magnitude
 total  = min(total, fMaxArmorRating)                # 85 (built-in 90); no cap if ≤ 0
 ```
 
-**[exact]** The total is cached and recomputed when equipment changes.
+**[exact, exe]** The total is cached and recomputed when equipment changes.
 
 **Per hit**, the melee routine takes `min(total, 100) / 100` and caps it at
 `fArmorRatingMax` (1.0). This fraction is the share of the hit's health damage that the
-armour absorbs, so at most 85 %. **[high]** for the fraction; **[medium]** for exactly
+armour absorbs, so at most 85 %. **[high, exe]** for the fraction; **[medium, inf]** for exactly
 where it multiplies (the line that applies it wasn't traced).
 
 The Armorer skill doesn't appear in these formulas. It acts through condition (repairs,
 `fRepairArmorerMult`). Armour wear per hit uses `fDamageToArmorPercentage` (9 in vanilla).
 Which piece takes the wear is chosen with the `iArmorDamage*Chance` weights: cuirass 25,
-greaves 15, helmet, gauntlets and boots 10 each, shield 30. **[high]** for the weights.
+greaves 15, helmet, gauntlets and boots 10 each, shield 30. **[high, exe]** for the weights.
 
 ## Disposition
 
@@ -260,24 +260,24 @@ disp    = clamp(base + fame + infamy + bounty + faction + race + weapon + modifi
   - the faction term uses `fDispTargetFactionMult` where `fDispTargetFactionRankMult`
     would be expected. `fDispTargetFactionRankMult` is never read.
 
-  **[high]** for the arithmetic. **[medium]** for which actor each personality and each
+  **[high, exe]** for the arithmetic. **[medium, inf]** for which actor each personality and each
   term belongs to, and for the race and weapon inputs.
 - **Faction reaction:** A's factions' reactions are checked against each faction T belongs
   to. A shared faction with the best positive reaction wins. Otherwise the most negative
-  reaction is used. `rank` is T's rank in that faction (0 for the lowest). **[high]**
-- If A's owner is T's base NPC (e.g. a pet or horse towards its owner), the disposition is 100. **[medium]**
+  reaction is used. `rank` is T's rank in that faction (0 for the lowest). **[high, exe]**
+- If A's owner is T's base NPC (e.g. a pet or horse towards its owner), the disposition is 100. **[medium, inf]**
 
 Tutorial examples: an assassin (Personality 50) towards a Blade has base 50 and faction
 −100 × 1. That clamps to 0, so it attacks (see below). Creatures mostly have Personality
 10, so creature-to-creature base disposition is about 10, not 50. Without a shared or
 liked faction, an aggressive creature (Aggression ≥ ~16) scores > 0 against another
-creature it detects. **[medium]** for whether creature-to-creature detection runs at all.
+creature it detects. **[medium, inf]** for whether creature-to-creature detection runs at all.
 
 ## Starting combat on sight
 
 No script is needed. When an actor's detection of another actor comes back above
 `fSneakSeenMin` (0, i.e. the target is noticed at all), the game computes a **fight
-score**. If it is greater than 0, the actor starts combat with the target. **[high]**
+score**. If it is greater than 0, the actor starts combat with the target. **[high, exe]**
 
 ```
 fight = 0 if aggression ≤ 0, else
@@ -291,14 +291,14 @@ attack when fight > 0
 
 - `aggression` is the actor's Aggression AI value.
 - `disposition` is its disposition towards the target. That is the 0–100 value
-  `GetDisposition` returns, which includes faction reactions. **[medium]** for the
+  `GetDisposition` returns, which includes faction reactions. **[medium, inf]** for the
   faction part.
 - The distance term is at most 1, so in practice
   `fight ≈ aggression − 5 − disposition + (≤ 1)`.
 - The *friend term* (`fFightFriendDispMult` 1, `fFightFriendDispBase` −25) only applies
   when the target is fighting someone the actor likes. It takes over when that friend's
-  disposition is higher. **[medium]**
-- The same score is what `GetShouldAttack` returns. **[exact]** for the arithmetic and
+  disposition is higher. **[medium, inf]**
+- The same score is what `GetShouldAttack` returns. **[exact, exe]** for the arithmetic and
   vanilla values.
 
 Example from the tutorial: the assassins have Aggression 50. Towards a Blade, disposition
@@ -310,14 +310,14 @@ only at disposition 0 and close range (the distance term is 1 at distance 0 and 
 allies.
 
 There is also a lose-track timer: while detection stays low, after
-`fFightAbleToDetectTimer` (3 s) the actor gives up on that target. **[medium]**
+`fFightAbleToDetectTimer` (3 s) the actor gives up on that target. **[medium, inf]**
 
 ## Choosing among targets
 
 An actor in combat keeps a **list of targets**. Every actor it has started combat with
 (through the fight score, being attacked, or scripts) is on it. Each entry has a priority,
 the list is kept sorted by priority, and the current target is the one at the top.
-**[high]**
+**[high, exe]**
 
 ```
 d        = max(0, distance − fCombatDistanceMin)                      # 400
@@ -331,7 +331,7 @@ priority = trunc( (1 / (1 + d / 100)) ^ fCombatDamageScale             # 0.5
 - Distance only counts beyond 400 units and fades slowly. A target that is already hurt
   is preferred.
 
-**[exact]** for the arithmetic and settings; **[medium]** for what `x` and `y` are.
+**[exact, exe]** for the arithmetic and settings; **[medium, inf]** for what `x` and `y` are.
 
 Adjustments:
 
@@ -342,12 +342,12 @@ Adjustments:
 - unreachable targets are scaled down (`fAICombatTargetUnreachablePriorityMult` 0.25,
   `fAICombatUnreachableTargetPriorityMult` 0.9).
 
-**[high]**
+**[high, exe]**
 
 So when a target dies, the actor moves to the next-highest entry on **its own list**. A
 character only appears there once that actor has started combat with it. After Renault
 dies, the assassins switch to the player only if the player is already on their list
-(the fight score had put them there) and outranks the Blades. **[medium]** for that
+(the fight score had put them there) and outranks the Blades. **[medium, inf]** for that
 reading of the tutorial.
 
 ## Melee reach
@@ -360,8 +360,8 @@ r     = the equipped weapon's reach (WEAP data)
 ```
 
 `fCombatDistance` is 128 (built-in; vanilla doesn't override it). So a reach-1.0 weapon
-reaches 128 units and fists reach 64. **[high]** for the product and the settings;
-**[medium]** for the actor-scale factor and for the creature case (both read from calls
+reaches 128 units and fists reach 64. **[high, exe]** for the product and the settings;
+**[medium, inf]** for the actor-scale factor and for the creature case (both read from calls
 whose meaning comes from context).
 
 ## Essential actors
@@ -374,7 +374,7 @@ health runs out doesn't die:
 - Its combat is stopped.
 - The HUD shows "`<name>` `sEssentialCharacterDown`", i.e. "<name> is unconscious."
 
-**[high]** for the settings used and the order; **[medium]** for the timer being in
+**[high, exe]** for the settings used and the order; **[medium, inf]** for the timer being in
 seconds and for the knock-down state. Neither setting is overridden in vanilla.
 
 ## Evidence

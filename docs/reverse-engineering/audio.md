@@ -13,7 +13,7 @@ Confidence tags as in the README.
 | Battle | 4 | `Data\Music\Battle\` |
 | Special | 8 | named files, e.g. `Data\Music\Special\death.mp3`, `success.mp3`, the main-menu track |
 
-Any other value falls back to Explore. **[high]**
+Any other value falls back to Explore. **[high, exe]**
 
 ## Picking a track
 
@@ -28,24 +28,24 @@ play(type):                                   # type −1 = "whatever fits here"
 ```
 
 - The cell's music type is the cell's `XCMT` value used directly as the type, so *default*
-  (0) means **Explore**, *public* 1 and *dungeon* 2. **[high]** for the lookup, **[medium]**
+  (0) means **Explore**, *public* 1 and *dungeon* 2. **[high, exe]** for the lookup, **[medium, inf]**
   for `XCMT` being that value.
 - Tracks are found with a plain directory listing (`*.mp3`), so only loose files count;
-  music inside BSAs is never picked. **[high]**
+  music inside BSAs is never picked. **[high, exe]**
 - The pick is uniform with no history; the only repeat guard is that re-picking the
-  playing file doesn't restart it. **[high]**
+  playing file doesn't restart it. **[high, exe]**
 - A Special track keeps playing over other requests; while Battle music is up, a request
   for Special resets the type to Explore first. Death and success stingers are special
-  cased. **[high]** for the checks, the exact battle enter/leave triggers: open.
-- MP3s are streamed (DirectShow), not decoded into the sound buffers. **[high]**
+  cased. **[high, exe]** for the checks, the exact battle enter/leave triggers: open.
+- MP3s are streamed (DirectShow), not decoded into the sound buffers. **[high, exe]**
 
 ## 3D falloff
 
 Positional sounds are DirectSound 3D buffers: the game gives each sound its minimum and
 maximum distance (`SetMinDistance` / `SetMaxDistance` on the 3D buffer; voices use
-`fDialogAttenuationMin/Max`) **[high]**, and a listener **rolloff factor** from
-`[Audio] fDSoundRolloffFactor` (4.0 in `Oblivion_default.ini`) **[high]**; under some
-condition the startup code sets that value to 1.0 before applying it **[medium]**.
+`fDialogAttenuationMin/Max`) **[high, exe]**, and a listener **rolloff factor** from
+`[Audio] fDSoundRolloffFactor` (4.0 in `Oblivion_default.ini`) **[high, exe]**; under some
+condition the startup code sets that value to 1.0 before applying it **[medium, inf]**.
 
 The curve is therefore DirectSound's own: full volume up to the minimum distance, then
 attenuation of 6 dB × rolloff per doubling of distance, i.e.
@@ -56,7 +56,7 @@ gain(d) = 1                          d ≤ min
         = (min / max) ^ rolloff      d ≥ max   (attenuation stops; not silent)
 ```
 
-**[medium]** (the formula is DirectSound's documented model, not the game's code).
+**[medium, inf]** (the formula is DirectSound's documented model, not the game's code).
 
 ## Open
 

@@ -31,8 +31,29 @@ again. This folder follows [`docs/CLEAN_ROOM.md`](../CLEAN_ROOM.md); read that f
 - No game data: no dumped records, menu files, textures or strings beyond the short
   names needed to identify a thing (a setting name such as `iSafeZoneX`, a script
   command name such as `GetActorValue`).
-- Each fact carries its **source** (public page, observation, or "executable") and a
-  **confidence**. New notes tag findings inline as **[exact]** (verified against data or the running game), **[high]** (read directly in the executable), **[medium]** (inferred from the executable) or **[hypothesis]**. Older notes use an evidence table with *confirmed* (= exact or high), *likely* (= medium) and *guess* (= hypothesis).
+- Each important claim carries a **confidence** and a **provenance**, written together
+  inline, e.g. **[high, exe]**.
+  - Confidence:
+    - **exact**: verified against data or the running game;
+    - **high**: read directly in the executable;
+    - **medium**: inferred, with a stated reason;
+    - **hypothesis**: a guess worth testing.
+  - Provenance, where the claim comes from:
+    - **doc**: public documentation (UESP, OBSE headers, Construction Set wiki);
+    - **obs**: observed behaviour of the running game;
+    - **data**: analysis of the game's data files;
+    - **exe**: analysis of the executable;
+    - **inf**: inference from the above.
+
+  A claim checked two ways lists both: **[exact, exe+data]**. Notes written before this
+  rule tag confidence only, or use an evidence table with *confirmed* (= exact or high),
+  *likely* (= medium) and *guess* (= hypothesis). The table's *Source* column is their
+  provenance. They get inline tags when next revised.
+- Notes are **functional specifications**: they say what the game does, in terms of its
+  data and its observable behaviour, so they can be implemented and tested without the
+  executable. They never paraphrase decompiler output line by line.
+- [UNVERIFIED.md](UNVERIFIED.md) lists every medium or hypothesis claim, so tests can target
+  them. It is regenerated whenever a note changes.
 - The engine never resolves anything against `Oblivion.exe`, so addresses are never
   useful in engine code; `scripts/publish-check.sh` flags the obvious cases.
 

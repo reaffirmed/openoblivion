@@ -129,13 +129,13 @@ success if roll < chance
 ```
 
 Vanilla: `fLockPickAutoBase` 45 (50.7), `fLockPickAutoDifficulty` 0.3 (0.45),
-`fLockPickAutoOffset` −4. Every attempt counts as a Security skill use. **[high]** (the
-direction of the final comparison: **[medium]**). The lock level is logged with the odds but is
-not part of the formula. **[high]** How it affects the tumblers is open.
+`fLockPickAutoOffset` −4. Every attempt counts as a Security skill use. **[high, exe]** (the
+direction of the final comparison: **[medium, inf]**). The lock level is logged with the odds but is
+not part of the formula. **[high, exe]** How it affects the tumblers is open.
 
 The tumbler minigame itself (spring speeds, break chance) is still open. The
 `fPickSpring1–4`, `fPickNumMult`, `fLockPickQualityMult` and `fLockPickBreak*` settings
-are never read by the code. **[high]**
+are never read by the code. **[high, exe]**
 
 ## Trigger zones (`OnTrigger`, `OnTriggerActor`, `OnTriggerMob`)
 
