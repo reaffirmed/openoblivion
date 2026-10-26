@@ -54,4 +54,5 @@ addresses. Nothing from there is committed; only the distilled fact moves here.
 | [dialogue.md](dialogue.md) | How a topic picks its response | partly done |
 | [ai-packages.md](ai-packages.md) | Which AI package an actor runs, and package schedules | partly done |
 | [combat-and-levelling.md](combat-and-levelling.md) | Melee damage, blocking, fatigue, regeneration, levelling | partly done |
+| [save-format.md](save-format.md) | Layout of .ess save files and change records | partly done |
 | [light-falloff.md](light-falloff.md) | How a LIGH radius becomes attenuation | formula known; shader use open |
