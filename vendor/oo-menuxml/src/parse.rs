@@ -1,0 +1,1200 @@
+//! Parser for the Oblivion / FO3 / FNV "MenuXml" dialect.
+//!
+//! Bethesda's menu XML is *not* well-formed XML: vanilla files contain
+//! overlapping comment spans (`<!--` … `-->` … `<!--` … `-->` where the
+//! second `-->` lands inside `</text-->`), an `<onlynotif>` typo for
+//! `onlyifnot`, and `<include src="prefabs\button_long.xml"/>` splices of
+//! fragment files that have no root element. A strict parser rejects all
+//! three. The source engine's tokenizer was lenient in exactly these
+//! places, so this module is a small hand-rolled scanner with the same
+//! leniency rather than a general XML library.
+//!
+//! Grammar (per the CS Wiki "Oblivion XML Reference"):
+//!
+//! ```text
+//! menu   := '<menu name="...">' body '</menu>'
+//! tile   := ('<rect'|'<image'|'<text'|'<nif'|'<3d'|'<template') body '</...>'
+//! body   := (text | include | tile | trait)*
+//! trait  := '<' name '>' body '</' name '>'      -- body is text OR ops
+//! op     := '<' opname [src] [trait] '>' body '</' name '>'  -- same shape
+//! include:= '<include src="file.xml"/>'
+//! ```
+//!
+//! Entities (`&true;`, `&xbox;`, `&HUDMainMenu;`, …) are expanded by the
+//! scanner before value parsing; see [`expand_entity`].
+
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+/// Trait values before per-frame evaluation: a literal number, a literal
+/// string, or an operator chain resolved against live trait state.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RawTrait {
+    Num(f32),
+    Str(String),
+    Ops(Vec<Op>),
+}
+
+/// A single operator in a trait's expression chain. Evaluation is a fold:
+/// each operator combines the accumulated "working value" with its
+/// *argument* — inline literal, `src`/`trait` selection, or the value of
+/// its child operator chain (CS Wiki "Operators": "operating with
+/// awareness of its previous sibling's returned value").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpKind {
+    Copy,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Min,
+    Max,
+    And,
+    Or,
+    Eq,
+    Neq,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+    OnlyIf,
+    OnlyIfNot,
+    Ceil,
+    Floor,
+    Abs,
+    Not,
+}
+
+impl OpKind {
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "copy" => Self::Copy,
+            "add" => Self::Add,
+            "sub" => Self::Sub,
+            // `mult` is the wiki spelling; vanilla files use both.
+            "mul" | "mult" => Self::Mul,
+            "div" => Self::Div,
+            "mod" => Self::Mod,
+            "min" => Self::Min,
+            "max" => Self::Max,
+            "and" => Self::And,
+            "or" => Self::Or,
+            "eq" => Self::Eq,
+            "neq" | "ne" => Self::Neq,
+            "lt" => Self::Lt,
+            "lte" => Self::Lte,
+            "gt" => Self::Gt,
+            "gte" | "ge" => Self::Gte,
+            "onlyif" => Self::OnlyIf,
+            // Vanilla `button_long.xml` carries an `onlynotif` typo for
+            // `onlyifnot`; accepted as an alias rather than silently
+            // dropped so third-party prefabs that copied the typo keep
+            // evaluating.
+            "onlyifnot" | "onlynotif" => Self::OnlyIfNot,
+            "ceil" => Self::Ceil,
+            "floor" | "trunc" => Self::Floor,
+            "abs" => Self::Abs,
+            "not" => Self::Not,
+            _ => return None,
+        })
+    }
+}
+
+/// Where an operator's argument comes from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OpArg {
+    /// No argument at all (`<add/>`) — treated as 0 downstream.
+    None,
+    /// Inline text content, entity-expanded (`<add> 24 </add>`).
+    Lit(Scalar),
+    /// `src="screen()" trait="width"` style selection.
+    Src {
+        src: String,
+        trait_name: Option<String>,
+    },
+    /// Nested operator chain evaluated as a parenthesised sub-expression.
+    Children(Vec<Op>),
+}
+
+/// One operator: kind + where its argument comes from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Op {
+    pub kind: OpKind,
+    pub arg: OpArg,
+}
+
+/// A value as it flows through expressions or sits in a trait: Gamebryo's
+/// menu system treats booleans as numbers (`&true;` == 2), and a handful
+/// of traits (`string`, `filename`, `animation`, class names) are text.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Scalar {
+    Num(f32),
+    Str(String),
+}
+
+impl Scalar {
+    pub fn as_num(&self) -> f32 {
+        match self {
+            Scalar::Num(n) => *n,
+            // String→number coercion keeps `copy` of a numeric string
+            // usable in arithmetic (vanilla stores counts as strings).
+            Scalar::Str(s) => s.trim().parse().unwrap_or(0.0),
+        }
+    }
+    /// Truthiness follows Gamebryo: `&false;` (1) and 0 are false, anything
+    /// else true.
+    pub fn truthy(&self) -> bool {
+        let n = self.as_num();
+        n != 0.0 && n != 1.0
+    }
+}
+
+/// Tile kinds the dialect distinguishes. `Template` tiles are prototypes
+/// the engine clones via the menu API; they parse but never draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TileKind {
+    Menu,
+    Rect,
+    Image,
+    Text,
+    Nif,
+    Template,
+}
+
+impl TileKind {
+    fn from_element(name: &str) -> Option<Self> {
+        Some(match name {
+            "menu" => Self::Menu,
+            "rect" | "window" => Self::Rect,
+            "image" => Self::Image,
+            "text" => Self::Text,
+            "nif" | "3d" => Self::Nif,
+            "template" => Self::Template,
+            _ => return None,
+        })
+    }
+}
+
+/// One tile in the document arena.
+#[derive(Debug, Clone)]
+pub struct Tile {
+    pub name: Option<String>,
+    /// `<id>` / `<ID>` — the numeric handle the engine's menu code uses.
+    pub id: Option<i32>,
+    pub kind: TileKind,
+    pub parent: Option<usize>,
+    pub children: Vec<usize>,
+    /// Trait store, keys lowercased (the dialect is case-insensitive:
+    /// vanilla mixes `<id>` and `<ID>`, `<mult>` and `<mul>`).
+    pub traits: BTreeMap<String, RawTrait>,
+}
+
+/// A parsed menu document: the tile arena plus lookup indexes.
+///
+/// `tiles[0]` is always the root tile (`<menu>` for menus, the eponymous
+/// `<rect>` for `strings.xml`).
+#[derive(Debug, Clone)]
+pub struct Document {
+    pub menu_name: String,
+    pub tiles: Vec<Tile>,
+    /// First tile registered under each (lowercased) name. Names repeat
+    /// in vanilla files (prefab splices); the first wins, matching the
+    /// source engine's name→tile registration order.
+    pub name_index: HashMap<String, usize>,
+    /// tile index → `<id>`, for engine-side handles.
+    pub id_index: HashMap<i32, usize>,
+}
+
+// ---------------------------------------------------------------------------
+// Entities
+// ---------------------------------------------------------------------------
+
+/// Entity table. Numeric entities expand to their value; class entities
+/// (`&HUDMainMenu;`) expand to the bare string (they appear as the text of
+/// `<class>` traits). Values per the CS Wiki trait/operator pages:
+/// `&true;` is numerically 2 and `&false;` 1 (OpenOblivion: upstream had 0,
+/// but the game treats 1 as false, e.g. `hudmain_frame`'s `visible` copies
+/// `HUDMainMenu.user3` = 1 and isn't drawn); platform entities gate
+/// Xbox-only art paths (dead on PC).
+fn expand_entity(name: &str) -> Option<String> {
+    let out = match name {
+        "true" => "2".to_string(),
+        "false" | "xenon" | "xbox" => "1".to_string(),
+        "pc" => "2".to_string(),
+        // OpenOblivion: entity values as the game defines them (see
+        // docs/reverse-engineering/menu-layout.md); upstream had left/center/
+        // right as 0/1/2.
+        "left" => "1".to_string(),
+        "center" => "2".to_string(),
+        "right" => "4".to_string(),
+        "scale" | "generic" => "-1".to_string(),
+        "click_past" => "101".to_string(),
+        "no_click_past" => "102".to_string(),
+        "mixed_menu" => "103".to_string(),
+        "prev" => "104".to_string(),
+        "next" => "105".to_string(),
+        "first" => "106".to_string(),
+        "last" => "107".to_string(),
+        "xlist" => "108".to_string(),
+        "xitem" => "109".to_string(),
+        "does_not_stack" => "6000".to_string(),
+        "xbuttona" | "xbutton_a" => "0".to_string(),
+        "xbuttonb" | "xbutton_b" => "1".to_string(),
+        "xbuttonx" | "xbutton_x" => "2".to_string(),
+        "xbuttony" | "xbutton_y" => "3".to_string(),
+        // Menu-class entities: `<class>` compares against the string, so
+        // keep the bare identifier.
+        other if other.contains(|c: char| c.is_ascii_uppercase()) => other.to_string(),
+        _ => return None,
+    };
+    Some(out)
+}
+
+/// Replace `&name;` entities in `text`. Unknown entities expand to 0 with
+/// a debug log — vanilla only uses the table above plus class names.
+fn expand_entities(text: &str) -> String {
+    if !text.contains('&') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        match rest.find(';') {
+            // Entity names in this dialect are short identifiers; a `;`
+            // further than 64 bytes away is not an entity reference.
+            Some(semi) if semi <= 64 => {
+                let name = &rest[1..semi];
+                match expand_entity(name) {
+                    Some(v) => out.push_str(&v),
+                    None => {
+                        log::debug!("menuxml: unknown entity &{name}; treated as 0");
+                        out.push('0');
+                    }
+                }
+                rest = &rest[semi + 1..];
+            }
+            _ => {
+                // Bare `&` with no terminator — keep it verbatim.
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Parse expanded trait text into a literal scalar. Empty or unparseable
+/// text becomes `Num(0.0)`; non-numeric text stays a string (class names,
+/// region text).
+fn literal_from_text(text: &str) -> Scalar {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Scalar::Num(0.0);
+    }
+    match trimmed.parse::<f32>() {
+        Ok(n) => Scalar::Num(n),
+        Err(_) => Scalar::Str(trimmed.to_string()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scanner
+// ---------------------------------------------------------------------------
+
+/// Source for menu XML bytes: the top-level file plus `<include>`
+/// prefabs, both resolved against the game's `menus\` tree.
+pub trait MenuFileSource {
+    /// `path` is archive-form (`menus\prefabs\button_long.xml`).
+    fn menu_xml(&self, path: &str) -> Option<Vec<u8>>;
+}
+
+/// Byte scanner over one XML unit.
+struct Scanner<'a> {
+    src: &'a str,
+    pos: usize,
+}
+
+impl<'a> Scanner<'a> {
+    fn new(src: &'a str) -> Self {
+        Self { src, pos: 0 }
+    }
+
+    /// Skip whitespace and comments. Comments end at the *first* `-->`
+    /// (no nesting) — this is what makes vanilla's overlapping comment
+    /// spans parse the way the source engine read them.
+    fn skip_trivia(&mut self) {
+        loop {
+            self.skip_ws();
+            if self.src[self.pos..].starts_with("<!--") {
+                match self.src[self.pos + 4..].find("-->") {
+                    Some(end) => self.pos += 4 + end + 3,
+                    None => self.pos = self.src.len(),
+                }
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn skip_ws(&mut self) {
+        while let Some(c) = self.src[self.pos..].chars().next() {
+            if c.is_whitespace() {
+                self.pos += c.len_utf8();
+            } else {
+                return;
+            }
+        }
+    }
+
+    /// Whether the next token is a close tag.
+    fn at_close_tag(&mut self) -> bool {
+        self.skip_trivia();
+        self.src[self.pos..].starts_with("</")
+    }
+
+    /// Consume the next element, returning `(name, attrs, self_closing)`.
+    fn take_element(&mut self) -> Option<(String, String, bool)> {
+        self.skip_trivia();
+        let rest = &self.src[self.pos..];
+        if !rest.starts_with('<') || rest.starts_with("</") {
+            return None;
+        }
+        let inner_end = rest.find('>')?;
+        let inner = rest[1..inner_end].trim();
+        self.pos += inner_end + 1;
+        if let Some(trimmed) = inner.strip_suffix('/') {
+            let (name, attrs) = split_name_attrs(trimmed);
+            Some((name, attrs, true))
+        } else {
+            let (name, attrs) = split_name_attrs(inner);
+            Some((name, attrs, false))
+        }
+    }
+
+    /// Skip past the next close tag (any name — we do not verify names on
+    /// close; the dialect never mistags and tolerance is cheaper).
+    fn skip_close_tag(&mut self) {
+        self.skip_trivia();
+        if let Some(end) = self.src[self.pos..].find('>') {
+            self.pos += end + 1;
+        } else {
+            self.pos = self.src.len();
+        }
+    }
+
+    /// Raw text up to the next `<` (entities not yet expanded).
+    fn take_text(&mut self) -> &'a str {
+        let start = self.pos;
+        match self.src[self.pos..].find('<') {
+            Some(lt) => {
+                self.pos += lt;
+                &self.src[start..start + lt]
+            }
+            None => {
+                self.pos = self.src.len();
+                &self.src[start..]
+            }
+        }
+    }
+}
+
+fn split_name_attrs(inner: &str) -> (String, String) {
+    let trimmed = inner.trim();
+    let name_len = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+    (
+        trimmed[..name_len].to_string(),
+        trimmed[name_len..].to_string(),
+    )
+}
+
+/// Pull `"value"` out of `name="value"` in an attribute string
+/// (case-insensitive on the key). Advances past each *value*, not each
+/// `=`, so an attribute following a quoted one still parses.
+fn attr_value(attrs: &str, key: &str) -> Option<String> {
+    let mut rest = attrs;
+    while let Some(eq) = rest.find('=') {
+        let name = rest[..eq].trim();
+        let after = rest[eq + 1..].trim_start();
+        let mut chars = after.chars();
+        let quote = chars.next()?;
+        let (value, end) = if quote == '"' || quote == '\'' {
+            let body = &after[quote.len_utf8()..];
+            let end = body.find(quote)?;
+            (&body[..end], quote.len_utf8() + end + quote.len_utf8())
+        } else {
+            let word = after.split_whitespace().next()?;
+            (word, word.len())
+        };
+        if name.eq_ignore_ascii_case(key) {
+            return Some(value.to_string());
+        }
+        rest = &after[end..];
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Element bodies
+// ---------------------------------------------------------------------------
+
+/// The content of a trait or operator element: leading text and/or a
+/// chain of operator child elements. Both trait elements and operator
+/// elements have this shape, which is what makes op nesting recursive.
+struct Body {
+    text: String,
+    ops: Vec<Op>,
+}
+
+impl Body {
+    /// Collapse into a trait value: ops win when present, else the
+    /// entity-expanded literal text.
+    fn into_trait(self) -> RawTrait {
+        if self.ops.is_empty() {
+            match literal_from_text(&expand_entities(&self.text)) {
+                Scalar::Num(n) => RawTrait::Num(n),
+                Scalar::Str(s) => RawTrait::Str(s),
+            }
+        } else {
+            RawTrait::Ops(self.ops)
+        }
+    }
+
+    /// Collapse into an operator argument.
+    fn into_arg(self) -> OpArg {
+        if !self.ops.is_empty() {
+            OpArg::Children(self.ops)
+        } else {
+            let trimmed = self.text.trim();
+            if trimmed.is_empty() {
+                OpArg::None
+            } else {
+                match literal_from_text(&expand_entities(trimmed)) {
+                    Scalar::Num(n) => OpArg::Lit(Scalar::Num(n)),
+                    Scalar::Str(s) => OpArg::Lit(Scalar::Str(s)),
+                }
+            }
+        }
+    }
+}
+
+/// Parse the body of a trait/op element: leading text, then op children
+/// (each recursively a body), until the element's close tag.
+///
+/// `depth` guards against pathological nesting; `seen_includes` breaks
+/// prefab include cycles (vanilla prefabs are acyclic, third-party ones
+/// are not guaranteed to be).
+fn parse_body(scanner: &mut Scanner, depth: usize) -> Body {
+    let mut text = String::new();
+    let mut ops = Vec::new();
+    if depth > 64 {
+        log::warn!("menuxml: expression nesting deeper than 64; truncating");
+        return Body { text, ops };
+    }
+    loop {
+        scanner.skip_trivia();
+        if scanner.pos >= scanner.src.len() {
+            break;
+        }
+        // Text accumulates only before the first op child.
+        if ops.is_empty() {
+            text.push_str(scanner.take_text());
+        } else {
+            let _ = scanner.take_text();
+        }
+        scanner.skip_trivia();
+        if scanner.pos >= scanner.src.len() {
+            break;
+        }
+        if scanner.at_close_tag() {
+            scanner.skip_close_tag();
+            break;
+        }
+        let Some((name, attrs, self_closing)) = scanner.take_element() else {
+            // #4651 — stray text after a comment span: consume it with
+            // take_text (char-boundary safe; a bare `pos += 1` advanced
+            // one BYTE, split multi-byte characters and panicked the next
+            // skip_ws slice). While the value is still accumulating the
+            // stray text is KEPT — the source engine concatenated it, and
+            // dropping bytes corrupted the trait ("plainascii" arrived as
+            // "plainscii"). A literal stray `<` consumes nothing here;
+            // skip its single byte.
+            let stray = scanner.take_text();
+            if !stray.is_empty() {
+                if ops.is_empty() {
+                    text.push_str(stray);
+                }
+                continue;
+            }
+            scanner.pos += 1;
+            continue;
+        };
+        let Some(kind) = OpKind::from_name(&name) else {
+            log::debug!("menuxml: unknown op <{name}> ignored");
+            if !self_closing {
+                skip_element_subtree(scanner);
+            }
+            continue;
+        };
+        // `src`/`trait` attributes select the argument directly; body
+        // text/children are the alternative forms.
+        let attr_src = attr_value(&attrs, "src");
+        let attr_trait = attr_value(&attrs, "trait");
+        let arg = if let (Some(s), t) = (attr_src.clone(), attr_trait.clone()) {
+            OpArg::Src {
+                src: s,
+                trait_name: t,
+            }
+        } else if self_closing {
+            OpArg::None
+        } else {
+            parse_body(scanner, depth + 1).into_arg()
+        };
+        ops.push(Op { kind, arg });
+    }
+    Body { text, ops }
+}
+
+/// Skip an unknown element's entire subtree (depth-tracked, tolerant of
+/// EOF).
+fn skip_element_subtree(scanner: &mut Scanner) {
+    let mut depth = 1usize;
+    while depth > 0 {
+        scanner.skip_trivia();
+        let _ = scanner.take_text();
+        scanner.skip_trivia();
+        if scanner.pos >= scanner.src.len() {
+            return;
+        }
+        if scanner.at_close_tag() {
+            scanner.skip_close_tag();
+            depth -= 1;
+        } else {
+            match scanner.take_element() {
+                Some((_, _, self_closing)) => {
+                    if !self_closing {
+                        depth += 1;
+                    }
+                }
+                None => {
+                    scanner.pos += 1;
+                }
+            }
+        }
+    }
+}
+
+/// Result of parsing one tile element's content: traits and nested tiles.
+struct ElementContent {
+    traits: BTreeMap<String, RawTrait>,
+    children: Vec<TileSeed>,
+}
+
+/// Parse the content of a tile/menu element until its close tag.
+/// #4650 (PAR-D1-2026-09-21-04) — total `<include>` splices allowed per
+/// top-level parse. Include nesting previously bypassed the tile-depth
+/// cap entirely (spliced content re-entered `parse_element_content` with
+/// the SAME depth), so a fragment DAG with fan-out f and depth d expanded
+/// to f^d splices — each an archive fetch + inflate in production — and a
+/// fragment that self-includes under K spellings re-entered ~K! times.
+/// 256 bounds every vanilla document (the corpora splice a handful each).
+const MAX_INCLUDE_SPLICES: usize = 256;
+
+/// #5314 (PAR-D1-2026-10-05-01) — total fragment BYTES spliced per
+/// top-level parse. The splice count alone bounds fetches, not output:
+/// each splice re-parses the whole fragment into fresh `TileSeed`s, so
+/// 256 splices × an arbitrary fragment grew the document linearly at
+/// ~7.2 MiB resident per KiB of fragment (a few KB of mod-archive
+/// payload expanding to gigabytes). Census of the three legacy corpora
+/// (2026-10-05): the heaviest vanilla document splices 38,378 bytes of
+/// distinct fragments; 256 KiB is ~7× that and bounds the worst-case
+/// tile arena at a few tens of MiB even for pure-`<rect/>` fragments.
+const MAX_INCLUDE_BYTES: usize = 256 * 1024;
+
+/// #5314 — per-fragment cap, enforced BEFORE the fetched bytes enter the
+/// per-document cache. Without it, fragments too large to ever splice
+/// (a 4 MiB mod prefab compresses to ~6 KB) were still fetched once per
+/// distinct path and kept alive by the cache for the whole parse — up to
+/// 256 × the fragment size of retained bytes. 64 KiB is ~5× the largest
+/// vanilla fragment (12,582 B, FNV); anything bigger is not a prefab.
+const MAX_INCLUDE_FRAGMENT_BYTES: usize = 64 * 1024;
+
+/// #5399 — per-document cap on bytes FETCHED from the source, spliced or
+/// not. The spliced-byte budget bounds the output, but a refused fetch
+/// spent nothing against it: a document that spliced to one byte under
+/// `MAX_INCLUDE_BYTES` and then named K distinct in-size prefabs paid K
+/// archive extracts (64 KiB each, ~640 MiB for K = 10,000) before
+/// refusing every one. Twice the splice budget leaves headroom for the
+/// misses and refusals an honest document makes on its way to the splice
+/// cap.
+const MAX_INCLUDE_FETCHED_BYTES: usize = 2 * MAX_INCLUDE_BYTES;
+
+/// #5668 — every fetch charges at least this many bytes against
+/// `MAX_INCLUDE_FETCHED_BYTES`, whatever the payload's real size: the
+/// budget otherwise counts payload bytes, so a hostile document's
+/// sub-KiB fragments each cost a full archive extract while moving the
+/// counter by almost nothing (~131k extracts against the 512 KiB
+/// budget). With the floor the fetch count is bounded by
+/// `MAX_INCLUDE_FETCHED_BYTES / INCLUDE_FETCH_FLOOR_BYTES` (512). The
+/// smallest vanilla prefab clears the floor by an order of magnitude.
+const INCLUDE_FETCH_FLOOR_BYTES: usize = 1024;
+
+/// #5314 — total tiles materialized per document (root + all spliced
+/// fragments). The 48-level cap bounds DEPTH only; without a total cap a
+/// wide-enough document (or fragment fan-out) grows the arena without
+/// bound. Census: the largest vanilla document has 205 tiles; 16,384 is
+/// 80× that and caps the arena at a few MiB.
+const MAX_DOCUMENT_TILES: usize = 16_384;
+
+/// Per-document `<include>` state, threaded through the parse recursion
+/// (#5007). The budget and cycle checks run BEFORE any fragment fetch,
+/// and fetched bytes are memoized by resolved archive path, so a hostile
+/// fragment — e.g. N self-includes, or anything after the budget is
+/// spent — costs O(1) fetches per distinct path instead of
+/// O(includes × fragment bytes) of extract + inflate work on the main
+/// thread. #5314 extends it with the document-wide size budgets
+/// (spliced bytes, total tiles) that bound the parse OUTPUT, not just
+/// the fetch work.
+struct IncludeState {
+    /// Active nesting stack of resolved archive paths — the cycle key.
+    seen: Vec<String>,
+    /// Remaining splices across the whole document.
+    budget: usize,
+    /// Fragment bytes spliced so far across the whole document (#5314).
+    bytes_spent: usize,
+    /// Fragment bytes fetched from the source so far, spliced or refused
+    /// (#5399).
+    bytes_fetched: usize,
+    /// Tiles materialized so far, root document and fragments
+    /// combined (#5314).
+    tiles: usize,
+    /// Probe results by resolved archive path. A miss (`None`) is cached
+    /// too, so repeated dead includes cost one archive probe per
+    /// candidate spelling, not one per include element. Oversized
+    /// fragments (#5314) cache as `None` — unusable for splicing — so
+    /// their bytes are never retained.
+    cache: HashMap<String, Option<Vec<u8>>>,
+    /// Dead-include causes already reported. A hostile fragment can
+    /// repeat the same cycle / missing / budget-exhausted include
+    /// thousands of times; one warn per cause and authored spelling
+    /// keeps the log readable instead of a flood.
+    warned: HashSet<String>,
+}
+
+impl IncludeState {
+    fn new() -> Self {
+        IncludeState {
+            seen: Vec::new(),
+            budget: MAX_INCLUDE_SPLICES,
+            bytes_spent: 0,
+            bytes_fetched: 0,
+            tiles: 0,
+            cache: HashMap::new(),
+            warned: HashSet::new(),
+        }
+    }
+
+    /// Warn for a dead include. The exhausted-budget causes ("budget",
+    /// "bytes", "fetched", "tiles") fire once per DOCUMENT — a hostile
+    /// menu naming thousands of further includes past a cap used to log
+    /// one line per distinct path (#5668: 200,000 warn lines). The
+    /// per-include causes ("cycle", "oversize", "missing", …) stay once
+    /// per authored spelling: each names a specific authoring mistake
+    /// worth seeing individually.
+    fn warn_once(&mut self, cause: &str, path: &str) {
+        let once_per_document = matches!(cause, "budget" | "bytes" | "fetched" | "tiles");
+        let key = if once_per_document {
+            cause.to_string()
+        } else {
+            format!("{cause}:{path}")
+        };
+        if self.warned.insert(key) {
+            match cause {
+                "cycle" => log::warn!("menuxml: include cycle on '{path}' — splice skipped"),
+                "budget" => log::warn!(
+                    "menuxml: include splice budget ({MAX_INCLUDE_SPLICES}) exhausted \
+                     at '{path}' — further splices truncated"
+                ),
+                "bytes" => log::warn!(
+                    "menuxml: include byte budget ({MAX_INCLUDE_BYTES}) exhausted \
+                     at '{path}' — further splices truncated"
+                ),
+                "fetched" => log::warn!(
+                    "menuxml: include fetch budget ({MAX_INCLUDE_FETCHED_BYTES}) exhausted \
+                     at '{path}' — further includes skipped"
+                ),
+                "oversize" => log::warn!(
+                    "menuxml: include fragment '{path}' exceeds \
+                     {MAX_INCLUDE_FRAGMENT_BYTES} bytes — skipped"
+                ),
+                "tiles" => log::warn!(
+                    "menuxml: document tile budget ({MAX_DOCUMENT_TILES}) exceeded — \
+                     further tiles truncated"
+                ),
+                "missing" => log::warn!("menuxml: include '{path}' not found"),
+                other => log::warn!("menuxml: include '{path}' skipped ({other})"),
+            }
+        }
+    }
+}
+
+fn parse_element_content(
+    scanner: &mut Scanner,
+    src: &mut dyn MenuFileSource,
+    includes: &mut IncludeState,
+    depth: usize,
+) -> ElementContent {
+    let mut traits = BTreeMap::new();
+    let mut children: Vec<TileSeed> = Vec::new();
+    if depth > 48 {
+        log::warn!("menuxml: tile nesting deeper than 48; truncating subtree");
+        return ElementContent { traits, children };
+    }
+    loop {
+        scanner.skip_trivia();
+        if scanner.pos >= scanner.src.len() {
+            break;
+        }
+        // Stray text between tiles (whitespace plus the `</text`-style
+        // debris vanilla leaves after overlapping comment spans) — drop.
+        let _ = scanner.take_text();
+        scanner.skip_trivia();
+        if scanner.pos >= scanner.src.len() {
+            break;
+        }
+        if scanner.at_close_tag() {
+            scanner.skip_close_tag();
+            break;
+        }
+        let Some((name, attrs, self_closing)) = scanner.take_element() else {
+            // Stray text between elements (e.g. `été` right after a
+            // comment span): consume char-safely via take_text instead of
+            // dropping one BYTE, which split multi-byte characters and
+            // panicked the next slice (#4651). A literal stray `<`
+            // consumes nothing — skip its single byte.
+            if scanner.take_text().is_empty() {
+                scanner.pos += 1;
+            }
+            continue;
+        };
+        // `<include src="..."/>` splices a prefab fragment into this tile.
+        if name == "include" {
+            if let Some(path) = attr_value(&attrs, "src") {
+                splice_include(&path, src, includes, &mut traits, &mut children, depth);
+            }
+            continue;
+        }
+        if TileKind::from_element(&name).is_some() {
+            if let Some(seed) =
+                parse_tile_element(&name, &attrs, self_closing, scanner, src, includes, depth)
+            {
+                children.push(seed);
+            }
+            continue;
+        }
+        // Trait element: `<traitname> body </traitname>`.
+        let key = name.to_lowercase();
+        if self_closing {
+            traits.insert(key, RawTrait::Num(0.0));
+            continue;
+        }
+        let body = parse_body(scanner, depth + 1);
+        traits.insert(key, body.into_trait());
+    }
+    ElementContent { traits, children }
+}
+
+/// Load and splice a prefab fragment (`<include src="prefabs\x.xml"/>`).
+///
+/// The fragment contributes its traits to the host tile and its children
+/// become host children — this is how every vanilla button/scroll-bar
+/// prefab is composed.
+fn splice_include(
+    path: &str,
+    src: &mut dyn MenuFileSource,
+    includes: &mut IncludeState,
+    traits: &mut BTreeMap<String, RawTrait>,
+    children: &mut Vec<TileSeed>,
+    depth: usize,
+) {
+    // #5007 — budget check FIRST, before any fetch: once the budget is
+    // spent, every further include element in every fragment used to cost
+    // a full extract + inflate (quadratic in fragment size) before being
+    // rejected.
+    if includes.budget == 0 {
+        includes.warn_once("budget", path);
+        return;
+    }
+    // #5314 — byte budget check FIRST (before any probe or fetch): once
+    // the spliced-byte budget is spent, nothing further can fit, so
+    // further includes must not touch the source at all.
+    if includes.bytes_spent >= MAX_INCLUDE_BYTES {
+        includes.warn_once("bytes", path);
+        return;
+    }
+    // #5399 — fetch budget check, also before any probe: refused fetches
+    // never reach `bytes_spent`, so only this bounds the extract work.
+    if includes.bytes_fetched >= MAX_INCLUDE_FETCHED_BYTES {
+        includes.warn_once("fetched", path);
+        return;
+    }
+    // Vanilla authors prefab includes relative to `menus\prefabs\`
+    // (`<include src="button_long.xml"/>` from menus\dialog\*.xml).
+    // Also accept a menus\-relative form and a raw archive path.
+    let candidates = [
+        format!("menus\\prefabs\\{path}"),
+        format!("menus\\{path}"),
+        path.to_string(),
+    ];
+    let keys: [String; 3] = candidates
+        .each_ref()
+        .map(|p| p.replace('/', "\\").to_lowercase());
+    // #5007 — resolve through the per-document cache: candidates probe in
+    // spelling order, but each resolved path (hit or miss) is probed at
+    // most once per document, so a repeated include of an already-fetched
+    // fragment is a map lookup. A hit records only the key; the bytes are
+    // cloned after the cycle check below, so a rejected self-include costs
+    // neither a fetch nor a copy.
+    let mut resolved: Option<String> = None;
+    for (cand, key) in candidates.iter().zip(&keys) {
+        if let Some(cached) = includes.cache.get(key) {
+            if cached.is_some() {
+                resolved = Some(key.clone());
+                break;
+            }
+            continue; // cached miss — try the next spelling
+        }
+        match src.menu_xml(cand) {
+            Some(bytes) => {
+                // #5668 — charge every fetch a floor: the budget counts
+                // payload bytes, so a document naming thousands of
+                // 2-byte fragments paid one archive extract each (the
+                // refusals past the spliced-byte cap still fetch before
+                // refusing) while moving the counter by 2. The floor
+                // bounds the per-document fetch count by the budget
+                // (~512), not by budget/min-fragment-size (~131k).
+                includes.bytes_fetched += bytes.len().max(INCLUDE_FETCH_FLOOR_BYTES);
+                // #5314 — an oversized fragment can never fit the byte
+                // budget, so treat it as absent for this spelling and
+                // cache `None`: the bytes are dropped, later includes of
+                // the same path do not refetch, and the next candidate
+                // spelling still gets its probe.
+                if bytes.len() > MAX_INCLUDE_FRAGMENT_BYTES {
+                    includes.warn_once("oversize", path);
+                    includes.cache.insert(key.clone(), None);
+                    continue;
+                }
+                // #5399 — the spliced-byte budget only grows, so a
+                // fragment that cannot fit now never will: refuse it
+                // before caching and cache `None`, so its bytes are not
+                // retained for the rest of the parse.
+                if includes.bytes_spent + bytes.len() > MAX_INCLUDE_BYTES {
+                    includes.cache.insert(key.clone(), None);
+                    includes.warn_once("bytes", path);
+                    return;
+                }
+                includes.cache.insert(key.clone(), Some(bytes));
+                resolved = Some(key.clone());
+                break;
+            }
+            None => {
+                includes.cache.insert(key.clone(), None);
+            }
+        }
+    }
+    let Some(resolved) = resolved else {
+        includes.warn_once("missing", path);
+        return;
+    };
+    // #4650 — cycle detection keys on the RESOLVED archive path, not the
+    // authored spelling: `x.xml`, `prefabs\x.xml` and
+    // `menus\prefabs\x.xml` all reach the same entry, and a fragment
+    // self-including under K spellings used to re-enter ~K! times.
+    // #5329 — and ONLY the resolved key: #5007 rejected the include when
+    // any lower-priority spelling was on the stack, dropping a distinct
+    // higher-priority file (`menus\x.xml` including `x.xml` while
+    // `menus\prefabs\x.xml` exists). Every key on the stack was fetched
+    // when it was pushed, so a real cycle always resolves from the cache
+    // above and still never touches the source.
+    if includes.seen.contains(&resolved) {
+        includes.warn_once("cycle", path);
+        return;
+    }
+    let Some(Some(bytes)) = includes.cache.get(&resolved).cloned() else {
+        unreachable!("a resolved include key is always a cached hit");
+    };
+    // #5314 — per-document budget on total spliced bytes: a splice that
+    // would push the document over the cap is refused without consuming
+    // the splice count (it never happens).
+    if includes.bytes_spent + bytes.len() > MAX_INCLUDE_BYTES {
+        includes.warn_once("bytes", path);
+        return;
+    }
+    includes.bytes_spent += bytes.len();
+    includes.budget -= 1;
+    let Ok(text) = String::from_utf8(bytes) else {
+        includes.warn_once("utf8", path);
+        return;
+    };
+    includes.seen.push(resolved);
+    let mut scanner = Scanner::new(&text);
+    // A prefab fragment opens with a comment naming its intended host
+    // shape (`<!-- image name="button_long" -->`); skip_trivia eats it
+    // and the remainder parses as the host tile's own content.
+    //
+    // #4650 — `depth + 1`, not `depth`: include nesting IS nesting, and
+    // the old same-depth re-entry let the 48-tile cap never see it.
+    let content = parse_element_content(&mut scanner, src, includes, depth + 1);
+    includes.seen.pop();
+    for (k, v) in content.traits {
+        traits.insert(k, v);
+    }
+    children.extend(content.children);
+}
+
+/// Partial tile: kind + name + traits + children, linked into the arena
+/// by [`parse_document`].
+struct TileSeed {
+    name: Option<String>,
+    id: Option<i32>,
+    kind: TileKind,
+    traits: BTreeMap<String, RawTrait>,
+    children: Vec<TileSeed>,
+}
+
+/// Parse one tile element. The open tag has already been consumed by the
+/// caller (`name`/`attrs`/`self_closing` come from it).
+fn parse_tile_element(
+    name: &str,
+    attrs: &str,
+    self_closing: bool,
+    scanner: &mut Scanner,
+    src: &mut dyn MenuFileSource,
+    includes: &mut IncludeState,
+    depth: usize,
+) -> Option<TileSeed> {
+    let kind = TileKind::from_element(name)?;
+    // #5314 — total tile cap (root document + spliced fragments): the
+    // 48-level cap bounds depth only, so a wide document or a small
+    // fragment spliced 256× grew the arena without bound. Over the cap
+    // the element's subtree is skipped wholesale (no recursive parse,
+    // no include splices inside it).
+    if includes.tiles >= MAX_DOCUMENT_TILES {
+        includes.warn_once("tiles", "");
+        if !self_closing {
+            skip_element_subtree(scanner);
+        }
+        return None;
+    }
+    includes.tiles += 1;
+    let tile_name = attr_value(attrs, "name");
+    if self_closing {
+        return Some(TileSeed {
+            name: tile_name,
+            id: None,
+            kind,
+            traits: BTreeMap::new(),
+            children: Vec::new(),
+        });
+    }
+    let content = parse_element_content(scanner, src, includes, depth + 1);
+    // `<id>` may arrive before or after other traits; both spellings
+    // appear in vanilla (`<id>` in HUD, `<ID>` in prefabs).
+    let id = ["id"]
+        .iter()
+        .find_map(|k| content.traits.get(*k))
+        .and_then(|t| match t {
+            RawTrait::Num(n) => Some(*n as i32),
+            _ => None,
+        });
+    Some(TileSeed {
+        name: tile_name,
+        id,
+        kind,
+        traits: content.traits,
+        children: content.children,
+    })
+}
+
+/// Parse a full menu document (e.g. `menus\main\hud_main_menu.xml`) or a
+/// rootless fragment (`menus\strings.xml` roots a `<rect>`; prefabs have
+/// no root at all and are parsed via [`splice_include`]'s content path).
+pub fn parse_document(text: &str, src: &mut dyn MenuFileSource) -> Document {
+    let mut scanner = Scanner::new(text);
+    let mut includes = IncludeState::new();
+    // Locate the root element, skipping the leading file comment.
+    let root_seed = {
+        scanner.skip_trivia();
+        if let Some((name, attrs, self_closing)) = scanner.take_element() {
+            if TileKind::from_element(&name).is_some() {
+                parse_tile_element(
+                    &name,
+                    &attrs,
+                    self_closing,
+                    &mut scanner,
+                    src,
+                    &mut includes,
+                    0,
+                )
+                .unwrap_or_else(TileSeed::default_root)
+            } else {
+                // First element is not a tile (should not happen); parse
+                // the rest as a synthetic rect root.
+                let content = parse_element_content(&mut scanner, src, &mut includes, 0);
+                TileSeed {
+                    name: attr_value(&attrs, "name"),
+                    id: None,
+                    kind: TileKind::Rect,
+                    traits: content.traits,
+                    children: content.children,
+                }
+            }
+        } else {
+            log::warn!("menuxml: document has no root element");
+            TileSeed::default_root()
+        }
+    };
+
+    // Flatten seeds into the arena in document order (parents precede
+    // children by construction, which the evaluator relies on).
+    let mut tiles: Vec<Tile> = Vec::new();
+    let mut name_index: HashMap<String, usize> = HashMap::new();
+    let mut id_index: HashMap<i32, usize> = HashMap::new();
+    fn push_seed(
+        seed: TileSeed,
+        parent: Option<usize>,
+        tiles: &mut Vec<Tile>,
+        name_index: &mut HashMap<String, usize>,
+        id_index: &mut HashMap<i32, usize>,
+    ) -> usize {
+        let idx = tiles.len();
+        let TileSeed {
+            name,
+            id,
+            kind,
+            traits,
+            children,
+        } = seed;
+        tiles.push(Tile {
+            name: name.clone(),
+            id,
+            kind,
+            parent,
+            children: Vec::new(),
+            traits,
+        });
+        if let Some(n) = &name {
+            name_index.entry(n.to_lowercase()).or_insert(idx);
+        }
+        if let Some(id) = id {
+            id_index.entry(id).or_insert(idx);
+        }
+        for child in children {
+            let cidx = push_seed(child, Some(idx), tiles, name_index, id_index);
+            tiles[idx].children.push(cidx);
+        }
+        idx
+    }
+    let menu_name = root_seed.name.clone().unwrap_or_default();
+    let root = push_seed(root_seed, None, &mut tiles, &mut name_index, &mut id_index);
+    debug_assert_eq!(root, 0);
+
+    Document {
+        menu_name,
+        tiles,
+        name_index,
+        id_index,
+    }
+}
+
+impl TileSeed {
+    fn default_root() -> Self {
+        Self {
+            name: None,
+            id: None,
+            kind: TileKind::Menu,
+            traits: BTreeMap::new(),
+            children: Vec::new(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime tile grafting (menu API)
+// ---------------------------------------------------------------------------
+
+/// Stage copies of `tiles[tile]`'s subtree into `staged`, remapping the
+/// root's parent to `parent` and optionally renaming it. Indices handed
+/// out are positions in the combined arena (`base` + staged offset), so
+/// the staged Vec can be appended afterwards.
+fn stage_subtree(
+    tiles: &[Tile],
+    base: usize,
+    tile: usize,
+    parent: usize,
+    rename: Option<&str>,
+    staged: &mut Vec<Tile>,
+) -> usize {
+    let idx = base + staged.len();
+    let mut clone = tiles[tile].clone();
+    clone.parent = Some(parent);
+    clone.children = Vec::new();
+    if let Some(name) = rename {
+        clone.name = Some(name.to_string());
+    }
+    staged.push(clone);
+    for &child in &tiles[tile].children {
+        let child_idx = stage_subtree(tiles, base, child, idx, None, staged);
+        staged[idx - base].children.push(child_idx);
+    }
+    idx
+}
+
+impl Document {
+    /// Clone `tile` and its subtree as a new child of `parent` (same
+    /// document). The runtime menu API the source engine used to
+    /// assemble HUD content: `<template>` prototypes never draw
+    /// themselves — the engine clones their content under named
+    /// container tiles.
+    pub fn deep_clone(&mut self, tile: usize, parent: usize, rename: Option<&str>) -> usize {
+        let base = self.tiles.len();
+        let mut staged = Vec::new();
+        let idx = stage_subtree(&self.tiles, base, tile, parent, rename, &mut staged);
+        self.finish_graft(staged, idx, parent)
+    }
+
+    /// Graft `src[tile]`'s subtree (a different document — a parsed
+    /// prefab fragment) as a new child of `parent` in this document.
+    pub fn graft_subtree(
+        &mut self,
+        src: &Document,
+        tile: usize,
+        parent: usize,
+        rename: Option<&str>,
+    ) -> usize {
+        let base = self.tiles.len();
+        let mut staged = Vec::new();
+        let idx = stage_subtree(&src.tiles, base, tile, parent, rename, &mut staged);
+        self.finish_graft(staged, idx, parent)
+    }
+
+    fn finish_graft(&mut self, mut staged: Vec<Tile>, idx: usize, parent: usize) -> usize {
+        self.tiles.append(&mut staged);
+        self.tiles[parent].children.push(idx);
+        // Register every grafted tile's name (first-wins, like parsing) —
+        // the menu API keeps clones addressable by name.
+        for i in idx..self.tiles.len() {
+            if let Some(name) = &self.tiles[i].name {
+                self.name_index.entry(name.to_lowercase()).or_insert(i);
+            }
+            if let Some(id) = self.tiles[i].id {
+                self.id_index.entry(id).or_insert(i);
+            }
+        }
+        idx
+    }
+}

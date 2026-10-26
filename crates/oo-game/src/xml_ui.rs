@@ -11,7 +11,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::PrimaryWindow;
-use byroredux_menuxml::{MenuAssets, MenuProfile, MenuRenderer, ScreenTraits};
+use byroredux_menuxml::{MenuAssets, MenuProfile, MenuRenderer, ScreenTraits, TextureSet};
 
 use oo_sim::{GameData, Player, PlayerIntent};
 
@@ -19,28 +19,48 @@ use crate::menu::Menu;
 
 const HUD: &str = "menus\\main\\hud_main_menu.xml";
 
-/// Menus are laid out in units of a 960-line screen and scaled to the window:
-/// the game's three menu-texture sets are full, 80% and 50% size (`Menus`,
-/// `Menus80`, `Menus50`), which lines up with 960, 768 and 480 lines.
-const UI_HEIGHT: f32 = 960.0;
-
-/// Margin kept clear at the screen edges (Oblivion.ini `iSafeZoneX`/`Y`, 20 by
-/// default). The HUD hangs a little below its background and relies on it.
+/// Margin kept clear at the screen edges, in menu units: Oblivion.ini's
+/// `iSafeZoneX`/`Y`, or `iSafeZoneXWide`/`YWide` on wide screens. All four
+/// default to 20.
 const SAFE_ZONE: f32 = 20.0;
+const SAFE_ZONE_WIDE: f32 = 20.0;
 
-/// The UI's virtual screen for a window: 960 lines tall, as wide as the
-/// window's aspect allows, with `screen()`'s `cropx`/`cropy` being the safe
-/// zone, not a 4:3 pillarbox. Checked against the real game at 1280x720: the
-/// health bars start 66 px from the left and the bar block's top is at 648 px,
-/// which is 87 and 862 units on this screen, exactly where the HUD's own
-/// formulas put them with crops of 20. With the pillarbox (213 units at 16:9)
-/// the HUD sat 270 px further right.
+/// The menus' virtual screen for a window of `window` pixels, as the game sets
+/// it up (docs/reverse-engineering/menu-layout.md): landscape is 960 units
+/// tall and as wide as the aspect, portrait 1280 wide, square 1280×960.
+/// `cropx`/`cropy` are the safe zone, the wide pair when the height is under
+/// 0.74 of the width. Checked against the real game at 1280×720.
 pub(crate) fn ui_screen(window: UVec2) -> ScreenTraits {
-    let width = (UI_HEIGHT * window.x as f32 / window.y as f32).round();
+    let (w, h) = (window.x as f32, window.y as f32);
+    let (width, height) = match w.total_cmp(&h) {
+        std::cmp::Ordering::Greater => (960.0 * w / h, 960.0),
+        std::cmp::Ordering::Less => (1280.0, 1280.0 * h / w),
+        std::cmp::Ordering::Equal => (1280.0, 960.0),
+    };
+    let safe = if h / w < 0.74 {
+        SAFE_ZONE_WIDE
+    } else {
+        SAFE_ZONE
+    };
     ScreenTraits {
-        cropx: SAFE_ZONE,
-        cropy: SAFE_ZONE,
-        ..ScreenTraits::new(width, UI_HEIGHT)
+        width,
+        height,
+        cropx: safe,
+        cropy: safe,
+    }
+}
+
+/// Which size of menu art to use: the game picks by pixels per menu unit
+/// (window height / 960), half size at 0.5 or less, 80% up to 0.8, full
+/// above. Menu units don't change, only the files.
+pub(crate) fn texture_set(window: UVec2) -> TextureSet {
+    let scale = window.y as f32 / 960.0;
+    if scale <= 0.5 {
+        TextureSet::Menus50
+    } else if scale <= 0.8 {
+        TextureSet::Menus80
+    } else {
+        TextureSet::Base
     }
 }
 
@@ -244,13 +264,10 @@ pub fn update_hud_overlay(
         return;
     };
     renderer.set_screen(screen);
-    // In play, user3 is 1. Compared with the real game at 1280x720 that gives
-    // the right HUD (no parchment background, thin compass frame) except for
-    // hudmain_frame, whose `visible` copies user3 straight: the game doesn't
-    // draw it, so a `visible` of 1 must be false there, but ByroRedux treats
-    // any non-zero value as true. Hide it until the evaluator's booleans agree.
+    renderer.set_texture_set(texture_set(size));
+    // In play, user3 is 1 (`&false;`): no parchment background, thin compass
+    // frame, no hudmain_frame, as in the real game at 1280x720.
     renderer.set_override("HUDMainMenu", "user3", 1.0);
-    renderer.set_override("hudmain_frame", "visible", 0.0);
     renderer.set_override("hudmain_health_full", "user0", state.health);
     renderer.set_override("hudmain_magic_full", "user0", state.magicka);
     renderer.set_override("hudmain_fatigue_full", "user0", state.fatigue);

@@ -19,7 +19,7 @@ use bevy::window::PrimaryWindow;
 use byroredux_menuxml::eval::{EvalState, Overrides};
 use byroredux_menuxml::parse::{MenuFileSource, RawTrait, parse_document};
 use byroredux_menuxml::{
-    Document, MenuAssets, MenuError, MenuRenderer, Scalar, ScreenTraits, TileKind,
+    Document, MenuAssets, MenuError, MenuRenderer, Scalar, ScreenTraits, TextureSet, TileKind,
 };
 
 use oo_formats::items::Stack;
@@ -29,7 +29,7 @@ use oo_sim::{
 };
 
 use crate::menu::{Menu, move_selected};
-use crate::xml_ui::{GameMenuAssets, blank_image, ui_screen};
+use crate::xml_ui::{GameMenuAssets, blank_image, texture_set, ui_screen};
 
 /// A menu document, drawable and hit-testable.
 pub struct XmlMenu {
@@ -133,8 +133,9 @@ impl XmlMenu {
         Ok(())
     }
 
-    pub fn set_screen(&mut self, screen: ScreenTraits) {
+    pub fn set_screen(&mut self, screen: ScreenTraits, textures: TextureSet) {
         self.renderer.set_screen(screen);
+        self.renderer.set_texture_set(textures);
     }
 
     /// A trait's current value on a named tile.
@@ -430,7 +431,7 @@ pub fn update_menu_overlay(
     }) else {
         return;
     };
-    xml.set_screen(screen);
+    xml.set_screen(screen, texture_set(size));
     if let Err(e) = xml.ensure_rows(stacks.len(), template, parent, prefix) {
         warn!("menu list: {e}");
     }

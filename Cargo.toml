@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "vendor/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -21,7 +21,8 @@ bevy_rapier3d = { version = "0.37", default-features = false, features = ["dim3"
 byroredux-core = { git = "https://github.com/matiaszanolli/ByroRedux", rev = "eafed0bc5753226a2391c0e404a3059438176603" }
 byroredux-nif = { git = "https://github.com/matiaszanolli/ByroRedux", rev = "eafed0bc5753226a2391c0e404a3059438176603" }
 byroredux-bsa = { git = "https://github.com/matiaszanolli/ByroRedux", rev = "eafed0bc5753226a2391c0e404a3059438176603" }
-byroredux-menuxml = { git = "https://github.com/matiaszanolli/ByroRedux", rev = "eafed0bc5753226a2391c0e404a3059438176603" }
+# Vendored and patched; see vendor/oo-menuxml/README.md.
+byroredux-menuxml = { path = "vendor/oo-menuxml" }
 
 # Bevy is unbearably slow unoptimized; optimize dependencies even in dev builds.
 [profile.dev.package."*"]

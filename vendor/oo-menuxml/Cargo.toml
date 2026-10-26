@@ -1,0 +1,14 @@
+[package]
+name = "byroredux-menuxml"
+description = "Oblivion menu XML interpreter, vendored from ByroRedux and patched for OpenOblivion"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+log = "0.4"
+thiserror = "2"
+
+[lints.clippy]
+# Upstream style; newer than the toolchain ByroRedux pins.
+chunks_exact_to_as_chunks = "allow"
