@@ -234,8 +234,11 @@ pub struct ScriptState {
     /// Health, magicka and fatigue of every actor met so far, and the
     /// player's.
     pub vitals: HashMap<u32, crate::combat::Vitals>,
-    /// Who is fighting whom.
+    /// Who is fighting whom: each fighter's current target.
     pub fighting: HashMap<u32, u32>,
+    /// Everyone each fighter has started combat with, from which the
+    /// current target is chosen.
+    pub combat_targets: HashMap<u32, Vec<u32>>,
     /// The player's name, race, sex, birthsign and class.
     pub character: Option<crate::character::Character>,
     /// The player's attributes and skills from those choices, once made.
@@ -277,6 +280,27 @@ impl ScriptState {
                 self.quests.entry(id).or_default().running = true;
             }
         }
+    }
+
+    /// `who` starts combat with `target`, or adds it to the targets it is
+    /// already fighting. Returns whether `who` wasn't fighting before.
+    pub fn start_combat(&mut self, who: u32, target: u32) -> bool {
+        let list = self.combat_targets.entry(who).or_default();
+        if !list.contains(&target) {
+            list.push(target);
+        }
+        if self.fighting.contains_key(&who) {
+            return false;
+        }
+        self.fighting.insert(who, target);
+        self.raise(who, target, event::START_COMBAT);
+        true
+    }
+
+    /// `who` stops fighting everyone.
+    pub fn stop_combat(&mut self, who: u32) {
+        self.fighting.remove(&who);
+        self.combat_targets.remove(&who);
     }
 
     /// Raises an event on a scripted reference, for its blocks that listen.
@@ -833,14 +857,15 @@ impl Host for GameHost<'_> {
                     0 => PLAYER_REF,
                     t => t,
                 };
-                if self.state.fighting.insert(who, target).is_none() {
-                    self.state.raise(who, target, event::START_COMBAT);
+                // A script's target becomes the current one.
+                if !self.state.start_combat(who, target) {
+                    self.state.fighting.insert(who, target);
                 }
                 1.0
             }
             "StopCombat" => {
                 if let Some(who) = subject {
-                    self.state.fighting.remove(&who);
+                    self.state.stop_combat(who);
                 }
                 1.0
             }

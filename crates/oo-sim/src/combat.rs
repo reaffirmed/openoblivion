@@ -135,7 +135,7 @@ pub fn fight_score(gmst: &Settings, aggression: f32, disposition: i32, distance:
 pub type Settings = HashMap<String, Setting>;
 
 /// A numeric game setting, or its vanilla value if no plugin has it.
-pub(crate) fn setting(gmst: &Settings, name: &str, vanilla: f32) -> f32 {
+pub fn setting(gmst: &Settings, name: &str, vanilla: f32) -> f32 {
     match gmst.get(&name.to_ascii_lowercase()) {
         Some(Setting::Float(f)) => *f,
         Some(Setting::Int(i)) => *i as f32,
@@ -229,6 +229,19 @@ pub fn armor_rating<'a>(
 /// The share of a hit's health damage armour absorbs.
 pub fn armor_absorbs(gmst: &Settings, rating: f32) -> f32 {
     (rating.min(100.0) / 100.0).min(setting(gmst, "fArmorRatingMax", 1.0))
+}
+
+/// How much an actor in combat wants to fight a target `distance` away that
+/// has lost `wounds` health; see "Choosing among targets" in
+/// `docs/reverse-engineering/combat-and-levelling.md`. The damage ratio
+/// between the two is taken as 1 until the RE notes pin it down.
+pub fn target_priority(gmst: &Settings, distance: f32, wounds: f32) -> i32 {
+    let d = (distance - setting(gmst, "fCombatDistanceMin", 400.0)).max(0.0);
+    let ratio = 1.0;
+    ((1.0 / (1.0 + d / 100.0)).powf(setting(gmst, "fCombatDamageScale", 0.5))
+        * (wounds * setting(gmst, "fCombatVulnerabilityMod", 0.1)
+            + ratio * setting(gmst, "fCombatRelativeDamageMod", 100.0)))
+    .trunc() as i32
 }
 
 /// What a blocker holds up.
@@ -665,41 +678,84 @@ pub(crate) fn run_combat(
         }
         fighter.cooldown = (fighter.cooldown - dt).max(0.0);
         let here = transform.translation;
-        // Drop a target that's gone, dead or knocked out.
-        if let Some(&t) = state.fighting.get(&placed.0)
-            && (position(t).is_none()
-                || state
-                    .vitals
-                    .get(&t)
-                    .is_some_and(|v| v.dead || v.unconscious > 0.0))
-        {
-            state.fighting.remove(&placed.0);
+        // Attack on sight: everyone noticed with a fight score above 0
+        // joins the targets. Noticing is being within NOTICE_DISTANCE until
+        // detection exists. This runs whatever the package.
+        let aggression = state
+            .aggression
+            .get(&placed.0)
+            .copied()
+            .unwrap_or(f32::from(stats.aggression));
+        let hostile: Vec<u32> = noticeable
+            .iter()
+            .filter(|(r, _, _)| *r != placed.0)
+            .map(|&(r, other, at)| (r, other, at.distance(here)))
+            .filter(|&(r, other, d)| {
+                d <= NOTICE_DISTANCE
+                    && !state
+                        .combat_targets
+                        .get(&placed.0)
+                        .is_some_and(|l| l.contains(&r))
+                    && fight_score(
+                        &world.settings,
+                        aggression,
+                        crate::faction::disposition(
+                            &world.actors,
+                            &state,
+                            &world.settings,
+                            base,
+                            other,
+                        ),
+                        d,
+                    ) > 0
+            })
+            .map(|(r, _, _)| r)
+            .collect();
+        for target in hostile {
+            info!("{:08X} attacks {target:08X} on sight", placed.0);
+            state.start_combat(placed.0, target);
         }
-        // Attack on sight: the nearest noticed actor with a fight score
-        // above 0. Noticing is being within NOTICE_DISTANCE until detection
-        // exists. This runs whatever the package.
-        if !state.fighting.contains_key(&placed.0) {
-            let aggression = state
-                .aggression
-                .get(&placed.0)
-                .copied()
-                .unwrap_or(f32::from(stats.aggression));
-            let target = noticeable
+        // Targets that are gone, dead or knocked out drop off; the one with
+        // the highest priority is fought.
+        if let Some(mut list) = state.combat_targets.remove(&placed.0) {
+            list.retain(|&t| {
+                position(t).is_some()
+                    && state
+                        .vitals
+                        .get(&t)
+                        .is_none_or(|v| !v.dead && v.unconscious <= 0.0)
+            });
+            let current = state.fighting.get(&placed.0).copied();
+            let best = list
                 .iter()
-                .filter(|(r, _, _)| *r != placed.0)
-                .map(|&(r, other, at)| (r, other, at.distance(here)))
-                .filter(|&(_, _, d)| d <= NOTICE_DISTANCE)
-                .filter(|&(_, other, d)| {
-                    let (disposition, _) =
-                        crate::faction::disposition(&world.actors, &state, base, other);
-                    fight_score(&world.settings, aggression, disposition, d) > 0
+                .map(|&t| {
+                    let d = position(t).map_or(f32::MAX, |p| p.distance(here));
+                    let v = state.vitals.get(&t);
+                    let mut p = target_priority(
+                        &world.settings,
+                        d,
+                        v.map_or(0.0, |v| v.max_health - v.health),
+                    );
+                    if Some(t) == current {
+                        p += setting(&world.settings, "iCurrentTargetBonus", 50.0) as i32;
+                    }
+                    (t, p)
                 })
-                .min_by(|a, b| a.2.total_cmp(&b.2));
-            if let Some((target, _, _)) = target {
-                info!("{:08X} attacks {target:08X} on sight", placed.0);
-                state.fighting.insert(placed.0, target);
-                state.raise(placed.0, target, event::START_COMBAT);
+                .max_by_key(|&(_, p)| p)
+                .map(|(t, _)| t);
+            match best {
+                Some(t) => {
+                    if current.is_some_and(|c| c != t) {
+                        info!("{:08X} turns on {t:08X}", placed.0);
+                    }
+                    state.fighting.insert(placed.0, t);
+                    state.combat_targets.insert(placed.0, list);
+                }
+                None => state.stop_combat(placed.0),
             }
+        } else if let Some(&t) = state.fighting.get(&placed.0) {
+            // Fighting someone not on the list (an older save, say).
+            state.start_combat(placed.0, t);
         }
         let target = state.fighting.get(&placed.0).copied();
         let mut chase = None;
@@ -804,7 +860,7 @@ pub(crate) fn run_combat(
                 * setting(&world.settings, "fEssentialHealthPercentReGain", 0.3))
             .max(1.0);
             v.unconscious = setting(&world.settings, "fEssentialDeathTime", 10.0);
-            state.fighting.remove(&blow.target);
+            state.stop_combat(blow.target);
             state.raise(blow.target, blow.attacker, event::KNOCKOUT);
             let name = base_of(blow.target)
                 .and_then(|b| world.actors.npcs.get(&b))
@@ -841,9 +897,10 @@ pub(crate) fn run_combat(
             if died {
                 state.messages.push("You have died.".to_owned());
             }
-        } else if !died && !state.fighting.contains_key(&blow.target) {
-            state.fighting.insert(blow.target, blow.attacker);
-            state.raise(blow.target, blow.attacker, event::START_COMBAT);
+        } else if !died {
+            // Whoever is attacked fights back, or adds the attacker to the
+            // targets it is already fighting.
+            state.start_combat(blow.target, blow.attacker);
         }
     }
 
@@ -861,7 +918,7 @@ pub(crate) fn run_combat(
         };
         info!("{:08X} dies (killer {killer:08X})", placed.0);
         *state.dead_counts.entry(base).or_default() += 1;
-        state.fighting.remove(&placed.0);
+        state.stop_combat(placed.0);
         state.raise(placed.0, killer, event::DEATH);
         commands.entity(entity).insert(Dead);
         fall(&mut transform);
@@ -939,6 +996,15 @@ pub(crate) fn fly_arrows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nearer_and_hurt_targets_come_first() {
+        let gmst = Settings::new();
+        assert_eq!(target_priority(&gmst, 300.0, 0.0), 100);
+        assert_eq!(target_priority(&gmst, 300.0, 50.0), 105);
+        // 300 beyond 400: (1/4)^0.5 = 0.5.
+        assert_eq!(target_priority(&gmst, 700.0, 0.0), 50);
+    }
 
     #[test]
     fn fight_scores_from_the_tutorial() {
