@@ -49,9 +49,9 @@ cargo run -p oo-sim --bin oo-headless -- --data "$DATA" --cell ImperialDungeon01
 cargo run -p oo-game --release -- --data "$DATA" --cell ImperialDungeon01
 ```
 
-Mods: pass `--plugin` more than once (`--plugin Oblivion.esm --plugin MyMod.esp`), or
-`--plugins-txt` with the game's `Plugins.txt`. Order follows the game's rules: masters
-first, then by file date. `--no-vsync` uncaps the framerate.
+Plugins: by default every `.esm` and `.esp` in the Data directory loads. Name them with
+`--plugin` (repeat it, or comma-separate) or use the game's `Plugins.txt` with
+`--plugins-txt`. Order follows the game's rules: masters first, then by file date. `--no-vsync` uncaps the framerate.
 
 Controls follow Oblivion's defaults: click to capture the mouse (Escape releases it),
 WASD to move, Shift to run (Caps Lock toggles always-run), E to jump, Space to activate.

@@ -79,6 +79,8 @@ impl Light {
     pub const PULSE: u32 = 0x80;
     pub const PULSE_SLOW: u32 = 0x100;
     pub const SPOT: u32 = 0x200;
+    /// Set on many prison lights alongside 0x10, whose meaning is unknown.
+    pub const SPOT_SHADOW: u32 = 0x400;
 
     fn parse(d: &[u8]) -> Option<Self> {
         if d.len() < 16 {

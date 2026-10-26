@@ -60,33 +60,60 @@ impl Plugin for SimPlugin {
     }
 }
 
-/// The plugins to load: the active ones from a `Plugins.txt` if given (always
-/// with `Oblivion.esm`, which the game loads whether listed or not), else `explicit`.
-pub fn active_plugins(explicit: Vec<String>, plugins_txt: Option<&std::path::Path>) -> Vec<String> {
-    let Some(path) = plugins_txt else {
+/// The plugins to load, in order of preference:
+/// 1. `explicit`, if any were named;
+/// 2. the active ones from a `Plugins.txt`, if given (always with `Oblivion.esm`,
+///    which the game loads whether listed or not);
+/// 3. every `.esm` and `.esp` in `data_dir`.
+///
+/// The last is the default because some releases need plugins nobody thinks to
+/// name. The GOG release merges Shivering Isles into `Oblivion.esm` and ships
+/// `DLCShiveringIsles.esp` as an empty stub that exists only so its BSAs load.
+pub fn active_plugins(
+    explicit: Vec<String>,
+    plugins_txt: Option<&std::path::Path>,
+    data_dir: Option<&std::path::Path>,
+) -> Vec<String> {
+    if !explicit.is_empty() {
         return explicit;
-    };
-    let text = match std::fs::read(path) {
-        Ok(bytes) => bytes.iter().map(|&b| b as char).collect::<String>(),
-        Err(e) => {
-            error!(
-                "couldn't read {}: {e}; loading {explicit:?}",
+    }
+    if let Some(path) = plugins_txt {
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                let text: String = bytes.iter().map(|&b| b as char).collect();
+                let mut plugins: Vec<String> = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                    .map(str::to_owned)
+                    .collect();
+                if !plugins
+                    .iter()
+                    .any(|p| p.eq_ignore_ascii_case("Oblivion.esm"))
+                {
+                    plugins.insert(0, "Oblivion.esm".to_owned());
+                }
+                return plugins;
+            }
+            Err(e) => error!(
+                "couldn't read {}: {e}; loading every plugin instead",
                 path.display()
-            );
-            return explicit;
+            ),
         }
-    };
-    let mut plugins: Vec<String> = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(str::to_owned)
+    }
+    let mut plugins: Vec<String> = data_dir
+        .and_then(|d| std::fs::read_dir(d).ok())
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| {
+            let n = n.to_ascii_lowercase();
+            n.ends_with(".esm") || n.ends_with(".esp")
+        })
         .collect();
-    if !plugins
-        .iter()
-        .any(|p| p.eq_ignore_ascii_case("Oblivion.esm"))
-    {
-        plugins.insert(0, "Oblivion.esm".to_owned());
+    if plugins.is_empty() {
+        plugins.push("Oblivion.esm".to_owned());
     }
     plugins
 }

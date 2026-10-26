@@ -29,8 +29,9 @@ struct Args {
     /// The game's Data directory, e.g. ".../Oblivion/Data".
     #[arg(long)]
     data: Option<PathBuf>,
-    /// Plugins to load (repeat the flag, or comma-separate). Ignored if --plugins-txt is given.
-    #[arg(long = "plugin", value_delimiter = ',', default_value = "Oblivion.esm")]
+    /// Plugins to load (repeat the flag, or comma-separate). Without this or
+    /// --plugins-txt, every plugin in the Data directory loads.
+    #[arg(long = "plugin", value_delimiter = ',')]
     plugins: Vec<String>,
     /// Read the active plugins from Oblivion's Plugins.txt instead, usually
     /// %LOCALAPPDATA%\Oblivion\Plugins.txt.
@@ -91,8 +92,12 @@ fn main() {
         ..default()
     }))
     .add_plugins(SimPlugin(WorldConfig {
+        plugins: oo_sim::active_plugins(
+            args.plugins,
+            args.plugins_txt.as_deref(),
+            args.data.as_deref(),
+        ),
         data_dir: args.data,
-        plugins: oo_sim::active_plugins(args.plugins, args.plugins_txt.as_deref()),
         cell: args.cell,
     }))
     .add_plugins(RapierDebugRenderPlugin {

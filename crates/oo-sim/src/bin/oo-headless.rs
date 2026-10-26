@@ -14,8 +14,9 @@ use oo_sim::{Model, PlacedRef, SimPlugin, WorldConfig};
 struct Args {
     #[arg(long)]
     data: PathBuf,
-    /// Plugins to load (repeat the flag, or comma-separate). Ignored if --plugins-txt is given.
-    #[arg(long = "plugin", value_delimiter = ',', default_value = "Oblivion.esm")]
+    /// Plugins to load (repeat the flag, or comma-separate). Without this or
+    /// --plugins-txt, every plugin in the Data directory loads.
+    #[arg(long = "plugin", value_delimiter = ',')]
     plugins: Vec<String>,
     /// Read the active plugins from Oblivion's Plugins.txt instead, usually
     /// %LOCALAPPDATA%\Oblivion\Plugins.txt.
@@ -27,6 +28,8 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
+    let plugins =
+        oo_sim::active_plugins(args.plugins, args.plugins_txt.as_deref(), Some(&args.data));
     App::new()
         .add_plugins((
             MinimalPlugins.set(ScheduleRunnerPlugin::run_once()),
@@ -35,7 +38,7 @@ fn main() {
         ))
         .add_plugins(SimPlugin(WorldConfig {
             data_dir: Some(args.data),
-            plugins: oo_sim::active_plugins(args.plugins, args.plugins_txt.as_deref()),
+            plugins,
             cell: Some(args.cell),
         }))
         .add_systems(Update, report)
