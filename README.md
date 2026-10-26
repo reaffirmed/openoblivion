@@ -37,6 +37,10 @@ keyed by Bethesda's stable form IDs (`PlacedRef`). Rules that follow from that:
 
 ## Build and run
 
+You need your own copy of Oblivion: the GOG or Steam 1.2.0416 release, with Shivering
+Isles and the DLC if you have them. Nothing from the game is in this repository. Pass
+its `Data` folder with `--data`, and set `OO_DATA` to it for the real-data tests.
+
 Needs Rust 1.97.1 or newer. On Linux, Bevy also needs ALSA, udev, Wayland and
 xkbcommon development packages (`libasound2-dev libudev-dev libwayland-dev
 libxkbcommon-dev` on Debian/Ubuntu).
@@ -72,8 +76,9 @@ The goal is a complete open engine in the spirit of OpenMW: the whole game, unca
 framerates at any resolution, mod support and co-op. Milestones, and where each kind of
 mod stands, are in [ROADMAP.md](ROADMAP.md).
 
-## Rules
+## Contributing and licence
 
-Read [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md) before contributing.
+See [CONTRIBUTING.md](CONTRIBUTING.md), and read [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md)
+before contributing. OpenOblivion is under the [MIT licence](LICENSE).
 `scripts/publish-check.sh` runs in CI and fails on committed game files and on
 decompiler output.
