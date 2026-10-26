@@ -26,14 +26,14 @@ const DIRECTIONAL_LUX: f32 = 450.0;
 const POINT_LUX_AT_HALF_RADIUS: f32 = 660.0;
 /// Bevy's point-light range, as a multiple of the light's `LIGH` radius.
 ///
-/// Oblivion's lights fall off roughly linearly to nothing at their radius; Bevy's
-/// are inverse-square times a window that reaches zero at `range`. No range makes
-/// those match. Normalised to agree at half the radius, inverse-square is 3x too
-/// bright at a quarter of it whatever the range, so the near field needs a custom
-/// falloff. A shorter range only makes it worse, cutting the tail off before the
-/// radius. 1.25 matches the tail best: 0.18, 0.09 and 0.05 of full at 0.75, 0.9 and
-/// 1.0 radius, against linear's 0.25, 0.10 and 0.
-const RANGE_PER_RADIUS: f32 = 1.25;
+/// Oblivion's stock attenuation is quadratic only, 1 / (16 d² / r²), so
+/// (r / 4d)²: full at a quarter of the radius, a quarter at half, a sixteenth
+/// at the radius, and no cutoff there (docs/reverse-engineering/, light
+/// falloff). That's Bevy's inverse-square, so only the range window differs;
+/// at three radii it's down to 1/144 and the window barely touches the curve
+/// inside the radius. What the game does nearer than r/4 (clamp at full?) and
+/// how far it really lights are still open.
+const RANGE_PER_RADIUS: f32 = 3.0;
 
 /// The light that stands in for the cell's `XCLL` directional light.
 #[derive(Component)]
