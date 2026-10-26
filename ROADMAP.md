@@ -136,24 +136,29 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
       mods that ship only source
 - [x] AI packages: schedules, conditions, travel, follow, wander, escort, path grids
 - [ ] The opening scene end to end: the Emperor's conversation, race and birthsign,
-      the secret wall, the assassins, the escort through the Subterrane (stage 22 of
+      the secret wall, the assassins, the escort through the Subterrane (stage 26 of
       CharacterGen reached on the PC: the race menu, the Emperor's whole
-      conversation and the secret wall play out, checked by the tutorial replay)
+      conversation, the secret wall and the first ambush play out, Renault dies on
+      cue and the Blades kill the assassins, checked by the tutorial and
+      follow-party replays. Next: the escort through the Subterrane)
 - [x] Audio: sound effects from `SOUN` records with DirectSound's 3D falloff; voiced
       dialogue with `.lip` timing; cell ambience and music picked the game's way
       (loose files by music type, uniform random), battle music while something fights
       the player. Open: footsteps, when the game switches to and from battle music
 - [ ] Combat, progress: health, magicka and fatigue from the records with the
       derived-stat formulas and regeneration, on the HUD; punching with the
-      hand-to-hand formula (left mouse) and blocking (right mouse); creatures with
-      aggression above 50 attack the player on sight and hit for their attack
-      damage; anyone hit fights back; death raises OnDeath and drops the body;
-      `StartCombat`, `StopCombat`, `IsInCombat`, `Kill`, `GetActorValue` and
-      `ModActorValue` for health, magicka and fatigue; weapons from `WEAP` with the
-      weapon damage formula, reach (fCombatDistance × weapon reach, half for fists)
-      and speed, equipped from the inventory, and blocking with fists, weapon or
-      shield; bows and arrows; essential actors knocked out. Next: armour, a
-      creature's own reach, attack and death animations, NPC dispositions, magic
+      hand-to-hand formula (left mouse) and blocking (right mouse); anyone attacks on
+      sight by the fight score (aggression against disposition, which adds faction
+      reactions, including scripts' `SetFactionReaction`); anyone hit fights back;
+      OnHit before the damage, death raises OnDeath, counts for `GetDeadCount` and
+      drops the body; `StartCombat`, `StopCombat`, `IsInCombat`, `KillActor`, actor
+      values for health, magicka, fatigue and aggression; weapons from `WEAP` with
+      the weapon damage formula, reach (fCombatDistance × weapon reach, half for
+      fists, a creature's own) and speed, equipped from the inventory, and blocking
+      with fists, weapon or shield; armour rating by skill, absorbing a share of
+      each hit; bows and arrows; essential actors knocked out. Next: bound armour
+      from abilities, how actors pick and switch targets, detection, armour wear,
+      attack and death animations, magic
 - [ ] Character creation, progress: the race menu opens after the new game's first
       move, as the game does; the birthsign and class screens open when the
       tutorial's scripts ask; all three pause the game while up and set the
