@@ -30,6 +30,31 @@ fn refr(
     record(b"REFR", flags, form_id, &fields)
 }
 
+/// Three points in a line: 0 - 1 - 2.
+fn path_grid() -> Vec<u8> {
+    let mut points = Vec::new();
+    for (x, links) in [(0.0f32, 1u8), (100.0, 2), (200.0, 1)] {
+        for v in [x, 0.0, 10.0] {
+            points.extend(v.to_le_bytes());
+        }
+        points.extend([links, 0, 0, 0]);
+    }
+    let links: Vec<u8> = [1u16, 0, 2, 1]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    record(
+        b"PGRD",
+        0,
+        0x2FF,
+        &[
+            field(b"DATA", &3u16.to_le_bytes()),
+            field(b"PGRP", &points),
+            field(b"PGRR", &links),
+        ],
+    )
+}
+
 fn plugin() -> LoadOrder {
     LoadOrder::new(vec![("Test.esm".into(), master())]).unwrap()
 }
@@ -124,6 +149,7 @@ fn master() -> Plugin {
         vec![
             refr(0x202, 0x11, [4.0, 5.0, 6.0], [0.1, 0.2, 0.3], Some(2.0), 0),
             refr(0x203, 0x11, [0.0; 3], [0.0; 3], None, flags::DELETED),
+            path_grid(),
         ],
     ));
     subblock.extend(cell(
@@ -228,6 +254,9 @@ fn finds_form_id_by_editor_id() {
 fn reads_load_doors_and_finds_their_destination_cell() {
     let p = plugin();
     let tavern = interior_cell(&p, "TestTavern").unwrap().unwrap();
+    let grid = tavern.path_grid.as_ref().unwrap();
+    assert_eq!(grid.points[2], [200.0, 0.0, 10.0]);
+    assert_eq!(grid.edges, [vec![1], vec![0, 2], vec![1]]);
     let teleport = tavern.references[0].teleport.unwrap();
     assert_eq!(
         teleport,

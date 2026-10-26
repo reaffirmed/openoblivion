@@ -206,6 +206,7 @@ fn reads_quest_stages_and_result_scripts() {
     let q = &d.quests[&QUEST];
     assert_eq!(q.name, "Tutorial");
     assert_eq!(d.globals[&GLOBAL], 8.5);
+    assert_eq!(d.global_ids["gamehour"], GLOBAL);
     assert_eq!((q.flags, q.priority), (0x01, 60));
     assert_eq!(q.stages.len(), 2);
     let ten = &q.stages[0];

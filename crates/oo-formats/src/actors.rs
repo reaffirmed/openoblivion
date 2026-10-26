@@ -29,6 +29,8 @@ pub struct NpcInfo {
     pub factions: Vec<(u32, i8)>,
     /// The object script its references run (`SCRI`).
     pub script: Option<u32>,
+    /// AI packages in priority order (`PKID`).
+    pub packages: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -41,6 +43,7 @@ pub struct CreatureInfo {
     pub inventory: Vec<Stack>,
     pub factions: Vec<(u32, i8)>,
     pub script: Option<u32>,
+    pub packages: Vec<u32>,
 }
 
 /// One piece of a race's head (`NAM0` section) or body (`NAM1`).
@@ -194,6 +197,13 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
                 .map(|f| (global(u32_at(f.data, 0)), f.data[4] as i8))
                 .collect::<Vec<_>>()
         };
+        let packages = || {
+            fields
+                .iter()
+                .filter(|f| f.tag.0 == *b"PKID" && f.data.len() >= 4)
+                .map(|f| global(u32_at(f.data, 0)))
+                .collect::<Vec<_>>()
+        };
         let editor_id = string(b"EDID").unwrap_or_default();
         let name = string(b"FULL").unwrap_or_else(|| editor_id.clone());
         match &r.tag.0 {
@@ -221,6 +231,7 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
                         class: form(b"CNAM"),
                         factions: factions(),
                         script: form(b"SCRI"),
+                        packages: packages(),
                     },
                 );
             }
@@ -242,6 +253,7 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
                         inventory: inventory(),
                         factions: factions(),
                         script: form(b"SCRI"),
+                        packages: packages(),
                     },
                 );
             }

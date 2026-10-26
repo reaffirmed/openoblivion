@@ -175,6 +175,8 @@ pub struct DialogueData {
     pub quests: HashMap<u32, Quest>,
     /// Global variables' starting values (`GLOB`).
     pub globals: HashMap<u32, f32>,
+    /// Globals by lower-case editor ID (`GameHour`, `TimeScale`...).
+    pub global_ids: HashMap<String, u32>,
 }
 
 pub fn dialogue_data(order: &LoadOrder) -> Result<DialogueData> {
@@ -235,8 +237,12 @@ fn read_global(out: &mut DialogueData, r: &Record<'_>, global: &dyn Fn(u32) -> u
     let mut value = 0.0;
     for f in fields.iter() {
         let f = f?;
-        if f.tag.0 == *b"FLTV" && f.data.len() >= 4 {
-            value = f32::from_bits(u32_at(f.data, 0));
+        match &f.tag.0 {
+            b"FLTV" if f.data.len() >= 4 => value = f32::from_bits(u32_at(f.data, 0)),
+            b"EDID" => {
+                out.global_ids.insert(f.zstring().to_ascii_lowercase(), id);
+            }
+            _ => {}
         }
     }
     out.globals.insert(id, value);
@@ -404,7 +410,7 @@ fn read_quest(out: &mut DialogueData, r: &Record<'_>, global: &dyn Fn(u32) -> u3
 }
 
 /// Reads a condition: 24 bytes (`CTDA`) or the older 20 (`CTDT`).
-fn condition(f: &Field<'_>, global: &dyn Fn(u32) -> u32) -> Result<Condition> {
+pub(crate) fn condition(f: &Field<'_>, global: &dyn Fn(u32) -> u32) -> Result<Condition> {
     let d = &f.data;
     if d.len() < 20 {
         return Err(Error::Corrupt(format!("{} is {} bytes", f.tag, d.len())));

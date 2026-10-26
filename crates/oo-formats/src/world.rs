@@ -161,6 +161,53 @@ pub struct Cell {
     /// Interior lighting (`XCLL`), if the cell sets it.
     pub lighting: Option<CellLighting>,
     pub references: Vec<Reference>,
+    /// Where actors can walk (`PGRD`).
+    pub path_grid: Option<PathGrid>,
+}
+
+/// A cell's navigation graph: points actors walk between, and which points
+/// connect.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PathGrid {
+    /// Bethesda units, Z up, in cell space.
+    pub points: Vec<[f32; 3]>,
+    /// For each point, the points it connects to.
+    pub edges: Vec<Vec<u16>>,
+}
+
+impl PathGrid {
+    fn parse(r: &Record<'_>) -> Result<Self> {
+        let mut grid = PathGrid::default();
+        let mut counts = Vec::new();
+        let fields = r.fields()?;
+        for field in fields.iter() {
+            let field = field?;
+            let d = field.data;
+            match &field.tag.0 {
+                b"PGRP" => {
+                    for p in d.as_chunks::<16>().0 {
+                        grid.points.push([f32_at(p, 0), f32_at(p, 4), f32_at(p, 8)]);
+                        counts.push(p[12] as usize);
+                    }
+                }
+                // Each point's connections in turn, as many as PGRP says.
+                b"PGRR" => {
+                    let mut links = d.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c));
+                    grid.edges = counts
+                        .iter()
+                        .map(|&n| links.by_ref().take(n).collect())
+                        .collect();
+                }
+                _ => {}
+            }
+        }
+        grid.edges.resize(grid.points.len(), Vec::new());
+        let n = grid.points.len() as u16;
+        for e in &mut grid.edges {
+            e.retain(|&i| i < n);
+        }
+        Ok(grid)
+    }
 }
 
 impl Reference {
@@ -318,14 +365,19 @@ pub fn interior_cell_by_form_id(order: &LoadOrder, form_id: u32) -> Result<Optio
                 .flatten()
                 .find(|f| f.tag.0 == *b"XCLL")
                 .and_then(|f| CellLighting::parse(f.data));
+            let previous_grid = found.take().and_then(|c| c.path_grid);
             found = Some(Cell {
                 form_id,
                 editor_id: editor_id.unwrap_or_default(),
                 name,
                 lighting,
                 references: Vec::new(),
+                path_grid: previous_grid,
             });
             if let Some(children) = children {
+                if let Some(grid) = find_path_grid(children.children())? {
+                    found.as_mut().unwrap().path_grid = Some(grid);
+                }
                 let mut raw = Vec::new();
                 collect_references(children.children(), &mut raw)?;
                 for (mut r, deleted) in raw {
@@ -501,6 +553,24 @@ fn walk_cell_blocks<'a>(
         return f(&cell, None);
     }
     Ok(false)
+}
+
+/// The cell's path grid, wherever in its children groups it sits.
+fn find_path_grid(nodes: Nodes<'_>) -> Result<Option<PathGrid>> {
+    for node in nodes {
+        match node? {
+            Node::Record(r) if r.tag.0 == *b"PGRD" && !r.is_deleted() => {
+                return Ok(Some(PathGrid::parse(&r)?));
+            }
+            Node::Record(_) => {}
+            Node::Group(g) => {
+                if let Some(grid) = find_path_grid(g.children())? {
+                    return Ok(Some(grid));
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Collects references with their deleted flag; deletions matter when merging
