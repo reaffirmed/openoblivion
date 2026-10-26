@@ -49,6 +49,42 @@ game can show a topic but answer with a refusal.
 persuasion, detection or miscellaneous, and a particular player state is set, the picker
 clears that state, tries again, and restores it (the state is not identified yet).
 
+## Starting a conversation and building the topic list
+
+The player has a **known-topic list**, kept sorted. `AddTopic` adds a topic to it (with the
+"topic added" notification, unless a particular menu is open); responses can also add
+topics when spoken.
+
+When a conversation opens with a speaker (and no specific topic was asked for):
+
+```
+greeting = pick a response from the GREETING topic (speaker = subject, player = target)
+if no greeting response:
+    source = player's known topics
+elif greeting is a Goodbye response:
+    say it and end the conversation
+elif greeting has choices:
+    source = the greeting's choice topics
+else:
+    source = player's known topics
+topic list = [t for t in source if the picker finds an eligible response for t
+                                   with this speaker]          # duplicates dropped
+```
+
+So **a topic only shows if this speaker has at least one eligible response for it** (its
+quest running, its conditions passing for this speaker and the player). There is no
+separate per-speaker topic list: filtering happens entirely through response conditions
+(`GetIsID`, faction, cell, quest stage…). `GREETING` itself never appears in the list; it
+only supplies the opening line and decides where the list comes from.
+
+Special topics found by form ID: `GREETING` (`0xC8`), `ANY` (`0xD3`, accepted as "any
+previous topic" when matching choices) and `INFOGENERAL` (`0xD7`, rumours; shown at most
+once per conversation and with its own bookkeeping on the speaker).
+
+**Disposition refusals.** When a response comes back marked "disposition too low" (see
+above) and isn't itself flagged *Info Refusal*, the menu replaces it with a response from
+the game's built-in refusal topic, so the NPC refuses instead of answering.
+
 ## Evidence
 
 | Fact | Source | Confidence |
@@ -57,11 +93,14 @@ clears that state, tries again, and restores it (the state is not identified yet
 | Scan order, Random / Random End pooling, uniform pick | Executable: the response picker | confirmed |
 | Disposition fallback | Executable: picker plus the condition list evaluator | confirmed |
 | Retry for topic types 2, 3, 4, 6 | Executable: picker | confirmed (the player state: unknown) |
+| Known-topic list, conversation start, topic-list filter | Executable: `AddTopic`, the conversation starter and the topic-list builder | confirmed |
+| Special topic IDs | Executable constants; Oblivion.esm editor IDs | confirmed |
+| Refusal substitution | Executable: the topic-entry builder | likely (which built-in topic: not named yet) |
 
 ## Open
 
 1. Quest order within a topic: stored (load) order, or sorted by quest priority at load.
 2. The "choice" mode of the picker (used when building the topic list or following a
    response's choices) filters by previous responses; to document with the dialogue menu.
-3. Which topics are listed in the menu (`AddTopic`, the player's known topics, greetings,
-   *Goodbye*, *Run Immediately*, *Info Refusal*, rumours).
+3. Exactly when spoken responses add topics (the response's *Add Topic* list) and how
+   *Run Immediately* and rumour bookkeeping work.
