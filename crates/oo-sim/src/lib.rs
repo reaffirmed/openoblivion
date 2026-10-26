@@ -7,6 +7,7 @@
 
 pub mod actor;
 pub mod ai;
+pub mod animated;
 pub mod cell;
 pub mod data;
 pub mod dialogue;
@@ -77,6 +78,7 @@ impl Plugin for SimPlugin {
                     trigger::update_triggers,
                     script::run_object_scripts,
                     ai::run_ai,
+                    animated::animate_objects,
                     cell::resync_cell,
                     cell::apply_moves,
                     cell::apply_transition,

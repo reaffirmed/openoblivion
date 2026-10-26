@@ -15,6 +15,7 @@ use oo_formats::scripts::{Script, ScriptCode, ScriptKind, object_scripts, script
 use oo_script::{Host, Locals, Outcome, Statement, Value, conditions_pass, decode, run};
 
 use crate::actor::Actor;
+use crate::animated::AnimRequest;
 use crate::cell::{CurrentCell, PlacedRef, WorldData};
 use crate::inventory::{Inventory, WorldChanges};
 use crate::player::Player;
@@ -151,6 +152,8 @@ pub struct ScriptState {
     /// Actors to choose a package again on the next AI step
     /// (`EvaluatePackage`).
     pub evaluate: HashSet<u32>,
+    /// Doors that have been opened or closed; the rest are closed.
+    pub doors: HashMap<u32, crate::animated::OpenState>,
     /// Character generation is under way (`SetInChargen`).
     pub in_chargen: bool,
     started: bool,
@@ -250,6 +253,8 @@ pub enum WorldEffect {
         by: u32,
         run_script: bool,
     },
+    /// Open or close a door, or play an animation group on an object.
+    Animate(u32, crate::animated::AnimRequest),
 }
 
 /// Event flags, by the block that listens for them.
@@ -630,13 +635,11 @@ impl Host for GameHost<'_> {
             | "Unlock"
             | "PlaySound"
             | "PlaySound3D"
-            | "PlayGroup"
             | "LoopGroup"
             | "PickIdle"
             | "SetAlert"
             | "SetRestrained"
             | "SetNoAvoidance"
-            | "SetOpenState"
             | "SetForceRun"
             | "SetForceSneak"
             | "SetIgnoreFriendlyHits"
@@ -651,6 +654,21 @@ impl Host for GameHost<'_> {
                 1.0
             }
             "GetDisabled" | "IsXBox" => 0.0,
+            "GetOpenState" => subject.map_or(0.0, |r| {
+                f64::from(self.state.doors.get(&r).copied().unwrap_or_default() as u8)
+            }),
+            "SetOpenState" | "PlayGroup" => {
+                let Some(target) = subject else {
+                    return Err(format!("{} requires a reference", command.name));
+                };
+                let request = if command.name == "SetOpenState" {
+                    AnimRequest::Open(arg_number(args, 0) != 0.0)
+                } else {
+                    AnimRequest::Group(arg_number(args, 0) as u16)
+                };
+                self.effects.push(WorldEffect::Animate(target, request));
+                1.0
+            }
             "EvaluatePackage" => {
                 if let Some(actor) = subject {
                     self.state.evaluate.insert(actor);
@@ -1014,6 +1032,8 @@ pub struct Pending {
     pub activations: Vec<(u32, u32, bool)>,
     /// `MoveTo`s: who, and the reference to stand at.
     pub moves: Vec<(u32, u32)>,
+    /// Doors to open or close and animation groups to play, by reference.
+    pub animations: Vec<(u32, AnimRequest)>,
 }
 
 /// A snapshot of the actors in the loaded cell and the player, for scripts and
@@ -1090,6 +1110,7 @@ pub(crate) fn apply_effects(
                 run_script,
             } => pending.activations.push((target, by, run_script)),
             WorldEffect::MoveTo { who, marker } => pending.moves.push((who, marker)),
+            WorldEffect::Animate(target, request) => pending.animations.push((target, request)),
             WorldEffect::AddItem { to, .. } => {
                 debug!("AddItem on {to:08X}: only the player's inventory is kept so far");
             }

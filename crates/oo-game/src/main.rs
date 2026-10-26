@@ -20,7 +20,9 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_dis
 use bevy::window::{CursorGrabMode, CursorOptions, PresentMode, PrimaryWindow};
 use bevy_rapier3d::render::{DebugRenderContext, RapierDebugRenderPlugin};
 use clap::Parser;
-use oo_sim::cell::WorldData;
+use oo_sim::animated::Door;
+use oo_sim::cell::{PlacedRef, WorldData};
+use oo_sim::script::ScriptState;
 use oo_sim::{
     Actor, Container, CurrentCell, EYE_HEIGHT, Item, LoadDoor, LookingAt, Player, PlayerIntent,
     SimPlugin, StepPositions, UNITS_PER_METRE, WorldConfig,
@@ -156,7 +158,7 @@ fn main() {
     .add_systems(
         Update,
         (
-            model::attach_models,
+            (model::attach_models, model::pose_models).chain(),
             (
                 actor::attach_actors,
                 actor::animate_actors,
@@ -418,7 +420,7 @@ const MESSAGE_SECONDS: f32 = 4.0;
 
 fn update_subtitles(
     time: Res<Time>,
-    mut state: ResMut<oo_sim::script::ScriptState>,
+    mut state: ResMut<ScriptState>,
     mut shown: Local<Shown>,
     mut subtitle: Query<&mut Text, (With<SubtitleText>, Without<MessageText>)>,
     mut messages: Query<&mut Text, (With<MessageText>, Without<SubtitleText>)>,
@@ -512,11 +514,14 @@ fn setup_hud(mut commands: Commands) {
 #[derive(Component)]
 struct Crosshair;
 
+#[allow(clippy::too_many_arguments)]
 fn update_hud(
     players: Query<&LookingAt, With<Player>>,
     doors: Query<&LoadDoor>,
+    inner_doors: Query<(&PlacedRef, &Door)>,
     targets: Query<(Option<&Item>, Option<&Container>, Option<&Actor>)>,
     world: Option<Res<WorldData>>,
+    state: Res<ScriptState>,
     menu: Res<menu::Menu>,
     mut prompt: Query<&mut Text, With<ActivatePrompt>>,
     mut crosshair: Query<&mut Visibility, With<Crosshair>>,
@@ -537,6 +542,12 @@ fn update_hud(
                     return Some(format!("[Space] {}", door.label));
                 }
                 let world = world.as_ref()?;
+                if let Ok((placed, Door(base))) = inner_doors.get(e) {
+                    let open = state.doors.get(&placed.0).copied().unwrap_or_default();
+                    let verb = if open.is_open() { "Close" } else { "Open" };
+                    let name = world.doors.get(base).map_or("", |d| d.name.as_str());
+                    return Some(format!("[Space] {verb} {name}").trim_end().to_owned());
+                }
                 match targets.get(e).ok()? {
                     (Some(Item(base)), _, _) => {
                         Some(format!("[Space] Take {}", world.items.get(base)?.name))

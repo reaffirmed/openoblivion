@@ -12,9 +12,13 @@ use bevy::image::{
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use byroredux_core::string::StringPool;
-use byroredux_nif::import::{ImportedMesh, import_nif};
+use byroredux_nif::import::{ImportedMesh, import_nif, import_nif_scene};
 
+use oo_sim::animated::{AnimatedModels, ObjectAnimation};
 use oo_sim::{GameData, Model};
+
+/// An animated model's pieces, each with the node it hangs from.
+type ScenePieces = Vec<(Option<usize>, Part)>;
 
 /// One drawable piece of a model, positioned relative to the model's root.
 #[derive(Clone)]
@@ -27,6 +31,7 @@ pub struct Part {
 #[derive(Resource, Default)]
 pub struct ModelCache {
     models: HashMap<String, Option<Vec<Part>>>,
+    scenes: HashMap<String, Option<ScenePieces>>,
     textures: HashMap<String, Option<Handle<Image>>>,
     pub(crate) pool: StringPool,
 }
@@ -78,6 +83,45 @@ impl ModelCache {
             });
         }
         Some(parts)
+    }
+
+    /// Loads a model keeping its node tree: each piece comes with the index of
+    /// its node in the imported scene, and a transform relative to that node.
+    pub fn load_scene(
+        &mut self,
+        model: &str,
+        data: &GameData,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+    ) -> Option<ScenePieces> {
+        let key = model.to_ascii_lowercase();
+        if let Some(cached) = self.scenes.get(&key) {
+            return cached.clone();
+        }
+        let parts = read_nif(&key, data).map(|scene| {
+            let imported = import_nif_scene(&scene, &mut self.pool);
+            imported
+                .meshes
+                .iter()
+                .filter(|m| !m.positions.is_empty() && !m.indices.is_empty())
+                .map(|m| {
+                    let material = self.material(m, None, data, images);
+                    let part = Part {
+                        mesh: meshes.add(to_bevy_mesh(m)),
+                        material: materials.add(material),
+                        transform: Transform {
+                            translation: Vec3::from(m.translation),
+                            rotation: Quat::from_array(m.rotation),
+                            scale: Vec3::splat(m.scale),
+                        },
+                    };
+                    (m.parent_node, part)
+                })
+                .collect()
+        });
+        self.scenes.insert(key, parts.clone());
+        parts
     }
 
     /// A mesh's material, optionally with another base texture (an actor's skin,
@@ -205,12 +249,20 @@ pub(crate) fn to_bevy_mesh(m: &ImportedMesh) -> Mesh {
     mesh
 }
 
+/// An animated model's node entities, children of the reference, each placed
+/// relative to the model's root.
+#[derive(Component)]
+pub struct ModelNodes(Vec<Entity>);
+
 /// Gives every newly spawned [`Model`] entity its meshes, as children.
+/// Animated models keep their node tree so the pieces can move.
+#[allow(clippy::too_many_arguments)]
 pub fn attach_models(
     mut commands: Commands,
     data: Option<Res<GameData>>,
     added: Query<(Entity, &Model), Added<Model>>,
     mut cache: ResMut<ModelCache>,
+    mut animated: ResMut<AnimatedModels>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
@@ -219,6 +271,32 @@ pub fn attach_models(
     let mut loaded = 0;
     for (entity, model) in &added {
         commands.entity(entity).insert(Visibility::default());
+        if let Some(anims) = animated.load(&model.0, &data)
+            && let Some(parts) =
+                cache.load_scene(&model.0, &data, &mut meshes, &mut materials, &mut images)
+        {
+            let pose = anims.model_pose_at_rest();
+            let nodes: Vec<Entity> = pose
+                .iter()
+                .map(|at| {
+                    commands
+                        .spawn((*at, Visibility::default(), ChildOf(entity)))
+                        .id()
+                })
+                .collect();
+            for (node, part) in parts {
+                let parent = node.and_then(|n| nodes.get(n).copied()).unwrap_or(entity);
+                commands.spawn((
+                    Mesh3d(part.mesh),
+                    MeshMaterial3d(part.material),
+                    part.transform,
+                    ChildOf(parent),
+                ));
+            }
+            commands.entity(entity).insert(ModelNodes(nodes));
+            loaded += 1;
+            continue;
+        }
         let Some(parts) = cache.load(&model.0, &data, &mut meshes, &mut materials, &mut images)
         else {
             continue;
@@ -236,5 +314,19 @@ pub fn attach_models(
     }
     if loaded > 0 {
         info!("attached models to {loaded} references");
+    }
+}
+
+/// Moves animated models' nodes to the pose the simulation is playing.
+pub fn pose_models(
+    objects: Query<(&ObjectAnimation, &ModelNodes), Changed<ObjectAnimation>>,
+    mut nodes: Query<&mut Transform>,
+) {
+    for (anim, ModelNodes(entities)) in &objects {
+        for (entity, at) in entities.iter().zip(anim.pose()) {
+            if let Ok(mut t) = nodes.get_mut(*entity) {
+                *t = at;
+            }
+        }
     }
 }

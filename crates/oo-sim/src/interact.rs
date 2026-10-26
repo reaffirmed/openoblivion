@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
 
 use crate::actor::Actor;
+use crate::animated::{AnimRequest, Door};
 use crate::cell::{LoadDoor, PendingTransition, PlacedRef, WorldData};
 use crate::dialogue::Conversation;
 use crate::inventory::{
@@ -59,6 +60,7 @@ type Target = (
     Option<&'static Actor>,
     Option<&'static LoadDoor>,
     Option<&'static Scripted>,
+    Option<&'static Door>,
 );
 
 type PlayerView = (
@@ -100,7 +102,9 @@ pub(crate) fn activate(
         }
     }
     for (target, by, run_script) in wanted {
-        let Ok((_, (placed, item, container, actor, door, scripted))) = targets.get(target) else {
+        let Ok((_, (placed, item, container, actor, door, scripted, inner_door))) =
+            targets.get(target)
+        else {
             continue;
         };
         if run_script
@@ -108,6 +112,14 @@ pub(crate) fn activate(
             && world.scripting.handles_activation(*script)
         {
             state.activated.insert(placed.0, by);
+            continue;
+        }
+        // Doors open and close for anyone.
+        if inner_door.is_some() {
+            let open = state.doors.get(&placed.0).copied().unwrap_or_default();
+            requests
+                .animations
+                .push((placed.0, AnimRequest::Open(!open.is_open())));
             continue;
         }
         // Only the player's activations do anything else yet.

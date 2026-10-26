@@ -161,6 +161,53 @@ pub fn lights(order: &LoadOrder) -> Result<HashMap<u32, Light>> {
     Ok(out)
 }
 
+/// A door base record (`DOOR`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DoorInfo {
+    pub name: String,
+    /// `FNAM`: see the constants.
+    pub flags: u8,
+}
+
+impl DoorInfo {
+    pub const OBLIVION_GATE: u8 = 0x01;
+    pub const AUTOMATIC: u8 = 0x02;
+    pub const HIDDEN: u8 = 0x04;
+    pub const MINIMAL_USE: u8 = 0x08;
+}
+
+/// Every door base record, by global form ID. Later plugins win.
+pub fn doors(order: &LoadOrder) -> Result<HashMap<u32, DoorInfo>> {
+    let mut out = HashMap::new();
+    for (index, _, plugin) in order.plugins() {
+        for node in plugin.top_level() {
+            let Node::Group(g) = node? else { continue };
+            if g.record_type() != Some(Tag(*b"DOOR")) {
+                continue;
+            }
+            for node in g.children() {
+                let Node::Record(r) = node? else { continue };
+                let id = order.global(index, r.form_id);
+                if r.is_deleted() {
+                    out.remove(&id);
+                    continue;
+                }
+                let fields = r.fields()?;
+                let mut door = DoorInfo::default();
+                for f in fields.iter().flatten() {
+                    match &f.tag.0 {
+                        b"FULL" => door.name = f.zstring(),
+                        b"FNAM" => door.flags = f.data.first().copied().unwrap_or(0),
+                        _ => {}
+                    }
+                }
+                out.insert(id, door);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// A load door's destination (`XTEL`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Teleport {

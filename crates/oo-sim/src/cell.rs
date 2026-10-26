@@ -17,7 +17,7 @@ use oo_formats::actors::{ActorData, actor_data};
 use oo_formats::items::{ContainerInfo, ItemInfo, LeveledList, containers, items, leveled_items};
 use oo_formats::load_order::LoadOrder;
 use oo_formats::world::{
-    Cell, CellLighting, Light, Reference, form_id_by_editor_id, interior_cell,
+    Cell, CellLighting, DoorInfo, Light, Reference, doors, form_id_by_editor_id, interior_cell,
     interior_cell_by_form_id, interior_cell_ids, interior_cell_names, interior_reference_cells,
     lights, model_paths,
 };
@@ -84,6 +84,7 @@ pub struct WorldData {
     pub actors: ActorData,
     pub scripting: ScriptData,
     pub packages: HashMap<u32, Package>,
+    pub doors: HashMap<u32, DoorInfo>,
 }
 
 /// The interior cell that's loaded now.
@@ -187,6 +188,7 @@ fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
         actors: actor_data(&order)?,
         scripting: ScriptData::load(&order)?,
         packages: packages(&order)?,
+        doors: doors(&order)?,
         order,
     })
 }
@@ -478,6 +480,8 @@ fn spawn_reference(commands: &mut Commands, world: &WorldData, r: &Reference) ->
             },
         });
         out.load_door = true;
+    } else if world.doors.contains_key(&r.base) {
+        entity.insert(crate::animated::Door(r.base));
     }
     out
 }

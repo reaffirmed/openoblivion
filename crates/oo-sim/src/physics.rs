@@ -3,7 +3,8 @@
 //! ByroRedux extracts the `bhk*` shapes already converted to Y-up engine space;
 //! this maps them onto Rapier colliders. Everything is static for now, including
 //! clutter Oblivion simulates as dynamic: dynamic bodies need host-side ownership
-//! rules before they're worth turning on.
+//! rules before they're worth turning on. Doors and other animated models get
+//! colliders on their nodes instead, moved by [`crate::animated`].
 
 use std::collections::HashMap;
 
@@ -13,6 +14,7 @@ use byroredux_core::ecs::components::collision::CollisionShape;
 use byroredux_core::string::StringPool;
 use byroredux_nif::import::import_nif_with_collision;
 
+use crate::animated::{AnimatedModels, NodeCollider, ObjectAnimation};
 use crate::{GameData, Model, UNITS_PER_METRE};
 
 pub struct PhysicsPlugin;
@@ -30,14 +32,15 @@ impl Plugin for PhysicsPlugin {
                 .in_fixed_schedule(),
         )
         .init_resource::<CollisionCache>()
+        .init_resource::<AnimatedModels>()
         .add_systems(Update, attach_colliders);
     }
 }
 
 #[derive(Clone)]
-struct ColliderPart {
-    collider: Collider,
-    transform: Transform,
+pub(crate) struct ColliderPart {
+    pub(crate) collider: Collider,
+    pub(crate) transform: Transform,
 }
 
 #[derive(Resource, Default)]
@@ -80,7 +83,7 @@ impl CollisionCache {
 /// colliders rather than mapped to a Rapier compound, because parry panics on a
 /// compound holding another composite shape, and real Havok lists often hold
 /// triangle meshes (`bhkListShape` of `bhkNiTriStripsShape`s).
-fn flatten(shape: &CollisionShape, transform: Transform, out: &mut Vec<ColliderPart>) {
+pub(crate) fn flatten(shape: &CollisionShape, transform: Transform, out: &mut Vec<ColliderPart>) {
     if let CollisionShape::Compound { children } = shape {
         for (pos, rot, child) in children {
             let local = Transform::from_translation(*pos).with_rotation(*rot);
@@ -120,9 +123,32 @@ fn attach_colliders(
     data: Option<Res<GameData>>,
     added: Query<(Entity, &Model), Added<Model>>,
     mut cache: ResMut<CollisionCache>,
+    mut animated: ResMut<AnimatedModels>,
 ) {
     let Some(data) = data else { return };
     for (entity, model) in &added {
+        // Animated models get colliders that ride on their nodes.
+        if let Some(anims) = animated.load(&model.0, &data) {
+            let anim = ObjectAnimation::new(anims.clone());
+            let pose = anim.pose();
+            commands
+                .entity(entity)
+                .insert((RigidBody::Fixed, anim))
+                .with_children(|parent| {
+                    for (node, part) in &anims.colliders {
+                        let at = pose.get(*node).copied().unwrap_or_default();
+                        parent.spawn((
+                            part.collider.clone(),
+                            at * part.transform,
+                            NodeCollider {
+                                node: *node,
+                                offset: part.transform,
+                            },
+                        ));
+                    }
+                });
+            continue;
+        }
         let parts = cache.load(&model.0, &data);
         if parts.is_empty() {
             continue;
