@@ -1,0 +1,75 @@
+# Doors and animated objects
+
+How non-load doors report and change their state, and how `PlayGroup` drives an
+object's embedded animation sequences.
+
+## Open state (`GetOpenState`)
+
+```
+open_state(ref):
+    if ref's base object isn't a DOOR: 0
+    if the door's 3D has a controller manager with sequences "Open" and "Close":
+        if "Open" is currently playing:  2   # opening
+        if "Close" is currently playing: 4   # closing
+    if the reference's "open" flag is set: 1  # open
+    else: 3                                   # closed
+```
+
+So the assumed values are right: 0 not a door, 1 open, 2 opening, 3 closed, 4 closing.
+"Playing" means the sequence's state is *animating* at that moment. A door without both
+sequences only ever reports 1 or 3. Called without a reference, the command returns 0.
+
+## `SetOpenState n`
+
+- `n` non-zero (open): if the door is closed or closing (state 3 or 4), run the door's
+  normal toggle, the same routine activation uses; then play the `Open` sequence.
+- `n` = 0 (close): if the door is open or opening (state 1 or 2), run the toggle; then
+  play `Close`.
+
+It **animates**: it plays the sequence rather than snapping to its end, even when the
+door was already in the requested state. The game skips playing the sequence in a few
+special states (e.g. while loading, or when the reference has no 3D yet).
+
+## `SetDoorDefaultOpen n`
+
+Sets or clears a per-reference "default open" marker and marks the reference changed for
+the save game. Whether the door then counts as open is that marker combined with the
+reference's *Open by default* record flag: with that flag set the marker is inverted. The
+reference's change flags are updated to match (so a save stores the difference from the
+plugin).
+
+## `PlayGroup group flags` on a non-actor
+
+```
+manager = the object's NiControllerManager (from its 3D)
+if no 3D or no manager: log "PlayGroup Error: No 3d or controllers found…" and stop
+seq = manager's sequence named after the group (group code → name, e.g. Forward, Backward,
+      Idle, see actors-animation.md)
+if not found: log "PlayGroup Error: Sequence '<name>' not found…" and stop
+deactivate every other sequence except one named "Idle"
+if flags == 0: activate seq immediately at full weight
+else:          blend seq in over flags × 0.1 seconds (likely)
+mark seq to start from its beginning; mark the object animated
+```
+
+So yes, the group code maps to the sequence with the **same name** as the anim group. The
+`Idle` sequence is never stopped by `PlayGroup`, so an object's idle keeps running
+underneath. On actors `PlayGroup` goes through the actor's animation system instead.
+
+## Evidence
+
+| Fact | Source | Confidence |
+|------|--------|------------|
+| `GetOpenState` values and logic | Executable: the command's condition handler and the door-state routine | confirmed |
+| `SetOpenState` toggle + sequence play | Executable: the command handler | confirmed |
+| `SetDoorDefaultOpen` marker and flag interplay | Executable: the command handler and the "is open" test | confirmed (flag naming: likely) |
+| `PlayGroup` sequence lookup, other sequences stopped except Idle, error messages | Executable: the command handler | confirmed |
+| Blend time `flags × 0.1 s` | Executable: the blend call's argument | likely |
+
+## Open
+
+1. Exactly what activating a non-load door does, and how the DOOR flags (*automatic*,
+   *minimal use*, *hidden*) change it.
+2. Whether objects auto-play their `Idle` sequence when their 3D loads, and whether it
+   loops.
+3. Whether collision follows animated nodes and whether keyframed bodies push actors.

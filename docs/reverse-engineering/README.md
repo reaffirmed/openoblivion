@@ -58,4 +58,5 @@ addresses. Nothing from there is committed; only the distilled fact moves here.
 | [new-game.md](new-game.md) | What a new game does; why chargen NPCs greet | done |
 | [cell-loading.md](cell-loading.md) | Which exterior cells are loaded and when the grid moves | partly done |
 | [actors-animation.md](actors-animation.md) | Animation groups and how idle animations are picked | partly done |
+| [doors-and-animated-objects.md](doors-and-animated-objects.md) | Door open states, SetOpenState, PlayGroup on objects | partly done |
 | [light-falloff.md](light-falloff.md) | How a LIGH radius becomes attenuation | formula known; shader use open |
