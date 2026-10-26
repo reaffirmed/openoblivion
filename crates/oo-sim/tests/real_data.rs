@@ -68,6 +68,20 @@ fn skip_chargen(app: &mut App) {
     }
 }
 
+/// Unlocks a door or container, as its key would: the prison's doors out are
+/// locked until the tutorial opens them.
+fn unlock(app: &mut App, door: Entity) {
+    let id = app.world().entity(door).get::<PlacedRef>().unwrap().0;
+    if let Some(lock) = app
+        .world_mut()
+        .resource_mut::<oo_sim::script::ScriptState>()
+        .locks
+        .get_mut(&id)
+    {
+        lock.locked = false;
+    }
+}
+
 fn player(app: &mut App) -> Entity {
     app.world_mut()
         .query_filtered::<Entity, With<Player>>()
@@ -197,6 +211,7 @@ fn tutorial_prison_spawn_walls_and_doors() {
         .cloned()
         .expect("the prison should have a load door to another interior");
     println!("taking the door to {}", door_info.label);
+    unlock(&mut app, door);
 
     // Door references sit at the hinge side on the floor. Try standing 100 units
     // away in a few directions, in noclip so nothing gets in the way, and aim at
@@ -512,6 +527,7 @@ fn take_door_to(app: &mut App, player: Entity, cell: u32) {
         .find(|(_, d)| d.cell == Some(cell))
         .map(|(e, _)| e)
         .unwrap_or_else(|| panic!("no load door to {cell:08X}"));
+    unlock(app, door);
     assert!(
         look_at(app, player, door),
         "couldn't aim at the door to {cell:08X}"
@@ -641,13 +657,14 @@ fn tutorial_prison_items_and_containers() {
     );
 
     // Open the first non-empty container the ray can land on; take all, put one back.
-    let (_, reference, _) = containers
+    let (container, reference, _) = containers
         .iter()
         .copied()
         .find(|&(e, reference, base)| {
             !peek_contents(&mut app, reference, base).is_empty() && look_at(&mut app, player, e)
         })
         .expect("no non-empty container could be aimed at");
+    unlock(&mut app, container);
     activate(&mut app, player);
     let open = |app: &App| app.world().entity(player).get::<OpenContainer>().unwrap().0;
     assert_eq!(open(&app), Some(reference));
