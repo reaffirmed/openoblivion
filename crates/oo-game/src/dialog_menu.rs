@@ -2,9 +2,13 @@
 //!
 //! The simulation decides what's said ([`Conversation`]); this draws the
 //! speaker's name, the line and the topics, and turns clicks and keys into
-//! [`PlayerAction::Ask`] and [`PlayerAction::Goodbye`]. W/S or the mouse pick
-//! a topic, Enter, Space or a click asks it, Tab or Escape says goodbye.
-//! Without the game's menus a plain text panel stands in.
+//! [`PlayerAction::Ask`] and [`PlayerAction::Goodbye`].
+//!
+//! As in the game, a line is first spoken, shown as a subtitle with the topic
+//! list hidden, and then the topics come up. Until voices play, a line is
+//! spoken for a time that depends on its length; a click or Enter skips it.
+//! W/S or the mouse pick a topic, Enter, Space or a click asks it, Tab or
+//! Escape says goodbye. Without the game's menus a plain text panel stands in.
 
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
@@ -29,6 +33,15 @@ pub struct DialogScreen {
     image: Handle<Image>,
     selected: usize,
     scroll: usize,
+    /// The line last shown, to notice a new one.
+    line: Option<(u32, u32)>,
+    /// Seconds left of the line being spoken.
+    speaking: f32,
+}
+
+/// How long a line stays up without a voice: a reading pace, with a floor.
+fn speaking_time(text: &str) -> f32 {
+    (text.chars().count() as f32 * 0.06).max(2.0)
 }
 
 #[derive(Component)]
@@ -96,10 +109,37 @@ fn shown(world: &WorldData, talk: &Conversation, speaker_name: Option<&str>) -> 
     }
 }
 
+/// Puts the highlight behind the selected topic, offset by the box's own
+/// `user1`/`user2`, as wide as the topic's text.
+fn place_focus_box(xml: &mut XmlMenu, selected: usize, shown: bool) {
+    xml.set_num("dialog_focus_box", "visible", if shown { 2.0 } else { 0.0 });
+    if !shown {
+        return;
+    }
+    let num =
+        |xml: &XmlMenu, tile: &str, name: &str| xml.value(tile, name).map_or(0.0, |v| v.as_num());
+    let row = format!("{ROW}{selected}");
+    let x = num(xml, "dialog_topics", "x")
+        + num(xml, "dialog_topics_layout", "x")
+        + num(xml, PANE, "x")
+        + num(xml, &row, "x")
+        + num(xml, "dialog_focus_box", "user1");
+    let y = num(xml, "dialog_topics", "y")
+        + num(xml, "dialog_topics_layout", "y")
+        + num(xml, PANE, "y")
+        + num(xml, &row, "y")
+        + num(xml, "dialog_focus_box", "user2");
+    let width = num(xml, &row, "width") + 60.0;
+    xml.set_num("dialog_focus_box", "x", x);
+    xml.set_num("dialog_focus_box", "y", y);
+    xml.set_num("dialog_focus_box", "width", width);
+}
+
 /// Keys, mouse and drawing for the conversation screen. Runs before the
 /// inventory's input and takes the keys it uses.
 #[allow(clippy::too_many_arguments)]
 pub fn update_dialog(
+    time: Res<Time>,
     data: Option<Res<GameData>>,
     world: Option<Res<WorldData>>,
     mut screen: ResMut<DialogScreen>,
@@ -136,6 +176,7 @@ pub fn update_dialog(
     if !was_open {
         screen.selected = 0;
         screen.scroll = 0;
+        screen.line = None;
     }
     let speaker_name = talk
         .speaker
@@ -146,6 +187,15 @@ pub fn update_dialog(
         });
     let shown = shown(&world, talk, speaker_name);
     let count = shown.topics.len();
+    if talk.line != screen.line {
+        screen.line = talk.line;
+        screen.speaking = if talk.line.is_some() {
+            speaking_time(&shown.line)
+        } else {
+            0.0
+        };
+    }
+    screen.speaking = (screen.speaking - time.delta_secs()).max(0.0);
 
     // Keys.
     let pressed =
@@ -187,6 +237,12 @@ pub fn update_dialog(
             }
         }
     }
+    // A click or Enter while a line is spoken skips to the topics.
+    let speaking = screen.speaking > 0.0;
+    if speaking && (ask || mouse.just_pressed(MouseButton::Left)) {
+        screen.speaking = 0.0;
+        ask = false;
+    }
     let image = screen.image.clone();
     let (mut selected, mut scroll) = (screen.selected, screen.scroll);
     if let Some(xml) = screen.xml.as_mut() {
@@ -195,6 +251,9 @@ pub fn update_dialog(
         xml.set_screen(ui, texture_set(size));
         xml.set_str("DialogMenu", "user4", &shown.name);
         xml.set_str("dialog_text", "string", &shown.line);
+        // While a line is spoken the topics are hidden and the line shows as
+        // a subtitle (its layout shows when dialog_topics.visible is 0).
+        xml.set_num("dialog_topics", "visible", if speaking { 0.0 } else { 2.0 });
         if let Err(e) = xml.ensure_rows(count, TEMPLATE, PANE, ROW) {
             warn!("dialogue topics: {e}");
         }
@@ -231,7 +290,8 @@ pub fn update_dialog(
         if let Some(i) = hovered {
             selected = i;
         }
-        if mouse.just_pressed(MouseButton::Left) {
+        place_focus_box(xml, selected, !speaking && count > 0);
+        if mouse.just_pressed(MouseButton::Left) && !speaking {
             if names
                 .iter()
                 .any(|n| n.eq_ignore_ascii_case("dialog_goodbye"))
@@ -278,11 +338,13 @@ pub fn update_dialog(
         overlay.set_if_neq(Visibility::Hidden);
         text_visibility.set_if_neq(Visibility::Inherited);
         let mut s = format!("{}\n\n{}\n\n", shown.name, shown.line);
-        for (i, t) in shown.topics.iter().enumerate() {
-            let cursor = if i == selected { ">" } else { " " };
-            s.push_str(&format!("{cursor} {t}\n"));
+        if !speaking {
+            for (i, t) in shown.topics.iter().enumerate() {
+                let cursor = if i == selected { ">" } else { " " };
+                s.push_str(&format!("{cursor} {t}\n"));
+            }
+            s.push_str("\n[W/S] Choose  [Enter] Ask  [Tab] Goodbye");
         }
-        s.push_str("\n[W/S] Choose  [Enter] Ask  [Tab] Goodbye");
         if text.0 != s {
             text.0 = s;
         }
@@ -290,8 +352,8 @@ pub fn update_dialog(
     screen.scroll = scroll;
     screen.selected = selected;
 
-    // A goodbye line ends the conversation once it's been read.
-    if goodbye || (ask && talk.goodbye) {
+    // A goodbye line ends the conversation once it's been said.
+    if goodbye || (talk.goodbye && screen.speaking <= 0.0) {
         actions.0.push(PlayerAction::Goodbye);
     } else if ask && let Some(&topic) = talk.topics.get(selected) {
         actions.0.push(PlayerAction::Ask(topic));
