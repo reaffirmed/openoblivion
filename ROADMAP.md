@@ -109,8 +109,9 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
       mods that ship only source
 - [x] AI packages: schedules, conditions, travel, follow, wander, escort, path grids
 - [ ] The opening scene end to end: the Emperor's conversation, race and birthsign,
-      the secret wall, the assassins, the escort through the Subterrane (stage 15 of
-      CharacterGen reached on the PC so far)
+      the secret wall, the assassins, the escort through the Subterrane (stage 22 of
+      CharacterGen reached on the PC: the race menu, the Emperor's whole
+      conversation and the secret wall play out, checked by the tutorial replay)
 - [x] Audio: sound effects from `SOUN` records with DirectSound's 3D falloff; voiced
       dialogue with `.lip` timing; cell ambience and music picked the game's way
       (loose files by music type, uniform random), battle music while something fights
