@@ -89,6 +89,25 @@ impl GameData {
         out
     }
 
+    /// The loose files directly in a Data-relative folder, lower-case with
+    /// backslashes. Archives aren't searched: the game finds music this way.
+    pub fn list_loose(&self, folder: &str) -> Vec<String> {
+        let prefix = folder.replace('/', "\\").to_ascii_lowercase();
+        let prefix = prefix.trim_end_matches('\\');
+        let mut out: Vec<String> = std::fs::read_dir(self.dir.join(prefix.replace('\\', "/")))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+            .map(|e| {
+                let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+                format!("{prefix}\\{name}")
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
     /// Every file anywhere under a Data-relative folder, lower-case with
     /// backslashes, from loose files and archives together.
     pub fn list_all(&self, folder: &str) -> Vec<String> {

@@ -101,6 +101,15 @@ impl WorldData {
             _ => None,
         }
     }
+
+    /// A numeric game setting, as a float whichever way it's stored.
+    pub fn number(&self, editor_id: &str) -> Option<f32> {
+        match self.settings.get(&editor_id.to_ascii_lowercase())? {
+            Setting::Float(f) => Some(*f),
+            Setting::Int(i) => Some(*i as f32),
+            Setting::String(_) => None,
+        }
+    }
 }
 
 /// A reference that starts locked (`XLOC`).

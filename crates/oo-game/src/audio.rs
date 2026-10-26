@@ -221,7 +221,8 @@ impl Voice {
     }
 }
 
-/// How far a voice carries; until the game's own values are known.
+/// How far a voice carries if the plugins don't say
+/// (`fDialogAttenuationMin/Max`).
 const VOICE_MIN_DISTANCE: f32 = 300.0;
 const VOICE_MAX_DISTANCE: f32 = 3000.0;
 
@@ -234,8 +235,16 @@ fn play_voice(
     mut sources: ResMut<Assets<AudioSource>>,
     alive: Query<()>,
     placed: Query<(&PlacedRef, &GlobalTransform), Without<Player>>,
+    world: Option<Res<WorldData>>,
 ) {
     let Some(data) = data else { return };
+    let distance = |name, default| {
+        world
+            .as_ref()
+            .and_then(|w| w.number(name))
+            .filter(|d| *d > 0.0)
+            .unwrap_or(default)
+    };
     if std::mem::take(&mut voice.interrupt)
         && let Some(e) = voice.playing.take()
         && alive.contains(e)
@@ -264,8 +273,8 @@ fn play_voice(
                 Transform::from_translation(at),
                 Emitter {
                     at,
-                    min: VOICE_MIN_DISTANCE,
-                    max: VOICE_MAX_DISTANCE,
+                    min: distance("fDialogAttenuationMin", VOICE_MIN_DISTANCE),
+                    max: distance("fDialogAttenuationMax", VOICE_MAX_DISTANCE),
                     gain: 1.0,
                     owner: None,
                 },
@@ -328,19 +337,35 @@ fn start_ambient(
     }
 }
 
-/// The music playlist for the loaded cell.
+/// The music playing now.
 #[derive(Resource, Default)]
 struct Music {
-    folder: Option<String>,
+    /// The music type the track was picked for.
+    kind: Option<u8>,
     playing: Option<Entity>,
-    last: Option<String>,
+    track: Option<String>,
 }
 
 /// Music volume, until there's a settings menu.
 const MUSIC_VOLUME: f32 = 0.5;
 
-/// Plays tracks from the folder the cell's music type names, one after
-/// another at random, never the same twice running.
+/// The folder for a music type; anything unknown is Explore.
+fn music_folder(kind: u8) -> &'static str {
+    match kind {
+        Cell::MUSIC_PUBLIC => "music\\public",
+        Cell::MUSIC_DUNGEON => "music\\dungeon",
+        MUSIC_BATTLE => "music\\battle",
+        MUSIC_SPECIAL => "music\\special",
+        _ => "music\\explore",
+    }
+}
+
+const MUSIC_BATTLE: u8 = 4;
+const MUSIC_SPECIAL: u8 = 8;
+
+/// Plays the cell's music type: a uniformly random loose `*.mp3` from its
+/// folder, picked again whenever a track ends or the type changes. Picking
+/// the track that's already playing keeps it going.
 fn play_music(
     mut commands: Commands,
     cell: Option<Res<CurrentCell>>,
@@ -353,52 +378,50 @@ fn play_music(
     let (Some(cell), Some(data)) = (cell, data) else {
         return;
     };
-    // Until the game's rule for "default" is known, interiors that don't say
-    // otherwise get the exploring music.
-    let folder = match cell.music {
-        Cell::MUSIC_PUBLIC => "music\\public",
-        Cell::MUSIC_DUNGEON => "music\\dungeon",
-        _ => "music\\explore",
+    let kind = match cell.music {
+        Cell::MUSIC_PUBLIC | Cell::MUSIC_DUNGEON => cell.music,
+        _ => Cell::MUSIC_DEFAULT,
     };
-    if music.folder.as_deref() != Some(folder) {
-        music.folder = Some(folder.to_owned());
-        if let Some(e) = music.playing.take()
-            && alive.contains(e)
-        {
-            commands.entity(e).despawn();
-        }
-    }
-    if music.playing.is_some_and(|e| alive.contains(e)) {
+    let playing = music.playing.filter(|e| alive.contains(*e));
+    if music.kind == Some(kind) && playing.is_some() {
         return;
     }
-    let tracks: Vec<String> = cache
+    // A special track keeps playing over other requests.
+    if music.kind == Some(MUSIC_SPECIAL) && playing.is_some() {
+        return;
+    }
+    music.kind = Some(kind);
+    let folder = music_folder(kind);
+    let tracks = cache
         .folders
-        .entry(folder.to_owned())
+        .entry(format!("loose:{folder}"))
         .or_insert_with(|| {
-            data.list(folder)
+            data.list_loose(folder)
                 .into_iter()
-                .filter(|f| f.ends_with(".mp3") || f.ends_with(".wav"))
+                .filter(|f| f.ends_with(".mp3"))
                 .collect()
         })
         .clone();
-    let choices: Vec<&String> = tracks
-        .iter()
-        .filter(|t| tracks.len() < 2 || Some(*t) != music.last.as_ref())
-        .collect();
-    if choices.is_empty() {
+    if tracks.is_empty() {
         return;
     }
     cache.random = cache
         .random
         .wrapping_mul(1_103_515_245)
         .wrapping_add(12_345);
-    let track = choices[(cache.random >> 16) as usize % choices.len()].clone();
+    let track = tracks[(cache.random >> 16) as usize % tracks.len()].clone();
+    if playing.is_some() && music.track.as_ref() == Some(&track) {
+        return;
+    }
+    if let Some(e) = playing {
+        commands.entity(e).despawn();
+    }
     let Some(handle) = cache.file(&track, &data, &mut sources) else {
         music.playing = None;
         return;
     };
     info!("music: {track}");
-    music.last = Some(track);
+    music.track = Some(track);
     music.playing = Some(
         commands
             .spawn((
@@ -409,17 +432,16 @@ fn play_music(
     );
 }
 
-/// Full volume within `min`, fading to silence at `max`. An approximation
-/// until the game's own curve is known.
+/// The listener's rolloff factor (`[Audio] fDSoundRolloffFactor`). The
+/// default INI says 4.0, but startup can force 1.0; 1.0 until it's known
+/// which applies.
+const ROLLOFF: f32 = 1.0;
+
+/// DirectSound's distance model: full volume up to `min`, then 6 dB per
+/// doubling of distance times the rolloff, held constant beyond `max`.
 fn falloff(distance: f32, min: f32, max: f32) -> f32 {
-    if distance <= min {
-        return 1.0;
-    }
-    if distance >= max {
-        return 0.0;
-    }
-    let linear = 1.0 - (distance - min) / (max - min);
-    (min / distance).sqrt() * linear
+    let d = distance.clamp(min, max.max(min));
+    (min / d).powf(ROLLOFF)
 }
 
 /// Keeps each emitter a unit from the listener in its true direction, and
@@ -450,7 +472,8 @@ mod tests {
     #[test]
     fn falls_off_between_min_and_max() {
         assert_eq!(falloff(50.0, 100.0, 1000.0), 1.0);
-        assert_eq!(falloff(1000.0, 100.0, 1000.0), 0.0);
+        assert_eq!(falloff(1000.0, 100.0, 1000.0), 0.1);
+        assert_eq!(falloff(5000.0, 100.0, 1000.0), 0.1);
         let mid = falloff(400.0, 100.0, 1000.0);
         assert!(mid > 0.0 && mid < 1.0);
         assert!(falloff(300.0, 100.0, 1000.0) > mid);
