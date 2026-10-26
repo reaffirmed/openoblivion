@@ -235,6 +235,14 @@ pub(crate) fn activate(
                 Some(cell) => {
                     info!("going to {}", door.label);
                     transition.0 = Some((cell, door.arrival));
+                    // The door is unloaded with its cell, so the sound plays
+                    // at the player.
+                    if door.sound != 0 {
+                        sounds.write(PlaySound {
+                            source: PLAYER_REF,
+                            sound: SoundRef::Form(door.sound),
+                        });
+                    }
                 }
                 None => info!("that door leads outside; exteriors aren't implemented yet"),
             }

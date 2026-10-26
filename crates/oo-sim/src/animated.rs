@@ -306,7 +306,7 @@ pub struct NodeCollider {
 
 /// Starts requested animations, advances them, settles doors once they've
 /// finished opening or closing, and moves collision with the nodes.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn animate_objects(
     time: Res<Time>,
     mut state: ResMut<ScriptState>,
@@ -318,11 +318,38 @@ pub(crate) fn animate_objects(
         Option<&Children>,
     )>,
     mut colliders: Query<(&NodeCollider, &mut Transform)>,
+    doors: Query<(&PlacedRef, &Door)>,
     world: Option<Res<WorldData>>,
     mut sounds: MessageWriter<PlaySound>,
 ) {
     let requests = std::mem::take(&mut pending.animations);
     let dt = time.delta_secs();
+    // Doors sound whether or not their model animates; one that doesn't
+    // settles at once.
+    for &(reference, request) in &requests {
+        let AnimRequest::Open(open) = request else {
+            continue;
+        };
+        let Some((_, Door(base))) = doors.iter().find(|(p, _)| p.0 == reference) else {
+            continue;
+        };
+        if !objects.iter().any(|(p, ..)| p.0 == reference) {
+            let settled = if open { OpenState::Open } else { OpenState::Closed };
+            state.doors.insert(reference, settled);
+        }
+        let info = world.as_ref().and_then(|w| w.doors.get(base));
+        let sound = info.map_or(0, |d| if open { d.open_sound } else { d.close_sound });
+        debug!(
+            "{reference:08X}: door {} (sound {sound:08X})",
+            if open { "opens" } else { "closes" }
+        );
+        if sound != 0 {
+            sounds.write(PlaySound {
+                source: reference,
+                sound: SoundRef::Form(sound),
+            });
+        }
+    }
     for (placed, mut anim, door, children) in &mut objects {
         let fresh = anim.is_added();
         // A door that was left open is open when its cell loads.
@@ -344,19 +371,6 @@ pub(crate) fn animate_objects(
                     };
                     let now = if anim.play(name) { moving } else { settled };
                     state.doors.insert(placed.0, now);
-                    let info = door.and_then(|Door(base)| world.as_ref()?.doors.get(base));
-                    let sound = info.map_or(0, |d| if open { d.open_sound } else { d.close_sound });
-                    debug!(
-                        "{:08X}: door {} (sound {sound:08X})",
-                        placed.0,
-                        if open { "opens" } else { "closes" }
-                    );
-                    if sound != 0 {
-                        sounds.write(PlaySound {
-                            source: placed.0,
-                            sound: SoundRef::Form(sound),
-                        });
-                    }
                 }
                 AnimRequest::Group(code) => {
                     let name = ANIM_GROUPS.get(usize::from(code)).copied().unwrap_or("");

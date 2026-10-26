@@ -113,6 +113,8 @@ pub struct CreatureCombat {
     pub stealth: u8,
     pub soul: u8,
     pub attack_damage: u16,
+    /// `RNAM`: how far its own attacks reach, as the creature record stores it.
+    pub reach: u8,
 }
 
 /// The skills a creature's combat and magic numbers stand for; stealth
@@ -148,6 +150,7 @@ fn stats(fields: &[Field<'_>], creature: bool) -> (Stats, CreatureCombat) {
                 stealth: d[3],
                 soul: d[4],
                 attack_damage: u16_at(d, 10),
+                reach: find(b"RNAM", 1).map_or(0, |r| r[0]),
             };
             s.health = u32::from(u16_at(d, 6));
             s.attributes.copy_from_slice(&d[12..20]);

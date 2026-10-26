@@ -63,6 +63,8 @@ pub struct LoadDoor {
     /// What to call the destination, e.g. "Imperial Prison".
     pub label: String,
     pub arrival: SpawnPoint,
+    /// The door's opening sound (`SOUN`), played as the player goes through, or 0.
+    pub sound: u32,
 }
 
 /// Where a player should start: feet position and facing.
@@ -278,29 +280,39 @@ fn unknown_cell_message(order: &LoadOrder, editor_id: &str) -> String {
     )
 }
 
-/// Whether a reference is in the world. Scripts' changes win; otherwise a
-/// reference follows its enable parent (or does the opposite), and failing
-/// that its own initially-disabled flag. Parents outside the cell aren't
-/// loaded yet, so those references go by their own flag.
+/// Whether a reference is in the world. Scripts' changes win. Otherwise a
+/// reference flagged initially disabled stays disabled until a script enables
+/// it or its enable parent; an unflagged one follows its enable parent (or
+/// does the opposite). Parents outside the cell aren't loaded yet, so those
+/// references go by their own flag.
 fn is_enabled(r: &Reference, cell: &HashMap<u32, &Reference>, changes: &WorldChanges) -> bool {
+    /// (enabled, whether a script decided it)
     fn go(
         r: &Reference,
         cell: &HashMap<u32, &Reference>,
         changes: &WorldChanges,
         depth: u8,
-    ) -> bool {
+    ) -> (bool, bool) {
         if let Some(&enabled) = changes.enabled.get(&r.form_id) {
-            return enabled;
+            return (enabled, true);
         }
         // Parents can chain; a cycle is a broken plugin.
         match r.enable_parent {
             Some(p) if depth < 16 && cell.contains_key(&p.reference) => {
-                go(cell[&p.reference], cell, changes, depth + 1) != p.opposite
+                let (parent, scripted) = go(cell[&p.reference], cell, changes, depth + 1);
+                let follows = parent != p.opposite;
+                if scripted || !r.initially_disabled {
+                    (follows, scripted)
+                } else {
+                    // Flagged under an enabled parent: hidden until a
+                    // script enables one of them.
+                    (false, false)
+                }
             }
-            _ => !r.initially_disabled,
+            _ => (!r.initially_disabled, false),
         }
     }
-    go(r, cell, changes, 0)
+    go(r, cell, changes, 0).0
 }
 
 /// Gives an `ACHR`/`ACRE` entity what it needs: which actor it is, what it
@@ -385,6 +397,14 @@ fn spawn_cell(
         if !is_enabled(r, &by_id, changes) {
             disabled += 1;
             continue;
+        }
+        if r.initially_disabled {
+            info!(
+                "{:08X} is flagged initially disabled but enabled (script: {:?}, parent: {:?})",
+                r.form_id,
+                changes.enabled.get(&r.form_id),
+                r.enable_parent.map(|p| (format!("{:08X}", p.reference), p.opposite)),
+            );
         }
         let spawned = spawn_reference(commands, world, r);
         if spawned.has_model {
@@ -556,6 +576,7 @@ fn spawn_reference(commands: &mut Commands, world: &WorldData, r: &Reference) ->
                 position: Vec3::from(zup_to_yup_pos(t.position)),
                 yaw: heading_to_yaw(t.rotation[2]),
             },
+            sound: world.doors.get(&r.base).map_or(0, |d| d.open_sound),
         });
         out.load_door = true;
     }
@@ -678,6 +699,7 @@ pub(crate) fn resync_cell(
 pub(crate) fn apply_moves(
     mut commands: Commands,
     mut pending: ResMut<crate::script::Pending>,
+    mut state: ResMut<ScriptState>,
     mut transition: ResMut<PendingTransition>,
     world: Option<Res<WorldData>>,
     current: Option<Res<CurrentCell>>,
@@ -713,6 +735,12 @@ pub(crate) fn apply_moves(
             continue;
         };
         if who == crate::script::PLAYER_REF {
+            // The opening intro movie (`OblivionIntro.bik`) would play over
+            // the menu here; movies aren't played.
+            if std::mem::take(&mut state.race_menu_after_move) {
+                info!("new game: the race menu, after the move to {marker:08X}");
+                pending.menus.push(crate::character::ChargenMenu::Race);
+            }
             if cell == current.form_id {
                 for (mut t, mut steps) in &mut players {
                     t.translation = position + Vec3::Y * (PLAYER_HALF_HEIGHT + PLAYER_RADIUS + 1.0);
@@ -733,5 +761,50 @@ pub(crate) fn apply_moves(
         } else {
             commands.entity(entity).despawn();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oo_formats::esm::Tag;
+    use oo_formats::world::EnableParent;
+
+    fn reference(form_id: u32, flagged: bool, parent: Option<u32>) -> Reference {
+        Reference {
+            tag: Tag(*b"ACHR"),
+            form_id,
+            base: 0,
+            position: [0.0; 3],
+            rotation: [0.0; 3],
+            scale: 1.0,
+            teleport: None,
+            initially_disabled: flagged,
+            enable_parent: parent.map(|reference| EnableParent {
+                reference,
+                opposite: false,
+            }),
+            lock: None,
+        }
+    }
+
+    #[test]
+    fn initially_disabled_child_waits_for_a_script() {
+        let parent = reference(1, false, None);
+        let flagged = reference(2, true, Some(1));
+        let follower = reference(3, false, Some(4));
+        let hidden_parent = reference(4, true, None);
+        let cell: HashMap<u32, &Reference> = [&parent, &flagged, &follower, &hidden_parent]
+            .into_iter()
+            .map(|r| (r.form_id, r))
+            .collect();
+        let mut changes = WorldChanges::default();
+        assert!(is_enabled(&parent, &cell, &changes));
+        assert!(!is_enabled(&flagged, &cell, &changes));
+        assert!(!is_enabled(&follower, &cell, &changes));
+        changes.enabled.insert(1, true);
+        assert!(is_enabled(&flagged, &cell, &changes));
+        changes.enabled.insert(4, true);
+        assert!(is_enabled(&follower, &cell, &changes));
     }
 }

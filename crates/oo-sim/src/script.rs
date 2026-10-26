@@ -218,8 +218,10 @@ pub struct ScriptState {
     /// Start without character generation, for testing elsewhere than the
     /// prison (`--skip-chargen`).
     pub skip_chargen: bool,
-    /// The race menu a new game opens with has been asked for.
-    pub race_menu_asked: bool,
+    /// A new game opens the race menu when the player's next move finishes
+    /// (stage 5's `player.moveto CGPlayerStartMarker`); see
+    /// `docs/reverse-engineering/new-game.md`.
+    pub race_menu_after_move: bool,
     /// A character-creation menu is up (the client says so): the game is in
     /// menu mode, so `GameMode` scripts, AI and fighting wait.
     pub menu_open: bool,
@@ -237,6 +239,7 @@ impl ScriptState {
         if !self.skip_chargen && data.dialogue.quests.contains_key(&data.chargen_quest) {
             self.quests.entry(data.chargen_quest).or_default().running = true;
             self.in_chargen = true;
+            self.race_menu_after_move = true;
         }
         for (&id, q) in &data.dialogue.quests {
             if q.flags & Quest::START_GAME_ENABLED != 0 {

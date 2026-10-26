@@ -306,21 +306,11 @@ pub fn suggested_class(skill_use: &[f32; 21]) -> u32 {
 pub(crate) fn apply_choices(
     world: Option<Res<WorldData>>,
     mut state: ResMut<ScriptState>,
-    mut pending: ResMut<Pending>,
     mut players: Query<&mut PlayerActions, With<Player>>,
 ) {
     let Some(world) = world else { return };
     if state.character.is_none() {
         state.character = Some(Character::from_record(&world));
-    }
-    // A new game opens with the race menu. No script asks for it (the only
-    // ShowRaceMenu is at the sewer exit), so it's the engine's new-game path;
-    // the RE notes don't pin down when yet. It comes up once character
-    // generation is under way.
-    if state.in_chargen && !state.race_menu_asked {
-        state.race_menu_asked = true;
-        info!("new game: the race menu");
-        pending.menus.push(ChargenMenu::Race);
     }
     let mut changed = false;
     for mut actions in &mut players {

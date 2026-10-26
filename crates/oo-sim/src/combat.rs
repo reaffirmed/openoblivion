@@ -2,7 +2,7 @@
 //! attack on sight, and death.
 //!
 //! The arithmetic follows `docs/reverse-engineering/combat-and-levelling.md`.
-//! Where that is still open (maximum fatigue, reach, who attacks whom) the
+//! Where that is still open (maximum fatigue, who attacks whom) the
 //! rules here are the community-documented ones and say so.
 
 use std::collections::HashMap;
@@ -104,8 +104,9 @@ const ARROW_LIFETIME: f32 = 10.0;
 #[derive(Component, Debug, Clone, Copy)]
 pub struct Dead;
 
-/// Reach of an unarmed swing when the plugins don't set `fCombatDistance`.
-const COMBAT_DISTANCE: f32 = 141.0;
+/// `fCombatDistance` when the plugins don't set it: the reach of a reach-1
+/// weapon.
+const COMBAT_DISTANCE: f32 = 128.0;
 /// Seconds between swings, until attack animations time them.
 const PLAYER_SWING: f32 = 0.6;
 const ACTOR_SWING: f32 = 1.4;
@@ -248,6 +249,21 @@ pub fn starting_vitals(
 
 /// An actor's records: its stats, attack damage if it's a creature, and
 /// whether it's one.
+/// How far a melee swing reaches: `fCombatDistance` × the weapon's reach
+/// (`fHandReachMult` unarmed) × the actor's scale.
+///
+/// Creatures without a weapon use their own reach value per the RE notes, but
+/// how the record's `RNAM` byte maps to that factor isn't confirmed, so they
+/// reach like a reach-1 weapon for now.
+pub fn melee_reach(gmst: &Settings, weapon: Option<&WeaponInfo>, creature: bool, scale: f32) -> f32 {
+    let r = match weapon {
+        Some(w) => w.reach,
+        None if creature => 1.0,
+        None => setting(gmst, "fHandReachMult", 0.5),
+    };
+    setting(gmst, "fCombatDistance", COMBAT_DISTANCE) * r * scale
+}
+
 fn records(world: &WorldData, base: u32) -> Option<(&Stats, Option<f32>)> {
     if let Some(n) = world.actors.npcs.get(&base) {
         Some((&n.stats, None))
@@ -430,7 +446,6 @@ pub(crate) fn run_combat(
     }
 
     let mut blows: Vec<Blow> = std::mem::take(&mut hits.0);
-    let reach = setting(&world.settings, "fCombatDistance", COMBAT_DISTANCE);
 
     // The player's swing.
     let player_alive = state.vitals.get(&PLAYER_REF).is_none_or(|v| !v.dead);
@@ -499,7 +514,7 @@ pub(crate) fn run_combat(
         let bow = bow.is_some();
         if swing && player_alive && !bow && !fighter.blocking && fighter.cooldown == 0.0 {
             fighter.cooldown = PLAYER_SWING / held.map_or(1.0, |w| w.speed.max(0.1));
-            let reach = reach * held.map_or(1.0, |w| w.reach.max(0.1));
+            let reach = melee_reach(&world.settings, held, false, 1.0);
             let eye = feet + Vec3::Y * EYE_HEIGHT;
             let dir = Quat::from_euler(EulerRot::YXZ, intent.yaw, intent.pitch, 0.0) * Vec3::NEG_Z;
             let hit = rapier.single().ok().and_then(|rapier| {
@@ -592,7 +607,9 @@ pub(crate) fn run_combat(
                 transform.rotation = Quat::from_rotation_y((-flat.x).atan2(-flat.z));
             }
             let held = weapon(placed.0);
-            if flat.length() <= reach * held.map_or(1.0, |w| w.reach.max(0.1)) {
+            let creature = matches!(actor, Actor::Creature(_));
+            let reach = melee_reach(&world.settings, held, creature, transform.scale.x);
+            if flat.length() <= reach {
                 if fighter.cooldown == 0.0 {
                     fighter.cooldown = ACTOR_SWING / held.map_or(1.0, |w| w.speed.max(0.1));
                     blows.push(Blow {
@@ -807,6 +824,23 @@ mod tests {
         let (health, fatigue) = hand_damage(&world(), &stats, &v);
         assert!((health - 11.5).abs() < 1e-4);
         assert!((fatigue - 6.75).abs() < 1e-4);
+    }
+
+    #[test]
+    fn melee_reach_follows_the_formula() {
+        let gmst = world();
+        assert_eq!(melee_reach(&gmst, None, false, 1.0), 64.0);
+        assert_eq!(melee_reach(&gmst, None, true, 2.0), 256.0);
+        let spear = WeaponInfo {
+            kind: WeaponKind::BluntTwoHand,
+            speed: 1.0,
+            reach: 1.3,
+            flags: 0,
+            health: 100,
+            damage: 10,
+            model: None,
+        };
+        assert!((melee_reach(&gmst, Some(&spear), false, 1.0) - 166.4).abs() < 1e-3);
     }
 
     #[test]
