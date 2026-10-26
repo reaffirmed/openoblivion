@@ -14,7 +14,9 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::Collider;
 use byroredux_core::math::coord::{euler_zup_to_quat_yup, zup_to_yup_pos};
 use oo_formats::actors::{ActorData, actor_data};
-use oo_formats::items::{ContainerInfo, ItemInfo, LeveledList, containers, items, leveled_items};
+use oo_formats::items::{
+    ContainerInfo, ItemInfo, LeveledList, WeaponInfo, containers, items, leveled_items, weapons,
+};
 use oo_formats::load_order::LoadOrder;
 use oo_formats::world::{
     Cell, CellLighting, DoorInfo, Light, LockInfo, Reference, doors, form_id_by_editor_id,
@@ -80,6 +82,7 @@ pub struct WorldData {
     coc_marker: Option<u32>,
     lights: HashMap<u32, Light>,
     pub items: HashMap<u32, ItemInfo>,
+    pub weapons: HashMap<u32, WeaponInfo>,
     pub containers: HashMap<u32, ContainerInfo>,
     pub leveled_items: HashMap<u32, LeveledList>,
     pub actors: ActorData,
@@ -240,6 +243,7 @@ fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
         coc_marker: form_id_by_editor_id(&order, "COCMarkerHeading")?,
         lights: lights(&order)?,
         items: items(&order)?,
+        weapons: weapons(&order)?,
         containers: containers(&order)?,
         leveled_items: leveled_items(&order)?,
         actors: actor_data(&order)?,
@@ -298,7 +302,13 @@ fn spawn_actor(entity: &mut EntityCommands, world: &WorldData, r: &Reference) {
     let data = &world.actors;
     let (actor, equipment, appearance) = if let Some(npc) = data.npcs.get(&r.base) {
         let inventory = npc_inventory(npc, &world.leveled_items, PLAYER_LEVEL, r.form_id);
-        let equipment = choose_equipment(data, &inventory);
+        let mut equipment = choose_equipment(data, &inventory);
+        if let Some(weapon) = inventory
+            .iter()
+            .find(|s| s.count > 0 && world.weapons.contains_key(&s.item))
+        {
+            equipment.push(weapon.item);
+        }
         let appearance = npc_appearance(data, npc, &equipment);
         debug!(
             "NPC {:08X} {} ({} parts, wearing {:08X?})",

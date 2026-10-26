@@ -2,7 +2,8 @@
 //!
 //! Tab opens the inventory. Activating a container opens both side by side:
 //! W/S or the arrow keys pick a line, A/D or left/right switch sides, Space or
-//! Enter moves the whole stack across, T takes everything. Tab or Escape closes.
+//! Enter moves the whole stack across, T takes everything. In the inventory alone,
+//! Space or Enter equips or unequips. Tab or Escape closes.
 //! Everything goes to the simulation as [`PlayerAction`]s, which is also how a
 //! co-op client would send it.
 
@@ -168,6 +169,12 @@ pub(crate) fn menu_input(
     menu.row = menu.row.min(lines.saturating_sub(1));
 
     if !menu.container {
+        if pressed(&keys, KeyCode::Space, KeyCode::Enter)
+            && let Some(stack) = inventory.0.get(menu.row)
+        {
+            keys.clear_just_pressed(KeyCode::Space);
+            actions.0.push(PlayerAction::Equip(stack.item));
+        }
         return;
     }
     if pressed(&keys, KeyCode::Space, KeyCode::Enter) {

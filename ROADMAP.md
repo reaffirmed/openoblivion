@@ -117,7 +117,9 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
       aggression above 50 attack the player on sight and hit for their attack
       damage; anyone hit fights back; death raises OnDeath and drops the body;
       `StartCombat`, `StopCombat`, `IsInCombat`, `Kill`, `GetActorValue` and
-      `ModActorValue` for health, magicka and fatigue. Next: weapons, armour,
+      `ModActorValue` for health, magicka and fatigue; weapons from `WEAP` with the
+      weapon damage formula, reach and speed, equipped from the inventory, and
+      blocking with fists, weapon or shield. Next: armour,
       attack and death animations, NPC dispositions, archery, magic
 - [ ] Character creation: race, birthsign, class
 - [ ] Save and load
@@ -140,6 +142,8 @@ Things that only the person can give; work carries on around them.
 - Reference screenshots and short clips from the original game for side-by-side
   checks (lighting, menus, the opening scene), which need a click to launch it.
 - Priority calls when two directions compete; until then the order above stands.
+- Allow running `E:\Tools\xEdit\xDump64.exe` on the PC (or run xEdit yourself) so the
+  ESM parser can be cross-checked record by record against xEdit's dump.
 
 ### 3. Step outside: Tamriel and the Imperial City
 

@@ -114,6 +114,7 @@ pub fn spawn_player(mut commands: Commands, spawn: Option<Res<SpawnPoint>>) {
         PlayerMotion::default(),
         LookingAt::default(),
         Inventory::default(),
+        crate::actor::Equipment::default(),
         OpenContainer::default(),
         PlayerActions::default(),
         crate::dialogue::Conversation::default(),

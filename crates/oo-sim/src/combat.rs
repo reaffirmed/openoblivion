@@ -9,10 +9,11 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::*;
-use oo_formats::actors::Stats;
+use oo_formats::actors::{Stats, biped};
+use oo_formats::items::{WeaponInfo, WeaponKind};
 use oo_formats::settings::Setting;
 
-use crate::actor::Actor;
+use crate::actor::{Actor, Equipment};
 use crate::ai::Ai;
 use crate::cell::{PlacedRef, WorldData};
 use crate::player::{EYE_HEIGHT, PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent};
@@ -114,11 +115,38 @@ pub fn hand_damage(gmst: &Settings, stats: &Stats, v: &Vitals) -> (f32, f32) {
     (health, fatigue)
 }
 
-/// The share of a blow a blocker stops, blocking with fists.
-pub fn blocked_fraction(gmst: &Settings, stats: &Stats, v: &Vitals) -> f32 {
+/// Health a weapon blow takes away, for a weapon in full repair.
+pub fn weapon_damage(gmst: &Settings, stats: &Stats, v: &Vitals, weapon: &WeaponInfo) -> f32 {
+    let condition = 1.0;
+    let skill = f32::from(stats.skills[weapon.kind.skill()]) / 100.0;
+    let strength = f32::from(stats.attributes[Stats::STRENGTH]).min(100.0) / 100.0;
+    f32::from(weapon.damage)
+        * (setting(gmst, "fDamageWeaponConditionBase", 0.5)
+            + setting(gmst, "fDamageWeaponConditionMult", 0.5) * condition)
+        * (setting(gmst, "fDamageSkillBase", 0.2) + setting(gmst, "fDamageSkillMult", 1.5) * skill)
+        * (setting(gmst, "fDamageStrengthBase", 0.75)
+            + setting(gmst, "fDamageStrengthMult", 0.5) * strength)
+        * fatigue_factor(gmst, v)
+}
+
+/// What a blocker holds up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Guard {
+    Fists,
+    Weapon,
+    Shield,
+}
+
+/// The share of a blow a blocker stops.
+pub fn blocked_fraction(gmst: &Settings, stats: &Stats, v: &Vitals, guard: Guard) -> f32 {
     let skill = f32::from(stats.skills[Stats::BLOCK]) / 100.0;
+    let amount = match guard {
+        Guard::Fists => setting(gmst, "fBlockAmountHandToHandMult", 0.25),
+        Guard::Weapon => setting(gmst, "fBlockAmountWeaponMult", 0.5),
+        Guard::Shield => 1.0,
+    };
     ((setting(gmst, "fBlockSkillBase", 0.0) + setting(gmst, "fBlockSkillMult", 1.0) * skill)
-        * setting(gmst, "fBlockAmountHandToHandMult", 0.25)
+        * amount
         * fatigue_factor(gmst, v))
     .min(setting(gmst, "fBlockMax", 0.75))
 }
@@ -254,9 +282,42 @@ pub(crate) fn run_combat(
     mut actors: Query<FighterView, (Without<Player>, Without<Dead>)>,
     mut players: Query<(Entity, &Transform, &mut PlayerIntent, &mut Fighter), With<Player>>,
     mut ai: Query<&mut Ai>,
+    equipment: Query<(Option<&PlacedRef>, &Equipment, Has<Player>)>,
 ) {
     let Some(world) = world else { return };
     let dt = time.delta_secs();
+    let equipped: HashMap<u32, &[u32]> = equipment
+        .iter()
+        .filter_map(|(placed, e, player)| {
+            let r = if player { PLAYER_REF } else { placed?.0 };
+            Some((r, e.0.as_slice()))
+        })
+        .collect();
+    // The weapon in hand, if it strikes; bows wait for archery.
+    let weapon = |r: u32| {
+        equipped
+            .get(&r)
+            .and_then(|e| e.iter().find_map(|i| world.weapons.get(i)))
+            .filter(|w| w.kind != WeaponKind::Bow)
+    };
+    let guard = |r: u32| {
+        let shield = equipped.get(&r).is_some_and(|e| {
+            e.iter().any(|i| {
+                world
+                    .actors
+                    .wearables
+                    .get(i)
+                    .is_some_and(|w| w.slots & biped::SHIELD != 0)
+            })
+        });
+        if shield {
+            Guard::Shield
+        } else if weapon(r).is_some() {
+            Guard::Weapon
+        } else {
+            Guard::Fists
+        }
+    };
 
     // Regeneration for everyone alive.
     let fatigue_return = setting(&world.settings, "fFatigueReturnBase", 10.0);
@@ -299,8 +360,18 @@ pub(crate) fn run_combat(
         fighter.cooldown = (fighter.cooldown - dt).max(0.0);
         fighter.blocking = intent.block && player_alive;
         let swing = std::mem::take(&mut intent.attack);
-        if swing && player_alive && !fighter.blocking && fighter.cooldown == 0.0 {
-            fighter.cooldown = PLAYER_SWING;
+        let held = weapon(PLAYER_REF);
+        let bow = equipped.get(&PLAYER_REF).is_some_and(|e| {
+            e.iter().any(|i| {
+                world
+                    .weapons
+                    .get(i)
+                    .is_some_and(|w| w.kind == WeaponKind::Bow)
+            })
+        });
+        if swing && player_alive && !bow && !fighter.blocking && fighter.cooldown == 0.0 {
+            fighter.cooldown = PLAYER_SWING / held.map_or(1.0, |w| w.speed.max(0.1));
+            let reach = reach * held.map_or(1.0, |w| w.reach.max(0.1));
             let eye = feet + Vec3::Y * EYE_HEIGHT;
             let dir = Quat::from_euler(EulerRot::YXZ, intent.yaw, intent.pitch, 0.0) * Vec3::NEG_Z;
             let hit = rapier.single().ok().and_then(|rapier| {
@@ -369,9 +440,10 @@ pub(crate) fn run_combat(
             if flat.length() > 1.0 {
                 transform.rotation = Quat::from_rotation_y((-flat.x).atan2(-flat.z));
             }
-            if flat.length() <= reach {
+            let held = weapon(placed.0);
+            if flat.length() <= reach * held.map_or(1.0, |w| w.reach.max(0.1)) {
                 if fighter.cooldown == 0.0 {
-                    fighter.cooldown = ACTOR_SWING;
+                    fighter.cooldown = ACTOR_SWING / held.map_or(1.0, |w| w.speed.max(0.1));
                     blows.push(Blow {
                         attacker: placed.0,
                         target,
@@ -405,9 +477,10 @@ pub(crate) fn run_combat(
         let Some((stats, attack)) = base_of(blow.attacker).and_then(|b| records(&world, b)) else {
             continue;
         };
-        let (mut health, mut fatigue) = match attack {
-            Some(damage) => (damage, 0.0),
-            None => hand_damage(&world.settings, stats, &attacker_v),
+        let (mut health, mut fatigue) = match (attack, weapon(blow.attacker)) {
+            (Some(damage), _) => (damage, 0.0),
+            (None, Some(w)) => (weapon_damage(&world.settings, stats, &attacker_v, w), 0.0),
+            (None, None) => hand_damage(&world.settings, stats, &attacker_v),
         };
         let target_stats = base_of(blow.target).and_then(|b| records(&world, b));
         if blow.target == PLAYER_REF
@@ -415,7 +488,8 @@ pub(crate) fn run_combat(
             && let Some((target_stats, _)) = target_stats
             && let Some(target_v) = state.vitals.get(&blow.target)
         {
-            let stopped = blocked_fraction(&world.settings, target_stats, target_v);
+            let stopped =
+                blocked_fraction(&world.settings, target_stats, target_v, guard(blow.target));
             health *= 1.0 - stopped;
             fatigue *= 1.0 - stopped;
         }
@@ -494,6 +568,25 @@ mod tests {
     }
 
     #[test]
+    fn weapon_damage_follows_the_formula() {
+        let mut stats = Stats::default();
+        stats.skills[Stats::BLADE] = 50;
+        stats.attributes[Stats::STRENGTH] = 50;
+        let v = Vitals::full(100.0, 100.0, 200.0);
+        let sword = WeaponInfo {
+            kind: WeaponKind::BladeOneHand,
+            speed: 1.0,
+            reach: 1.0,
+            flags: 0,
+            health: 100,
+            damage: 10,
+            model: None,
+        };
+        // 10 × 1 × (0.2 + 0.75) × (0.75 + 0.25) × 1 = 9.5
+        assert!((weapon_damage(&world(), &stats, &v, &sword) - 9.5).abs() < 1e-4);
+    }
+
+    #[test]
     fn exhaustion_halves_the_fatigue_factor() {
         let mut v = Vitals::full(100.0, 100.0, 200.0);
         assert_eq!(fatigue_factor(&world(), &v), 1.0);
@@ -506,7 +599,8 @@ mod tests {
         let mut stats = Stats::default();
         stats.skills[Stats::BLOCK] = 100;
         let v = Vitals::full(100.0, 100.0, 200.0);
-        assert!((blocked_fraction(&world(), &stats, &v) - 0.25).abs() < 1e-6);
+        assert!((blocked_fraction(&world(), &stats, &v, Guard::Fists) - 0.25).abs() < 1e-6);
+        assert!((blocked_fraction(&world(), &stats, &v, Guard::Shield) - 0.75).abs() < 1e-6);
     }
 
     #[test]

@@ -25,7 +25,8 @@ use byroredux_menuxml::{
 use oo_formats::items::Stack;
 use oo_sim::cell::WorldData;
 use oo_sim::{
-    Container, GameData, Inventory, OpenContainer, PlacedRef, Player, PlayerActions, WorldChanges,
+    Container, Equipment, GameData, Inventory, OpenContainer, PlacedRef, Player, PlayerActions,
+    WorldChanges,
 };
 
 use crate::menu::{Menu, move_selected};
@@ -304,6 +305,7 @@ fn fill_row(
     index: usize,
     stack: Option<&Stack>,
     world: &WorldData,
+    equipped: bool,
 ) {
     let row = format!("{prefix}{index}");
     menu.set_num(&row, "listindex", index as f32);
@@ -350,8 +352,12 @@ fn fill_row(
     // one, −&true; (−2) for the hover one; the template's rules are
     // `0 − user10 == &false;` and `0 − user10`. The update loop sets −2 on the
     // hovered row. In the inventory it's the equipped marker.
+    // The equipped marker is assumed to show at &true; (2), like the game's
+    // other on/off traits.
     let user10 = if prefix.starts_with("cont_") {
         -1.0
+    } else if equipped {
+        2.0
     } else {
         0.0
     };
@@ -379,7 +385,7 @@ pub fn update_menu_overlay(
     window: Query<&Window, With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut wheel: MessageReader<MouseWheel>,
-    mut players: Query<(&Inventory, &OpenContainer, &mut PlayerActions), With<Player>>,
+    mut players: Query<(&Inventory, &Equipment, &OpenContainer, &mut PlayerActions), With<Player>>,
     containers: Query<(&PlacedRef, &Container)>,
     mut overlay: Query<&mut Visibility, With<MenuOverlay>>,
     mut images: ResMut<Assets<Image>>,
@@ -388,7 +394,7 @@ pub fn update_menu_overlay(
         Some(data),
         Some(world),
         Ok(window),
-        Ok((inventory, open, mut actions)),
+        Ok((inventory, equipment, open, mut actions)),
         Ok(mut visibility),
     ) = (
         data,
@@ -459,7 +465,10 @@ pub fn update_menu_overlay(
         warn!("menu list: {e}");
     }
     for i in 0..xml.rows {
-        fill_row(xml, prefix, i, stacks.get(i), &world);
+        let stack = stacks.get(i);
+        let equipped =
+            !(in_container && !menu.right) && stack.is_some_and(|s| equipment.0.contains(&s.item));
+        fill_row(xml, prefix, i, stack, &world, equipped);
     }
     xml.set_num(parent, "user0", stacks.len() as f32);
     if in_container {
@@ -506,6 +515,10 @@ pub fn update_menu_overlay(
         let clicked = |n: &str| names.iter().any(|x| x.eq_ignore_ascii_case(n));
         if hovered_row.is_some() && in_container {
             move_selected(&menu, &inventory.0, container_stacks, &mut actions);
+        } else if let Some(row) = hovered_row {
+            actions
+                .0
+                .push(oo_sim::PlayerAction::Equip(inventory.0[row].item));
         } else if clicked("cont_button_take_all") {
             actions.0.push(oo_sim::PlayerAction::TakeAll);
         } else if clicked("cont_button_exit") {

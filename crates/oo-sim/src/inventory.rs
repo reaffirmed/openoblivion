@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use oo_formats::items::{Stack, resolve_contents};
 
+use crate::actor::Equipment;
 use crate::cell::{PlacedRef, WorldData};
 use crate::player::Player;
 
@@ -87,6 +88,8 @@ pub enum PlayerAction {
     Ask(u32),
     /// End the conversation.
     Goodbye,
+    /// Put on or take off an item, or ready or put away a weapon.
+    Equip(u32),
 }
 
 /// The player's level, until there are levels.
@@ -132,13 +135,27 @@ pub(crate) fn handle_actions(
     world: Option<Res<WorldData>>,
     mut changes: ResMut<WorldChanges>,
     containers: Query<(&PlacedRef, &Container)>,
-    mut players: Query<(&mut PlayerActions, &mut OpenContainer, &mut Inventory), With<Player>>,
+    mut players: Query<
+        (
+            &mut PlayerActions,
+            &mut OpenContainer,
+            &mut Inventory,
+            &mut Equipment,
+        ),
+        With<Player>,
+    >,
 ) {
     let Some(world) = world else { return };
-    for (mut actions, mut open, mut inventory) in &mut players {
+    for (mut actions, mut open, mut inventory, mut equipment) in &mut players {
         for action in std::mem::take(&mut actions.0) {
             if action == PlayerAction::CloseContainer {
                 open.0 = None;
+                continue;
+            }
+            if let PlayerAction::Equip(item) = action {
+                if inventory.count(item) > 0 {
+                    equip(&world, &mut equipment, item);
+                }
                 continue;
             }
             let Some(reference) = open.0 else { continue };
@@ -174,9 +191,38 @@ pub(crate) fn handle_actions(
                         add_stack(contents, item, n);
                     }
                 }
-                // Closing is handled above; talking by `dialogue`, which runs first.
-                PlayerAction::CloseContainer | PlayerAction::Ask(_) | PlayerAction::Goodbye => {}
+                // Closing and equipping are handled above; talking by
+                // `dialogue`, which runs first.
+                PlayerAction::CloseContainer
+                | PlayerAction::Equip(_)
+                | PlayerAction::Ask(_)
+                | PlayerAction::Goodbye => {}
             }
         }
+        // Whatever left the inventory comes off.
+        equipment.0.retain(|&item| inventory.count(item) > 0);
     }
+}
+
+/// Toggles an item on or off: a weapon replaces the one in hand, and armour
+/// or clothing replaces what's in its slots.
+pub fn equip(world: &WorldData, equipment: &mut Equipment, item: u32) {
+    if let Some(i) = equipment.0.iter().position(|&e| e == item) {
+        equipment.0.remove(i);
+        return;
+    }
+    if world.weapons.contains_key(&item) {
+        equipment.0.retain(|e| !world.weapons.contains_key(e));
+    } else if let Some(w) = world.actors.wearables.get(&item) {
+        equipment.0.retain(|e| {
+            world
+                .actors
+                .wearables
+                .get(e)
+                .is_none_or(|other| other.slots & w.slots == 0)
+        });
+    } else {
+        return;
+    }
+    equipment.0.push(item);
 }

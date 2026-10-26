@@ -74,6 +74,105 @@ fn item_details(r: &Record<'_>) -> Result<(Option<String>, i32, f32)> {
     Ok((icon, value, weight))
 }
 
+/// A weapon's fighting numbers (`DATA`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeaponInfo {
+    pub kind: WeaponKind,
+    /// Swing speed multiplier, 1 for most.
+    pub speed: f32,
+    /// Reach multiplier, 1 for most.
+    pub reach: f32,
+    pub flags: u32,
+    /// Condition when new.
+    pub health: u32,
+    pub damage: u16,
+    /// The model held in the hand (`MODL`), relative to `meshes\`.
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeaponKind {
+    BladeOneHand,
+    BladeTwoHand,
+    BluntOneHand,
+    BluntTwoHand,
+    Staff,
+    Bow,
+}
+
+impl WeaponKind {
+    fn from_code(code: u32) -> Option<Self> {
+        Some(match code {
+            0 => Self::BladeOneHand,
+            1 => Self::BladeTwoHand,
+            2 => Self::BluntOneHand,
+            3 => Self::BluntTwoHand,
+            4 => Self::Staff,
+            5 => Self::Bow,
+            _ => return None,
+        })
+    }
+
+    /// The skill it trains and is rolled against, as a skill index
+    /// (Armorer 0 .. Speechcraft 20): Blade, Blunt, or Marksman. Staves cast
+    /// rather than strike; Blunt is what a staff swing would use.
+    pub fn skill(self) -> usize {
+        match self {
+            Self::BladeOneHand | Self::BladeTwoHand => 2,
+            Self::BluntOneHand | Self::BluntTwoHand | Self::Staff => 4,
+            Self::Bow => 16,
+        }
+    }
+
+    pub fn two_handed(self) -> bool {
+        matches!(
+            self,
+            Self::BladeTwoHand | Self::BluntTwoHand | Self::Staff | Self::Bow
+        )
+    }
+}
+
+/// Every weapon's fighting numbers, by global form ID.
+pub fn weapons(order: &LoadOrder) -> Result<HashMap<u32, WeaponInfo>> {
+    let mut out = HashMap::new();
+    for_each_top_record(order, &[b"WEAP"], |index, r| {
+        let id = order.global(index, r.form_id);
+        if r.is_deleted() {
+            out.remove(&id);
+            return Ok(());
+        }
+        let mut model = None;
+        let mut data = None;
+        for f in r.fields()?.iter() {
+            let f = f?;
+            match &f.tag.0 {
+                b"MODL" => model = Some(f.zstring()).filter(|s| !s.is_empty()),
+                b"DATA" if f.data.len() >= 30 => data = Some(f.data.to_vec()),
+                _ => {}
+            }
+        }
+        let Some(d) = data else { return Ok(()) };
+        let float = |at: usize| f32::from_le_bytes(d[at..at + 4].try_into().unwrap());
+        let Some(kind) = WeaponKind::from_code(u32_at(&d, 0)) else {
+            return Ok(());
+        };
+        out.insert(
+            id,
+            WeaponInfo {
+                kind,
+                speed: float(4),
+                reach: float(8),
+                flags: u32_at(&d, 12),
+                health: u32_at(&d, 20),
+                damage: u16::from_le_bytes([d[28], d[29]]),
+                model,
+            },
+        );
+        Ok(())
+    })?;
+    Ok(out)
+}
+
 /// One line of a container's or leveled list's contents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stack {
