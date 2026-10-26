@@ -38,6 +38,7 @@ That means, concretely:
 | Kind | Examples | Status |
 |---|---|---|
 | Plugin data (`.esp`/`.esm`) | New items, rebalances, new dungeons, cell edits | **Works.** Load order, form ID remapping, record overrides and deletions. `--plugins-txt` reads the game's own `Plugins.txt`. |
+| UI mods | DarNified UI, DarkUId DarN, custom fonts | Planned: the menus will be built from `Data/Menus/*.xml` and the game's fonts (milestone 2), so these carry over. |
 | Asset replacers | Texture packs, mesh replacers | **Works.** Loose files override archives, and plugin-named BSAs load with their plugin. |
 | Vanilla scripts | Quest mods, anything using the built-in script language | Needs the script engine (milestone 2), which vanilla quests need anyway. |
 | OBSE scripts | Mods calling OBSE's extra script functions | Possible: reimplement the OBSE function set in the script engine, one function at a time, by popularity. |
@@ -77,8 +78,14 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
 
 ### 2. Play the tutorial dungeon, from the prison cell to the sewer exit
 
-- [ ] Activate: pick up items, open containers, inventory screen
+- [x] Activate: pick up items, open containers (with placeholder text screens)
 - [ ] NPCs and creatures: skeletal meshes, idle animation (KF), equipment
+- [ ] The real menus: Oblivion's own menu definitions from `Data/Menus/*.xml`, with
+      the game's fonts (`.fnt`/`.tex`) and menu textures from the archives, drawn
+      by a Bevy UI layer, with mouse and keyboard. HUD, inventory, containers,
+      dialogue, the journal and the rest replace today's text placeholders. Because
+      the layouts come from the player's own files, UI mods such as DarNified UI and
+      DarkUId DarN work as they do in the original.
 - [ ] Dialogue: topics, conditions, the dialogue screen
 - [ ] The script engine: compile and run Oblivion's script language (quest stages,
       result scripts, object scripts)
@@ -86,7 +93,7 @@ the GOG release parse, and every vanilla mesh parses through ByroRedux.
       zombies
 - [ ] Melee, archery and magic combat; health, magicka and fatigue
 - [ ] Character creation: race, birthsign, class
-- [ ] HUD, menus, save and load
+- [ ] Save and load
 
 ### 3. Step outside: Tamriel and the Imperial City
 
