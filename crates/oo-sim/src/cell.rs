@@ -17,9 +17,9 @@ use oo_formats::actors::{ActorData, actor_data};
 use oo_formats::items::{ContainerInfo, ItemInfo, LeveledList, containers, items, leveled_items};
 use oo_formats::load_order::LoadOrder;
 use oo_formats::world::{
-    Cell, CellLighting, DoorInfo, Light, Reference, doors, form_id_by_editor_id, interior_cell,
-    interior_cell_by_form_id, interior_cell_ids, interior_cell_names, interior_reference_cells,
-    lights, model_paths,
+    Cell, CellLighting, DoorInfo, Light, LockInfo, Reference, doors, form_id_by_editor_id,
+    interior_cell, interior_cell_by_form_id, interior_cell_ids, interior_cell_names,
+    interior_reference_cells, lights, model_paths,
 };
 
 use crate::actor::{
@@ -30,8 +30,7 @@ use crate::inventory::{Container, Item, PLAYER_LEVEL, WorldChanges};
 use crate::player::{
     PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent, PlayerMotion, StepPositions,
 };
-use crate::script::{ScriptData, Scripted};
-use crate::trigger::Zone;
+use crate::script::{ScriptData, ScriptState, Scripted};
 use crate::{GameData, WorldConfig};
 use oo_formats::packages::{Package, packages};
 
@@ -85,6 +84,25 @@ pub struct WorldData {
     pub scripting: ScriptData,
     pub packages: HashMap<u32, Package>,
     pub doors: HashMap<u32, DoorInfo>,
+}
+
+/// A reference that starts locked (`XLOC`).
+#[derive(Component, Debug, Clone, Copy)]
+pub struct Lockable(pub LockInfo);
+
+/// Records the plugins' locks the first time their references load; after
+/// that the script state's copy is the one that counts.
+pub(crate) fn register_locks(
+    mut state: ResMut<ScriptState>,
+    added: Query<(&PlacedRef, &Lockable), Added<Lockable>>,
+) {
+    for (placed, Lockable(lock)) in &added {
+        state.locks.entry(placed.0).or_insert(crate::script::Lock {
+            locked: true,
+            level: lock.level,
+            key: lock.key,
+        });
+    }
 }
 
 /// The interior cell that's loaded now.
@@ -447,9 +465,6 @@ fn spawn_reference(commands: &mut Commands, world: &WorldData, r: &Reference) ->
     if let Some(&script) = world.scripting.object_scripts.get(&r.base) {
         entity.insert(Scripted(script));
     }
-    if let Some(zone) = r.primitive.as_ref().and_then(Zone::from_primitive) {
-        entity.insert(zone);
-    }
     if let Some(light) = world.lights.get(&r.base) {
         debug!(
             "light {:08X} at {:?}: radius {}, colour {:?}, flags {:#x}, falloff {}, fov {}",
@@ -480,7 +495,11 @@ fn spawn_reference(commands: &mut Commands, world: &WorldData, r: &Reference) ->
             },
         });
         out.load_door = true;
-    } else if world.doors.contains_key(&r.base) {
+    }
+    if let Some(lock) = r.lock {
+        entity.insert(Lockable(lock));
+    }
+    if r.teleport.is_none() && world.doors.contains_key(&r.base) {
         entity.insert(crate::animated::Door(r.base));
     }
     out

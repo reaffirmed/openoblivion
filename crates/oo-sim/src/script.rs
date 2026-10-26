@@ -111,6 +111,15 @@ pub struct QuestProgress {
     pub since_run: f32,
 }
 
+/// A door's or container's lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Lock {
+    pub locked: bool,
+    /// 0 to 100; 100 opens only with the key.
+    pub level: u8,
+    pub key: u32,
+}
+
 /// A line said aloud, shown as a subtitle.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Subtitle {
@@ -154,6 +163,9 @@ pub struct ScriptState {
     pub evaluate: HashSet<u32>,
     /// Doors that have been opened or closed; the rest are closed.
     pub doors: HashMap<u32, crate::animated::OpenState>,
+    /// Locks on doors and containers, seeded from the plugins as their cells
+    /// load and changed by scripts and keys.
+    pub locks: HashMap<u32, Lock>,
     /// Character generation is under way (`SetInChargen`).
     pub in_chargen: bool,
     started: bool,
@@ -608,7 +620,6 @@ impl Host for GameHost<'_> {
             | "CanPayCrimeGold"
             | "GetDestroyed"
             | "GetEquipped"
-            | "GetLocked"
             | "IsInMyOwnedCell"
             | "GetCurrentAIProcedure" => 0.0,
             "MoveTo" | "MoveToMarker" => {
@@ -631,8 +642,6 @@ impl Host for GameHost<'_> {
             | "ForceActorValue"
             | "SetActorValue"
             | "ModActorValue"
-            | "Lock"
-            | "Unlock"
             | "PlaySound"
             | "PlaySound3D"
             | "LoopGroup"
@@ -654,6 +663,23 @@ impl Host for GameHost<'_> {
                 1.0
             }
             "GetDisabled" | "IsXBox" => 0.0,
+            "GetLocked" => {
+                flag(subject.is_some_and(|r| self.state.locks.get(&r).is_some_and(|l| l.locked)))
+            }
+            "GetLockLevel" => subject
+                .and_then(|r| self.state.locks.get(&r))
+                .map_or(0.0, |l| f64::from(l.level)),
+            "Lock" | "Unlock" => {
+                let Some(target) = subject else {
+                    return Err(format!("{} requires a reference", command.name));
+                };
+                let lock = self.state.locks.entry(target).or_default();
+                lock.locked = command.name == "Lock";
+                if lock.locked && !args.is_empty() {
+                    lock.level = arg_number(args, 0).clamp(0.0, 100.0) as u8;
+                }
+                1.0
+            }
             "GetOpenState" => subject.map_or(0.0, |r| {
                 f64::from(self.state.doors.get(&r).copied().unwrap_or_default() as u8)
             }),

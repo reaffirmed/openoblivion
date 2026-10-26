@@ -114,6 +114,27 @@ pub(crate) fn activate(
             state.activated.insert(placed.0, by);
             continue;
         }
+        // Locked doors and containers open only with the key; picking locks
+        // isn't implemented yet.
+        if (inner_door.is_some() || door.is_some() || container.is_some())
+            && let Some(lock) = state.locks.get_mut(&placed.0)
+            && lock.locked
+        {
+            let has_key = by == PLAYER_REF && lock.key != 0 && inventory.count(lock.key) > 0;
+            if !has_key {
+                if by == PLAYER_REF {
+                    let message = if lock.level >= 100 {
+                        "This requires a key."
+                    } else {
+                        "Locked. Picking locks isn't implemented yet."
+                    };
+                    state.messages.push(message.to_owned());
+                }
+                continue;
+            }
+            lock.locked = false;
+            state.messages.push("Unlocked with the key.".to_owned());
+        }
         // Doors open and close for anyone.
         if inner_door.is_some() {
             let open = state.doors.get(&placed.0).copied().unwrap_or_default();

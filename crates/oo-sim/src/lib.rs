@@ -62,6 +62,8 @@ impl Plugin for SimPlugin {
             .init_resource::<WorldChanges>()
             .init_resource::<script::ScriptState>()
             .init_resource::<script::Pending>()
+            .init_resource::<trigger::PhantomCache>()
+            .add_systems(Update, trigger::attach_zones)
             // The simulation steps at a fixed rate, independent of framerate.
             .insert_resource(Time::<Fixed>::from_hz(SIM_HZ))
             .add_systems(Startup, cell::load_world)
@@ -70,6 +72,7 @@ impl Plugin for SimPlugin {
             .add_systems(
                 FixedUpdate,
                 (
+                    cell::register_locks,
                     interact::update_looking_at,
                     interact::activate,
                     dialogue::update_conversations,
