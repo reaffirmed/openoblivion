@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
+use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
 use clap::Parser;
 use oo_sim::{SimPlugin, SpawnPoint, UNITS_PER_METRE, WorldConfig};
 
@@ -26,32 +27,74 @@ struct Args {
     /// Editor ID of the interior cell to load, e.g. "ICMarketDistrictTheGildedCarafe".
     #[arg(long)]
     cell: Option<String>,
+    /// Save a screenshot here once the cell has loaded, then quit. For testing.
+    #[arg(long)]
+    screenshot: Option<PathBuf>,
+    /// Start the camera here instead of above the cell's centre: "x,y,z,yaw,pitch",
+    /// in engine units (Y up) and degrees.
+    #[arg(long, value_delimiter = ',', allow_negative_numbers = true)]
+    camera: Option<Vec<f32>>,
 }
+
+/// Where `--camera` puts the camera, if it was given.
+#[derive(Resource)]
+struct CameraStart(Vec<f32>);
+
+/// Where `--screenshot` goes, if it was given.
+#[derive(Resource)]
+struct ScreenshotOnce(PathBuf);
 
 fn main() {
     let args = Args::parse();
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "OpenOblivion".into(),
-                ..default()
-            }),
+    if args.camera.as_ref().is_some_and(|c| c.len() != 5) {
+        eprintln!("--camera takes five numbers: x,y,z,yaw,pitch");
+        std::process::exit(2);
+    }
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: "OpenOblivion".into(),
             ..default()
-        }))
-        .add_plugins(SimPlugin(WorldConfig {
-            data_dir: args.data,
-            plugin: args.plugin,
-            cell: args.cell,
-        }))
-        .init_resource::<ModelCache>()
-        .insert_resource(GlobalAmbientLight {
-            brightness: 400.0,
-            ..default()
-        })
-        // After the sim's Startup systems, so the spawn point exists.
-        .add_systems(PostStartup, setup_scene)
-        .add_systems(Update, (model::attach_models, fly_camera))
-        .run();
+        }),
+        ..default()
+    }))
+    .add_plugins(SimPlugin(WorldConfig {
+        data_dir: args.data,
+        plugin: args.plugin,
+        cell: args.cell,
+    }))
+    .init_resource::<ModelCache>()
+    .insert_resource(GlobalAmbientLight {
+        brightness: 400.0,
+        ..default()
+    })
+    // After the sim's Startup systems, so the spawn point exists.
+    .add_systems(PostStartup, setup_scene)
+    .add_systems(Update, (model::attach_models, fly_camera));
+    if let Some(camera) = args.camera {
+        app.insert_resource(CameraStart(camera));
+    }
+    if let Some(path) = args.screenshot {
+        app.insert_resource(ScreenshotOnce(path))
+            .add_systems(Update, take_screenshot);
+    }
+    app.run();
+}
+
+/// Waits for models and textures to settle, saves one screenshot, then exits.
+fn take_screenshot(mut commands: Commands, mut frames: Local<u32>, target: Res<ScreenshotOnce>) {
+    *frames += 1;
+    if *frames != 120 {
+        return;
+    }
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(target.0.clone()))
+        .observe(
+            |_: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {
+                exit.write(AppExit::Success);
+            },
+        );
 }
 
 #[derive(Component)]
@@ -63,9 +106,11 @@ struct FlyCamera {
 fn setup_scene(
     mut commands: Commands,
     spawn: Option<Res<SpawnPoint>>,
+    camera_start: Option<Res<CameraStart>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    let (mut yaw, mut pitch) = (0.0, -0.2);
     let start = match spawn {
         Some(s) => s.0,
         None => {
@@ -77,6 +122,14 @@ fn setup_scene(
             ));
             Vec3::new(0.0, 2.0 * UNITS_PER_METRE, 10.0 * UNITS_PER_METRE)
         }
+    };
+    let start = match camera_start.as_deref() {
+        Some(CameraStart(c)) => {
+            yaw = c[3].to_radians();
+            pitch = c[4].to_radians();
+            Vec3::new(c[0], c[1], c[2])
+        }
+        None => start,
     };
     commands.spawn((
         DirectionalLight {
@@ -93,10 +146,7 @@ fn setup_scene(
             ..default()
         }),
         Transform::from_translation(start),
-        FlyCamera {
-            yaw: 0.0,
-            pitch: -0.2,
-        },
+        FlyCamera { yaw, pitch },
     ));
 }
 

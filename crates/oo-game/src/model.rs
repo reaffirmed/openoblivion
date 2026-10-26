@@ -6,7 +6,9 @@
 use std::collections::HashMap;
 
 use bevy::asset::RenderAssetUsages;
-use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
+use bevy::image::{
+    CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor, ImageType,
+};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use byroredux_core::string::StringPool;
@@ -142,7 +144,13 @@ impl ModelCache {
                 ImageType::Extension("dds"),
                 CompressedImageFormats::BC,
                 true,
-                ImageSampler::Default,
+                // Oblivion's UVs routinely run outside 0..1 and expect the texture to tile;
+                // Bevy's default sampler clamps, which smears the edge texels instead.
+                ImageSampler::Descriptor(ImageSamplerDescriptor {
+                    address_mode_u: ImageAddressMode::Repeat,
+                    address_mode_v: ImageAddressMode::Repeat,
+                    ..ImageSamplerDescriptor::linear()
+                }),
                 RenderAssetUsages::RENDER_WORLD,
             ) {
                 Ok(img) => Some(images.add(img)),
@@ -161,9 +169,10 @@ impl ModelCache {
 }
 
 fn to_bevy_mesh(m: &ImportedMesh) -> Mesh {
-    // NIF triangles are clockwise; Bevy treats counter-clockwise as front-facing.
-    let (triangles, _) = m.indices.as_chunks::<3>();
-    let indices: Vec<u32> = triangles.iter().flat_map(|&[a, b, c]| [a, c, b]).collect();
+    // ByroRedux's Z-up to Y-up conversion already leaves triangles counter-clockwise,
+    // which is what Bevy treats as front-facing. Swapping them again turns every
+    // room inside out (checked against the tutorial prison, ImperialDungeon01).
+    let indices = m.indices.clone();
 
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -185,6 +194,14 @@ fn to_bevy_mesh(m: &ImportedMesh) -> Mesh {
     mesh
 }
 
+/// Heading markers, X markers, door markers and the like have models so the
+/// editor can show them, but the game never draws them.
+fn is_editor_marker(model: &str) -> bool {
+    let file = model.rsplit(['\\', '/']).next().unwrap_or(model);
+    file.get(..6)
+        .is_some_and(|p| p.eq_ignore_ascii_case("marker"))
+}
+
 /// Gives every newly spawned [`Model`] entity its meshes, as children.
 pub fn attach_models(
     mut commands: Commands,
@@ -199,6 +216,9 @@ pub fn attach_models(
     let mut loaded = 0;
     for (entity, model) in &added {
         commands.entity(entity).insert(Visibility::default());
+        if is_editor_marker(&model.0) {
+            continue;
+        }
         let Some(parts) = cache.load(&model.0, &data, &mut meshes, &mut materials, &mut images)
         else {
             continue;

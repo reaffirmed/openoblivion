@@ -5,3 +5,6 @@
 *.bsa
 *.exe
 *.dll
+
+# Local game install lives here; never commit it.
+/Oblivion/

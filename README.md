@@ -5,8 +5,9 @@ A from-scratch engine for The Elder Scrolls IV: Oblivion (2006), written in Rust
 reads the data files of a copy of Oblivion you already own. It ships no game code,
 assets or data.
 
-Status: early. Everything is tested on synthetic files only; nothing has been run against
-the real game yet.
+Status: early. Checked against the GOG release (1.2.0416 with Shivering Isles and the
+DLC): every plugin record and all 17 BSAs parse, and interior cells such as the tutorial
+prison (`ImperialDungeon01`) draw with their meshes and textures.
 
 ## Layout
 
@@ -51,11 +52,15 @@ cargo run -p oo-game --release -- --data "$DATA" --cell ICMarketDistrictTheGilde
 In the game: WASD to move, Space/Ctrl for up/down, Shift for speed, hold right mouse to
 look. Interior lighting isn't implemented yet, so cells are lit by a flat ambient light.
 
+For testing without a person at the keyboard, `--screenshot shot.png` saves one frame
+once the cell has loaded and quits, and `--camera=x,y,z,yaw,pitch` (engine units, Y up,
+degrees) picks where the camera starts.
+
 ## Roadmap
 
 1. **Data files.** Plugin and BSA readers, interior cells and references (done).
 2. **One interior cell.** Draw every reference with its NIF meshes and DDS textures
-   (written, untested against real game files). Next: cell lighting (`XCLL`, `LIGH`).
+   (works on real game files). Next: cell lighting (`XCLL`, `LIGH`).
 3. **Co-op skeleton.** `bevy_replicon` host and client, two players walking around the
    same cell.
 4. **Exteriors.** `LAND` heightmaps and texture layers, cell streaming in Tamriel.

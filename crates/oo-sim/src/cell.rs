@@ -85,8 +85,10 @@ pub fn spawn_interior(
     };
     let models = model_paths(plugin)?;
 
-    let mut with_model = 0;
-    let mut sum = Vec3::ZERO;
+    // Positions of everything with a model. The spawn point is their per-axis
+    // median: real cells have strays (a loaf of bread 150 km off in the
+    // tutorial prison) that would drag a mean out into the void.
+    let mut placed = Vec::new();
     for r in &cell.references {
         let translation = Vec3::from(zup_to_yup_pos(r.position));
         let [rx, ry, rz] = r.rotation;
@@ -98,19 +100,29 @@ pub fn spawn_interior(
         let mut entity = commands.spawn((transform, PlacedRef(r.form_id), BaseForm(r.base)));
         // Markers, NPCs and the like have no model of their own (yet).
         if let Some(model) = models.get(&r.base) {
+            debug!(
+                "{:08X} at {:?} rot {:?}: {model}",
+                r.form_id, r.position, r.rotation
+            );
             entity.insert(Model(model.clone()));
-            sum += translation;
-            with_model += 1;
+            placed.push(translation);
         }
     }
     info!(
-        "cell {} ({:08X}): {} references, {with_model} with models",
+        "cell {} ({:08X}): {} references, {} with models",
         cell.editor_id,
         cell.form_id,
-        cell.references.len()
+        cell.references.len(),
+        placed.len()
     );
-    if with_model > 0 {
-        commands.insert_resource(SpawnPoint(sum / with_model as f32 + Vec3::Y * 100.0));
+    if !placed.is_empty() {
+        let axis = |f: fn(&Vec3) -> f32| {
+            let mut v: Vec<f32> = placed.iter().map(f).collect();
+            let mid = v.len() / 2;
+            *v.select_nth_unstable_by(mid, f32::total_cmp).1
+        };
+        let median = Vec3::new(axis(|p| p.x), axis(|p| p.y), axis(|p| p.z));
+        commands.insert_resource(SpawnPoint(median + Vec3::Y * 100.0));
     }
     Ok(())
 }
