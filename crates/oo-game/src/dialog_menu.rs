@@ -212,6 +212,12 @@ pub fn update_dialog(
             (Some(_), Some(seconds)) => seconds,
             (Some(_), None) => oo_sim::dialogue::speaking_time(&shown.line),
         };
+        info!(
+            "dialogue: line shown for {:.1} s ({} voice files), {} characters",
+            screen.speaking,
+            voiced.0.len(),
+            shown.line.chars().count()
+        );
         match (talk.speaker, voiced.0.is_empty()) {
             (Some(speaker), false) => voice.say(speaker, voiced.0, false),
             _ => voice.stop(),
@@ -272,6 +278,13 @@ pub fn update_dialog(
         text_visibility.set_if_neq(Visibility::Hidden);
         overlay.set_if_neq(Visibility::Inherited);
         xml.set_screen(ui, texture_set(size));
+        // The Goodbye button picks its art by platform (`_filename_1` on PC),
+        // but the switch value didn't survive our parse: it reads case 0.
+        xml.set_str(
+            "dialog_goodbye",
+            "filename",
+            "Menus\\Dialog\\dialog_button_goodbye.dds",
+        );
         xml.set_str("DialogMenu", "user4", &shown.name);
         xml.set_str("dialog_text", "string", &shown.line);
         // While a line is spoken the topics are hidden and the line shows as

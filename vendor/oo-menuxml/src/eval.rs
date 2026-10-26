@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 
-use crate::parse::{Document, Op, OpArg, OpKind, RawTrait, Scalar};
+use crate::parse::{Document, Op, OpArg, OpKind, RawTrait, Scalar, TileKind};
 
 /// The pseudo-tile traits `screen()` answers for. `cropx`/`cropy` are the
 /// 4:3-safe insets: Oblivion's UI coordinate math was authored for 4:3,
@@ -116,6 +116,9 @@ pub struct EvalState<'a> {
     /// Reference-depth guard: a self-referential op chain (possible in
     /// third-party menus) must not recurse forever.
     depth: u32,
+    /// Fonts by `<font>` index, to size text tiles: like the game, a text
+    /// tile without an authored `width`/`height` is as big as its text.
+    fonts: &'a [Option<std::sync::Arc<crate::font::Font>>],
 }
 
 /// Hard cap on chained trait reads. Vanilla chains are ≤ 3 deep; 32
@@ -136,7 +139,37 @@ impl<'a> EvalState<'a> {
             overrides,
             memo: HashMap::new(),
             depth: 0,
+            fonts: &[],
         }
+    }
+
+    /// Sizes unauthored text tiles from their text in these fonts.
+    pub fn with_fonts(mut self, fonts: &'a [Option<std::sync::Arc<crate::font::Font>>]) -> Self {
+        self.fonts = fonts;
+        self
+    }
+
+    /// A text tile's size: its widest wrapped line by its line count.
+    fn text_size(&mut self, tile: usize) -> (f32, f32) {
+        let string = match self.trait_value(tile, "string") {
+            Scalar::Str(s) => s,
+            Scalar::Num(n) => crate::layout::format_number(n),
+        };
+        let index = (self.trait_value(tile, "font").as_num().clamp(0.0, 255.0) as usize).max(1);
+        let Some(font) = self.fonts.get(index).and_then(|f| f.clone()) else {
+            return (0.0, 0.0);
+        };
+        if string.is_empty() {
+            return (0.0, 0.0);
+        }
+        let wrap_width = self.trait_value(tile, "wrapwidth").as_num().max(0.0);
+        let wrap_lines = self.trait_value(tile, "wraplines").as_num().max(0.0) as u32;
+        let lines = crate::raster::wrap(&string, &font, wrap_width, wrap_lines);
+        let width = lines
+            .iter()
+            .map(|l| font.measure_width(l))
+            .fold(0.0, f32::max);
+        (width, lines.len() as f32 * font.line_height())
     }
 
     /// Evaluate every trait of every tile, in arena (document) order.
@@ -169,6 +202,15 @@ impl<'a> EvalState<'a> {
         }
         let raw = self.doc.tiles[tile].traits.get(&key).cloned();
         let value = match raw {
+            None if (key == "width" || key == "height")
+                && self.doc.tiles[tile].kind == TileKind::Text
+                && !self.fonts.is_empty() =>
+            {
+                self.depth += 1;
+                let (w, h) = self.text_size(tile);
+                self.depth -= 1;
+                Scalar::Num(if key == "width" { w } else { h })
+            }
             None => default_trait_value(&key),
             Some(RawTrait::Num(n)) => Scalar::Num(n),
             Some(RawTrait::Str(s)) => Scalar::Str(expand_class_entity(&s)),

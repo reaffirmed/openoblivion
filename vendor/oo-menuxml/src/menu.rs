@@ -266,7 +266,8 @@ impl MenuRenderer {
     /// tile name. For inspecting what will be drawn.
     pub fn trait_value(&self, tile: &str, trait_name: &str) -> Option<Scalar> {
         let idx = *self.doc.name_index.get(&tile.to_lowercase())?;
-        let mut eval = EvalState::new(&self.doc, self.screen, &self.strings, &self.overrides);
+        let mut eval = EvalState::new(&self.doc, self.screen, &self.strings, &self.overrides)
+            .with_fonts(&self.fonts);
         Some(eval.trait_value(idx, &trait_name.to_lowercase()))
     }
 
@@ -409,7 +410,8 @@ impl MenuRenderer {
     /// Evaluate, lay out, and rasterize one frame. Returns the RGBA
     /// pixels (`width * height * 4`, top-down).
     pub fn render_frame(&mut self, assets: &dyn MenuAssets) -> &[u8] {
-        let mut eval = EvalState::new(&self.doc, self.screen, &self.strings, &self.overrides);
+        let mut eval = EvalState::new(&self.doc, self.screen, &self.strings, &self.overrides)
+            .with_fonts(&self.fonts);
         eval.resolve_all();
         let items = build_draw_list(&self.doc, &mut eval);
         log::debug!(
@@ -496,6 +498,11 @@ impl MenuRenderer {
         &self.frame.pixels
     }
 
+    /// Fonts by `<font>` index, as loaded for this menu.
+    pub fn fonts(&self) -> &[Option<Arc<Font>>] {
+        &self.fonts
+    }
+
     pub fn frame_size(&self) -> (u32, u32) {
         (self.frame.width, self.frame.height)
     }
@@ -536,7 +543,16 @@ impl MenuRenderer {
         } else if let Some(rest) = lowered.strip_prefix("textures\\") {
             vec![format!("textures\\{rest}")]
         } else {
-            vec![format!("textures\\{lowered}")]
+            // A few vanilla tiles leave `Menus\` off (`dialog\dialog_selection_cut.dds`
+            // in the selection markers); try the menu sets after the bare path.
+            let mut v = vec![format!("textures\\{lowered}")];
+            for set in [self.texture_set, TextureSet::Base, TextureSet::Menus80, TextureSet::Menus50] {
+                let p = format!("textures\\{}\\{lowered}", set.segment());
+                if !v.contains(&p) {
+                    v.push(p);
+                }
+            }
+            v
         };
 
         // #5400 — a present-but-undecodable candidate must not end the

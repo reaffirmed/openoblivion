@@ -259,7 +259,7 @@ fn walk_children(
 /// Gamebryo's number→string formatting for `<string>` traits fed from
 /// numeric copies (ammo counters, timers): integral values lose the
 /// `.0`.
-fn format_number(n: f32) -> String {
+pub(crate) fn format_number(n: f32) -> String {
     if n.fract() == 0.0 && n.abs() < 1e9 {
         format!("{}", n as i64)
     } else {

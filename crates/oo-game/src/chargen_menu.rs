@@ -28,10 +28,17 @@ use crate::xml_ui::{GameMenuAssets, blank_image, texture_set, ui_screen};
 const RACE_MENU: &str = "menus\\chargen\\race_sex_menu.xml";
 const BIRTHSIGN_MENU: &str = "menus\\chargen\\birthsign_menu.xml";
 const CLASS_MENU: &str = "menus\\chargen\\class_menu.xml";
-/// Rows cloned from the templates; the race list's pane is itself a template.
-const RACE_PANE: &str = "race_list_pane";
+/// The race screen is pages of rows (panes cloned from `race_template_pane`,
+/// shown when their `user0` matches `RaceSexMenu.user0`): the main page with
+/// the race and sex, and the page listing the races.
+const RACE_MAIN_PANE: &str = "race_main_pane";
+const RACE_LIST_PANE: &str = "race_list_pane";
+const RACE_CHOICE: &str = "race_choice_button";
 const RACE_ROW: &str = "race_row_";
 const RACE_SEX: &str = "race_sex_toggle";
+/// `RaceSexMenu.user0` for each page.
+const MAIN_PAGE: f32 = 0.0;
+const LIST_PAGE: f32 = 1.0;
 const CLASS_ROW: &str = "class_row_";
 
 #[derive(Resource, Default)]
@@ -46,6 +53,8 @@ pub struct ChargenScreen {
     failed: Vec<ChargenMenu>,
     image: Handle<Image>,
     scroll: usize,
+    /// The race screen shows its race list rather than its main page.
+    race_list: bool,
 }
 
 #[derive(Component)]
@@ -182,9 +191,11 @@ fn load(
     let mut xml = XmlMenu::load(assets, path(menu), ui)?;
     match menu {
         ChargenMenu::Race => {
-            xml.add_row("race_template_pane", "race_window", RACE_PANE)?;
-            xml.ensure_rows(count, "race_template_button", RACE_PANE, RACE_ROW)?;
-            xml.add_row("race_template_toggle", RACE_PANE, RACE_SEX)?;
+            xml.add_row("race_template_pane", "race_window", RACE_MAIN_PANE)?;
+            xml.add_row("race_template_button", RACE_MAIN_PANE, RACE_CHOICE)?;
+            xml.add_row("race_template_toggle", RACE_MAIN_PANE, RACE_SEX)?;
+            xml.add_row("race_template_pane", "race_window", RACE_LIST_PANE)?;
+            xml.ensure_rows(count, "race_template_button", RACE_LIST_PANE, RACE_ROW)?;
         }
         ChargenMenu::Class => {
             xml.ensure_rows(count, "class_template", "class_list_pane", CLASS_ROW)?;
@@ -198,6 +209,8 @@ fn load(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Hover {
     Row(usize),
+    /// The race button on the race screen's main page: opens the list.
+    RaceChoice,
     Sex,
     Done,
     /// The birthsign picture: a click shows the next sign.
@@ -219,6 +232,7 @@ fn hover(names: &[String], open: ChargenMenu, count: usize) -> Option<Hover> {
         }
         match n.as_str() {
             RACE_SEX => Some(Hover::Sex),
+            RACE_CHOICE => Some(Hover::RaceChoice),
             "race_button_done" | "class_button_done" | "done_button" => Some(Hover::Done),
             "birthsign_picture" => Some(Hover::Picture),
             _ => None,
@@ -234,30 +248,44 @@ fn fill(
     open: ChargenMenu,
     list: &[(u32, String)],
     screen: &ChargenScreen,
-    hovered: Option<usize>,
+    hover: Option<Hover>,
 ) {
     let chosen = list.get(screen.row).map(|c| c.0);
     match open {
         ChargenMenu::Race => {
             xml.set_str("race_name", "string", &screen.name);
-            for (i, (_, name)) in list.iter().enumerate() {
-                let row = format!("{RACE_ROW}{i}");
-                xml.set_num(&row, "listindex", i as f32);
-                xml.set_num(&row, "user3", i as f32);
-                xml.set_str(&row, "user2", name);
-                xml.set_str(&row, "user6", "");
-                let on = hovered.or(Some(screen.row)) == Some(i);
-                xml.set_num(&row, "mouseover", if on { 1.0 } else { 0.0 });
-            }
+            let page = if screen.race_list { LIST_PAGE } else { MAIN_PAGE };
+            xml.set_num("RaceSexMenu", "user0", page);
+            xml.set_num(RACE_MAIN_PANE, "user0", MAIN_PAGE);
+            xml.set_num(RACE_LIST_PANE, "user0", LIST_PAGE);
+            // The scroll bar's range: rows on the page shown.
+            let rows = if screen.race_list { list.len() } else { 2 };
+            xml.set_num("RaceSexMenu", "user1", rows as f32);
+            // Main page: the race as a button (label above, value centred),
+            // then the sex toggle.
+            let race = list.get(screen.row).map_or("", |r| r.1.as_str());
+            xml.set_num(RACE_CHOICE, "listindex", 0.0);
+            xml.set_str(RACE_CHOICE, "user2", world.setting("sRace").unwrap_or("Race"));
+            xml.set_str(RACE_CHOICE, "user6", race);
             let sex = if screen.female {
                 world.setting("sFemale").unwrap_or("Female")
             } else {
                 world.setting("sMale").unwrap_or("Male")
             };
-            xml.set_num(RACE_SEX, "listindex", list.len() as f32);
-            xml.set_num(RACE_SEX, "user3", list.len() as f32);
+            xml.set_num(RACE_SEX, "listindex", 1.0);
             xml.set_str(RACE_SEX, "user2", world.setting("sSex").unwrap_or("Sex"));
             xml.set_str(RACE_SEX, "user6", sex);
+            let on = |h: Hover| if hover == Some(h) { 1.0 } else { 0.0 };
+            xml.set_num(RACE_CHOICE, "mouseover", on(Hover::RaceChoice));
+            // List page: one button per race, the name as its value.
+            for (i, (_, name)) in list.iter().enumerate() {
+                let row = format!("{RACE_ROW}{i}");
+                xml.set_num(&row, "listindex", i as f32);
+                xml.set_str(&row, "user2", "");
+                xml.set_str(&row, "user6", name);
+                let lit = hover == Some(Hover::Row(i)) || i == screen.row;
+                xml.set_num(&row, "mouseover", if lit { 1.0 } else { 0.0 });
+            }
             xml.set_num("race_scroll_bar", "user7", screen.scroll as f32);
         }
         ChargenMenu::Birthsign => {
@@ -280,7 +308,7 @@ fn fill(
                 // &true; (2) shows the selected marker, as the game's other
                 // on/off traits.
                 xml.set_num(&row, "user2", if i == screen.row { 2.0 } else { 1.0 });
-                let on = hovered == Some(i);
+                let on = hover == Some(Hover::Row(i));
                 xml.set_num(&row, "mouseover", if on { 1.0 } else { 0.0 });
             }
             xml.set_num("class_list_scroll_bar", "user7", screen.scroll as f32);
@@ -385,6 +413,7 @@ pub fn update_chargen(
             failed,
             image: screen.image.clone(),
             scroll: 0,
+            race_list: false,
         };
     }
     menu.chargen = screen.open.is_some();
@@ -429,6 +458,9 @@ pub fn update_chargen(
         typed.clear();
     }
     let mut choose = keys.just_pressed(KeyCode::Enter);
+    if open == ChargenMenu::Race && keys.just_pressed(KeyCode::Escape) {
+        screen.race_list = false;
+    }
     // Everything this screen uses stays out of movement and other menus.
     for key in [
         KeyCode::Enter,
@@ -447,7 +479,7 @@ pub fn update_chargen(
     // The mouse, on the game's screen.
     let image = screen.image.clone();
     let mut xml = screen.xml.take();
-    let mut hovered_row = None;
+    let mut hovered = None;
     if let Some(xml) = xml.as_mut() {
         xml.set_screen(ui, texture_set(size));
         let cursor = window
@@ -456,13 +488,18 @@ pub fn update_chargen(
         let names: Vec<String> = cursor
             .and_then(|p| xml.hit(p))
             .map_or(Vec::new(), |t| xml.names(t).map(str::to_owned).collect());
-        let hovered = hover(&names, open, list.len());
-        if let Some(Hover::Row(i)) = hovered {
-            hovered_row = Some(i);
-        }
+        hovered = hover(&names, open, list.len());
         if mouse.just_pressed(MouseButton::Left) {
             match hovered {
-                Some(Hover::Row(i)) => screen.row = i,
+                Some(Hover::Row(i)) => {
+                    screen.row = i;
+                    // Picking a race goes back to the main page.
+                    screen.race_list = false;
+                }
+                Some(Hover::RaceChoice) => {
+                    screen.race_list = true;
+                    screen.scroll = screen.row.saturating_sub(2);
+                }
                 Some(Hover::Sex) => switch_sex = true,
                 Some(Hover::Done) => choose = true,
                 Some(Hover::Picture) => screen.row = (screen.row + 1) % list.len().max(1),
@@ -530,7 +567,7 @@ pub fn update_chargen(
     if let Some(mut xml) = xml {
         visibility.set_if_neq(Visibility::Hidden);
         overlay.set_if_neq(Visibility::Inherited);
-        fill(&mut xml, &world, open, &list, &screen, hovered_row);
+        fill(&mut xml, &world, open, &list, &screen, hovered);
         let (pixels, frame) = xml.render(&assets);
         if let Some(mut img) = images.get_mut(&image) {
             if img.size() != frame {

@@ -160,7 +160,8 @@ impl XmlMenu {
             self.renderer.screen(),
             &self.strings,
             &self.overrides,
-        );
+        )
+        .with_fonts(self.renderer.fonts());
         Some(eval.trait_value(idx, name))
     }
 
@@ -172,7 +173,8 @@ impl XmlMenu {
             self.renderer.screen(),
             &self.strings,
             &self.overrides,
-        );
+        )
+        .with_fonts(self.renderer.fonts());
         let origin = Vec2::new(
             eval.trait_value(0, "x").as_num(),
             eval.trait_value(0, "y").as_num(),
