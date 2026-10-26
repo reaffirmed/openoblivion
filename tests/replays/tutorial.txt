@@ -45,9 +45,11 @@ t176 key Enter
 t300 expect stage Charactergen >= 18
 
 # Renault walks to the switch and opens the secret wall (19); the Blades
-# lead the Emperor through it (20, 22).
+# lead the Emperor through it (20). The ambush (22) waits for the player to
+# come within 480 units of CGMarkerCEmperor or 900 of CGMarkerC2Renote, and
+# this replay stays in the cell.
 t330 expect stage Charactergen >= 19
 t380 expect stage Charactergen >= 20
-t420 expect stage Charactergen >= 22
+t420 expect stage Charactergen == 20
 
 t430 quit
