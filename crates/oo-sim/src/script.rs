@@ -106,6 +106,8 @@ pub struct QuestProgress {
     pub locals: Locals,
     /// Seconds until the quest script runs again.
     pub delay: f32,
+    /// Seconds since the quest script last ran, for `GetSecondsPassed`.
+    pub since_run: f32,
 }
 
 /// A line said aloud, shown as a subtitle.
@@ -325,6 +327,9 @@ pub struct GameHost<'a> {
     pub effects: Vec<WorldEffect>,
     /// `SetStage` calls, applied after the run; the game doesn't nest runs.
     pub stages: Vec<(u32, u16)>,
+    /// What `GetSecondsPassed` answers: the time since this script last ran.
+    /// Scripts count their timers down by it.
+    pub seconds_passed: f32,
 }
 
 impl<'a> GameHost<'a> {
@@ -342,6 +347,7 @@ impl<'a> GameHost<'a> {
             event: Event::Result,
             effects: Vec::new(),
             stages: Vec::new(),
+            seconds_passed: 0.0,
         }
     }
 
@@ -556,7 +562,7 @@ impl Host for GameHost<'_> {
             | "GetPCFactionAttack"
             | "GetPCFactionSteal"
             | "GetPCFactionSubmitAuthority" => 0.0,
-            "GetSecondsPassed" => f64::from(QUEST_DELAY),
+            "GetSecondsPassed" => f64::from(self.seconds_passed),
             "GetSelf" => f64::from(self.this.unwrap_or(0)),
             "GetActionRef" => f64::from(
                 self.this
@@ -844,6 +850,7 @@ pub fn tick_quests(
     let mut due = Vec::new();
     for (&id, progress) in state.quests.iter_mut().filter(|(_, p)| p.running) {
         progress.delay -= seconds;
+        progress.since_run += seconds;
         if progress.delay > 0.0 {
             continue;
         }
@@ -856,8 +863,11 @@ pub fn tick_quests(
     }
     let mut effects = Vec::new();
     for (quest, script) in due {
-        let mut locals = std::mem::take(&mut state.quests.get_mut(&quest).unwrap().locals);
+        let progress = state.quests.get_mut(&quest).unwrap();
+        let mut locals = std::mem::take(&mut progress.locals);
+        let seconds_passed = std::mem::take(&mut progress.since_run);
         let mut host = GameHost::new(data, state, facts, Some(quest));
+        host.seconds_passed = seconds_passed;
         let outcome = host.run_script(script, &mut locals, Event::GameMode);
         let stages = std::mem::take(&mut host.stages);
         effects.append(&mut host.effects);
@@ -919,6 +929,7 @@ pub struct Scripted(pub u32);
 /// and event blocks whose events happened since the last run.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_object_scripts(
+    time: Res<Time>,
     world: Option<Res<WorldData>>,
     cell: Option<Res<CurrentCell>>,
     mut state: ResMut<ScriptState>,
@@ -952,6 +963,8 @@ pub(crate) fn run_object_scripts(
         }
         let mut locals = state.objects.remove(&placed.0).unwrap_or_default();
         let mut host = GameHost::new(data, &mut state, &facts, Some(placed.0));
+        // Object scripts run every step.
+        host.seconds_passed = time.delta_secs();
         let outcome = host.run_script(*script, &mut locals, Event::GameMode);
         host.apply_stages();
         effects.append(&mut host.effects);
