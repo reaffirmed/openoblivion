@@ -45,8 +45,12 @@ pub fn reaction(actors: &ActorData, state: &ScriptState, from: u32, to: u32) -> 
 }
 
 /// `from`'s disposition towards `to` from their factions, by base form, and
-/// whether any reaction applied at all.
+/// whether any reaction applied at all. Two of the same base form like each
+/// other fully (RE, confirmed for NPCs).
 pub fn disposition(actors: &ActorData, state: &ScriptState, from: u32, to: u32) -> (i32, bool) {
+    if from == to {
+        return (100, false);
+    }
     let mut total = BASE_DISPOSITION;
     let mut any = false;
     for &(a, _) in factions(actors, from) {
@@ -86,6 +90,7 @@ mod tests {
         assert_eq!(disposition(&actors, &state, 1, 2), (60, true));
         assert_eq!(disposition(&actors, &state, 2, 1), (50, false));
         assert_eq!(disposition(&actors, &state, 1, 3), (50, false));
+        assert_eq!(disposition(&actors, &state, 3, 3), (100, false));
         state.faction_reactions.insert((0x10, 0x20), -100);
         assert_eq!(disposition(&actors, &state, 1, 2), (0, true));
     }
