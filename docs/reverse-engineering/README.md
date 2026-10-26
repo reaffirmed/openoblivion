@@ -32,7 +32,7 @@ again. This folder follows [`docs/CLEAN_ROOM.md`](../CLEAN_ROOM.md); read that f
   names needed to identify a thing (a setting name such as `iSafeZoneX`, a script
   command name such as `GetActorValue`).
 - Each fact carries its **source** (public page, observation, or "executable") and a
-  **confidence** (confirmed, likely, guess).
+  **confidence**. New notes tag findings inline as **[exact]** (verified against data or the running game), **[high]** (read directly in the executable), **[medium]** (inferred from the executable) or **[hypothesis]**. Older notes use an evidence table with *confirmed* (= exact or high), *likely* (= medium) and *guess* (= hypothesis).
 - The engine never resolves anything against `Oblivion.exe`, so addresses are never
   useful in engine code; `scripts/publish-check.sh` flags the obvious cases.
 
@@ -46,6 +46,7 @@ addresses. Nothing from there is committed; only the distilled fact moves here.
 
 | Note | Question | Status |
 |------|----------|--------|
+| [UNVERIFIED.md](UNVERIFIED.md) | Every claim tagged [medium] or [hypothesis], in one list for targeted tests | generated |
 | [MAP.md](MAP.md) | What is in the executable, by subsystem, and how much is covered | survey done |
 | [menu-layout.md](menu-layout.md) | Virtual screen size, safe zone, menu scaling, `Menus`/`Menus80`/`Menus50`, XML entities | mostly settled |
 | [script-commands.md](script-commands.md) | Script command names, opcodes, parameter types | done |
@@ -54,9 +55,13 @@ addresses. Nothing from there is committed; only the distilled fact moves here.
 | [dialogue.md](dialogue.md) | How a topic picks its response | partly done |
 | [ai-packages.md](ai-packages.md) | Which AI package an actor runs, and package schedules | partly done |
 | [combat-and-levelling.md](combat-and-levelling.md) | Melee damage, blocking, fatigue, regeneration, levelling | partly done |
+| [character-creation.md](character-creation.md) | Suggested class from skill use; custom class | partly done |
+| [persuasion.md](persuasion.md) | Persuasion wheel, disposition changes, bribe cost and gain | mostly done |
 | [save-format.md](save-format.md) | Layout of .ess save files and change records | partly done |
 | [new-game.md](new-game.md) | What a new game does; why chargen NPCs greet | done |
 | [cell-loading.md](cell-loading.md) | Which exterior cells are loaded and when the grid moves | partly done |
 | [actors-animation.md](actors-animation.md) | Animation groups and how idle animations are picked | partly done |
 | [doors-and-animated-objects.md](doors-and-animated-objects.md) | Door open states, SetOpenState, PlayGroup on objects | partly done |
+| [voice.md](voice.md) | Voice file paths and spoken-line duration | partly done |
+| [audio.md](audio.md) | Music selection; ambient sound and falloff | partly done |
 | [light-falloff.md](light-falloff.md) | How a LIGH radius becomes attenuation | formula known; shader use open |

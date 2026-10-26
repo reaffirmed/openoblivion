@@ -82,6 +82,61 @@ call, which is how an `OnActivate` block passes activation through to the defaul
 behaviour. Which references count as "script-handled" (presumably: has a script with an
 `OnActivate` block) is likely but not yet confirmed.
 
+## Locked doors and containers
+
+When an actor activates a locked door (and isn't let through by ownership), the door's
+activation does this (containers follow the same pattern, with `DRSChestLocked`):
+
+```
+picks = actor has a Lockpick or the Skeleton Key
+if the lock has no key:
+    if not picks:
+        player: notification sNoLockPick, or sImpossibleLock if lock level ≥ 100
+        play sound "DRSLocked" (2D for the player, 3D at the door for others)
+    elif player:
+        lock level ≥ 100 (Very Hard / needs a key): notification sImpossibleLock + UI sound
+        else: open the lockpicking menu
+    else (NPC): uses a pick and unlocks the door
+else (the lock has a key):
+    if the actor carries the key:
+        player: unlock; message box "<sOpenWithKey><key name>." then the door proceeds
+        NPC: proceeds as unlocked
+    elif picks:
+        player: level ≥ 100 → sImpossibleLock, else the lockpicking menu
+        NPC: picks it
+    else:
+        player: notification sNoLockPickKey (or sImpossibleLock at level ≥ 100)
+```
+
+- **No animation plays.** The game doesn't look for a `Locked` sequence or shake the door;
+  the feedback is the notification and the sound.
+- **The sound is fixed**: the sound record with editor ID `DRSLocked` (doors) or
+  `DRSChestLocked` (containers), looked up by name, not a field of the DOOR/CONT record.
+- **Messages** are the game settings `sNoLockPick`, `sNoLockPickKey`, `sImpossibleLock`
+  and `sOpenWithKey` (their text comes from `GMST` records).
+- Lock level 100 and above means "needs a key": the lockpicking menu never opens for it.
+
+### Lockpicking menu: auto attempt
+
+The *Auto Attempt* button in the lockpicking menu succeeds with this chance, in percent:
+
+```
+n      = number of tumblers not yet set (of 5)
+chance = 100 × ((fLockPickAutoBase + min(security, 100) × fLockPickAutoDifficulty) / 100) ^ n
+         + fLockPickAutoOffset
+roll   = (rand() % 10000) / 100              # 0.00–99.99, time-seeded
+success if roll < chance
+```
+
+Vanilla: `fLockPickAutoBase` 45 (50.7), `fLockPickAutoDifficulty` 0.3 (0.45),
+`fLockPickAutoOffset` −4. Every attempt counts as a Security skill use. **[high]** (the
+direction of the final comparison: **[medium]**). The lock level is logged with the odds but is
+not part of the formula. **[high]** How it affects the tumblers is open.
+
+The tumbler minigame itself (spring speeds, break chance) is still open. The
+`fPickSpring1–4`, `fPickNumMult`, `fLockPickQualityMult` and `fLockPickBreak*` settings
+are never read by the code. **[high]**
+
 ## Trigger zones (`OnTrigger`, `OnTriggerActor`, `OnTriggerMob`)
 
 A trigger zone is a reference whose model holds a Havok **phantom** (in vanilla a
@@ -121,6 +176,7 @@ by the usual Havok-to-game scale.
 | `SetDoorDefaultOpen` marker and flag interplay | Executable: the command handler and the "is open" test | confirmed (flag naming: likely) |
 | `PlayGroup` sequence lookup, other sequences stopped except Idle, error messages | Executable: the command handler | confirmed |
 | Blend time `flags × 0.1 s` | Executable: the blend call's argument | likely |
+| Locked door/container handling, sounds, messages, level-100 rule | Executable: door and container activation | confirmed |
 | Trigger detection through Havok phantom overlaps, event bits, action ref | Executable: the per-update trigger routine | confirmed (the "drop body" step: likely) |
 | Activation routine, script hand-off, nesting limit | Executable: the shared activation routine and the `Activate` command | confirmed (what makes a ref script-handled: likely) |
 

@@ -65,6 +65,25 @@ field 9 + field 12, and field 13 is the cell height above the baseline (not an a
 Source: byte-level checks of the vanilla font files on the test PC. Confidence: confirmed
 for the vanilla fonts.
 
+## Default tile colours
+
+When a tile is created, the engine gives it default `red`, `green`, `blue` and `alpha`
+values, and the XML overrides them only where it sets them:
+
+| Tile type | Default red, green, blue | Default alpha |
+|-----------|--------------------------|--------------:|
+| text | **117, 59, 33** (dark brown ink) | 255 |
+| image, rect and the other kinds checked | 255, 255, 255 | 255 |
+
+A text tile with no colour in the XML (e.g. `race_template_button_text` in
+`race_sex_menu.xml`) is therefore drawn in dark brown. The font textures themselves are
+plain white glyphs (every opaque texel of `kingthings_regular` is 255, 255, 255), so the
+ink colour comes entirely from these traits. The colour is not inherited from the parent
+tile; it is a per-tile default (XML can still copy a parent's value with
+`<copy src="parent()" ...>`). **[exact]** for the text default (read from the text tile's
+initialiser and its class name); **[high]** for the 255 defaults of the other kinds.
+Text also starts with an empty string.
+
 ## Evidence
 
 | Fact | Source | Confidence |

@@ -67,6 +67,45 @@ So:
   search still stops there and the actor plays **no** idle, instead of falling through to
   later trees.
 
+## Movement speed
+
+Speeds in game units per second; `speed`, `athletics` are 0–100 actor values; `w` is a
+weight value passed in by the caller (most likely the weight of worn armour).
+
+```
+f = (fMoveWeightMin + w) / (fMoveWeightMax − fMoveWeightMin)      # characters clamp w ≤ fMoveWeightMax
+character walk  = (fMoveCharWalkMin + speed/100 · (fMoveCharWalkMax − fMoveCharWalkMin))
+                  × (1 − f · fMoveEncumEffect)
+  with no weapon out: × (1 − f · fMoveEncumEffectNoWea) × fMoveNoWeaponMult instead
+creature walk   = (fMoveCreatureWalkMin + speed/100 · (fMoveCreatureWalkMax − fMoveCreatureWalkMin))
+                  × (1 − f · fMoveEncumEffect)
+sneaking: walk × fMoveSneakMult
+run             = walk × (fMoveRunMult + fMoveRunAthleticsMult · athletics/100)
+swim (walk)     = walk × (fMoveSwimWalkBase + fMoveSwimWalkAthleticsMult · athletics/100) × (1 + x/100)
+swim (run)      = walk × (fMoveSwimRunBase + fMoveSwimRunAthleticsMult · athletics/100) × (1 + x/100)
+                  × (fMoveRunMult + fMoveRunAthleticsMult · athletics/100)
+fly             = (fMoveMinFlySpeed + speed/100 · (fMoveMaxFlySpeed − fMoveMinFlySpeed))
+                  × (1 − w · fMoveEncumEffect)
+```
+
+`x` in the swim formulas is a further percentage passed in (likely a swim-speed effect).
+
+| Setting | Vanilla (esm) | Built-in |
+|---------|--------------:|---------:|
+| `fMoveCharWalkMin` / `Max` | 90 / 130 | same |
+| `fMoveCreatureWalkMin` / `Max` | 5 / 300 | same |
+| `fMoveRunMult` | 3 | 3 |
+| `fMoveRunAthleticsMult` | — | 1 |
+| `fMoveWeightMin` / `Max` | — / 150 | 0 / 100 |
+| `fMoveEncumEffect` / `NoWea` | 0.4 / — | 0.4 / 0.3 |
+| `fMoveNoWeaponMult` | 1.1 | 1.2 |
+| `fMoveSneakMult` | 0.6 | 0.75 |
+| `fMoveSwimWalkBase`, `…AthleticsMult` | — | 0.5, 0.02 |
+| `fMoveSwimRunBase`, `…AthleticsMult` | — | 0.5, 0.1 |
+
+So a vanilla character with speed 50 and no armour walks at 110 units/s and runs at
+110 × (3 + athletics/100), e.g. 385 units/s at athletics 50, before the no-weapon bonus.
+
 ## Evidence
 
 | Fact | Source | Confidence |
@@ -74,6 +113,7 @@ So:
 | Idle folder rule, root lookup, depth-first search, high-bit gate | Executable: the idle picker and the idle-tree walker | confirmed |
 | Record counts and examples | Oblivion.esm `IDLE` records | confirmed |
 | Anim group codes | OBSE public headers, consistent with the executable's power-attack handling | confirmed |
+| Movement speed formulas and settings | Executable: the walk/run/swim/fly speed routines; values from Oblivion.esm and the settings' constructors | confirmed (meaning of `w` and `x`: likely) |
 
 ## Open
 

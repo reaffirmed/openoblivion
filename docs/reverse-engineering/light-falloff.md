@@ -82,12 +82,64 @@ object space. Colours go separately (`DiffuseColor0..2`). No constant, linear or
 term is passed. So the falloff curve is computed inside the shader packages from the
 distance and that radius.
 
+
+## How the shaders compute falloff
+
+The game's compiled shaders (`Data\Shaders\shaderpackage*.sdp`) were disassembled with the
+Windows D3DCompiler (`D3DDisassemble`), splitting the packages with the public layout
+documented by lojack5's `oblivionsdp`: u32 version (100), u32 shader count, u32 data size,
+then per shader a 256-byte name, u32 size and the bytecode. All 653 shaders in package 019
+(the Shader Model 3 set) disassemble. **[exact]**
+
+The point-light path doesn't evaluate a formula; it reads **attenuation textures**:
+
+```
+vertex shader:   d  = (LightPosition.xyz − vertex) / LightPosition.w      # w = radius
+                 uvXY = d.xy · 0.5 + 0.5        uvZ = (d.z · 0.5 + 0.5, 0.5)
+pixel shader:    atten = AttMapXY(uvXY).rgb × AttMapZ(uvZ).rgb
+                 light = saturate(N · L) × PSLightColor.rgb × atten
+```
+
+**[exact]** (read from e.g. the `SLS1003` vertex and `SLS1001` pixel shader). So the curve
+is whatever those two textures hold, sampled across the cube of side 2·radius around the
+light; outside the radius the coordinates leave [0, 1] and the result depends on the
+textures' edge texels and addressing mode.
+
+### The attenuation texture
+
+The textures are not files: the shader manager builds them at startup, next to its other
+lookup textures (normalisation cube faces, flat normal maps). **[high]** It fills one
+128 × 128 RGB texture, the same value in all three channels:
+
+```
+for each texel (x, y), x and y in 0…127:
+    u  = |x − 63.5| / 63.5          v = |y − 63.5| / 63.5
+    r2 = min(u² + v², 1)
+    value = floor(255 × (1 − r2))
+```
+
+**[exact]** for the fill. The fill has a second mode that stores `r2` itself; which mode
+is used comes from a renderer setting that isn't identified yet. The `1 − r2` mode is the
+one that makes sense for a light. **[medium]**
+
+The same texture object is stored in both texture slots that the attenuation maps come
+from. **[high]** for both slots holding it; **[medium]** for those slots being
+`AttMapXY` and `AttMapZ`.
+
+Putting it together, with `d` the offset from the light divided by its radius:
+
+```
+atten = (1 − min(dx² + dy², 1)) × (1 − min(dz², 1))     (both factors 8-bit, bilinearly filtered)
+```
+
+This is a quadratic falloff to zero at the radius along each axis. Its shape is a product
+of a disc and a slab, not a sphere: for example, at d = (0.7, 0, 0.7) it gives
+0.51 × 0.51 ≈ 0.26, while a spherical 1 − |d|² would give 0.02. **[high]**
+
 ## Open
 
-1. **The curve itself.** Settled that the shaders use their own falloff from the radius;
-   the formula lives in the shader bytecode (`Data\Shaders\shaderpackage*.sdp`). Reading
-   it needs a small Direct3D 9 shader disassembler, or matching renders. Also which value
-   exactly the radius is (the `LIGH` radius, or that times a light-LOD factor).
+1. Which fill mode is active, and the texture addressing (clamp is assumed). Also which
+   value exactly the radius is (the `LIGH` radius, or that times a light-LOD factor).
 2. Is there a hard cutoff at the radius (or at `fLightLOD1/2` = 1000/1500 for distant
    lights), and how is a light chosen when more than the shader limit touch an object?
 3. Exact flicker and pulse curves (speeds, ranges), for later.

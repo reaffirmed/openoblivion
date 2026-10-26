@@ -65,12 +65,12 @@ a fraction of its functions read.
 |-----------|--------------:|--------|-------|
 | Script VM and command semantics | 1 | format fully decoded; runner, branches, Set, errors documented; evaluator and event tests open | [script-commands.md](script-commands.md), [script-vm.md](script-vm.md) |
 | Dialogue and quest conditions | 2 | conditions and response picking done; topic list and quest stages open | [conditions.md](conditions.md), [dialogue.md](dialogue.md) |
-| AI packages | 3 | package selection and schedules done; package behaviour open | [ai-packages.md](ai-packages.md) |
-| Combat and levelling formulas | 4 | melee, block, fatigue, regen, level-up done; hit flow, armour, magic open | [combat-and-levelling.md](combat-and-levelling.md) |
-| Menus | 5 | layout, scaling, entities done | [menu-layout.md](menu-layout.md) |
+| AI packages | 3 | selection, schedules, procedure lists, Follow and Ambush done; other procedures open | [ai-packages.md](ai-packages.md) |
+| Combat and levelling formulas | 4 | melee, block, fatigue, regen, level-up, actor records, magicka/health done; hit flow, armour, magic open | [combat-and-levelling.md](combat-and-levelling.md) |
+| Menus | 5 | layout, scaling, entities, persuasion and bribe, lockpick auto attempt done; suggested class done; race and birthsign menus, dialogue menu, tumbler minigame open | [menu-layout.md](menu-layout.md), [persuasion.md](persuasion.md), [character-creation.md](character-creation.md) |
 | Actors and animation | 6 | anim-group codes and idle selection done; movement animation, blending open | [actors-animation.md](actors-animation.md) |
 | Cell loading | 7 | exterior grid and re-centring done; buffers, LOD, unloading open | [cell-loading.md](cell-loading.md) |
 | Save format | 8 | all main record types decoded; about 89% of all saved records checked exact (cells not yet checked); high-level AI process data open | [save-format.md](save-format.md) |
-| Lighting | — | attenuation formula done; shader side open | [light-falloff.md](light-falloff.md) |
+| Lighting | — | shader falloff and the attenuation texture done; fill mode and light selection open | [light-falloff.md](light-falloff.md) |
 
-Functions studied so far: about 240 of roughly 9,500 game-code functions (2.5%). Script VM, conditions and the save format largely documented; dialogue, AI packages and combat formulas partly; new-game path done.
+Functions studied so far: about 275 of roughly 9,500 game-code functions (2.9%). Script VM, conditions and the save format largely documented; dialogue, AI packages and combat formulas partly; new-game path done.
