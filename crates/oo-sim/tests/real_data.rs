@@ -47,6 +47,27 @@ fn app_with(data: PathBuf, plugins: &[&str]) -> App {
     app
 }
 
+/// Keeps the new game's chargen quest from running, whose stage 5 moves the
+/// player into the prison cell: for tests about the door spawn. Call after the
+/// first frame.
+fn skip_chargen(app: &mut App) {
+    let chargen = std::mem::take(
+        &mut app
+            .world_mut()
+            .resource_mut::<WorldData>()
+            .scripting
+            .chargen_quest,
+    );
+    if let Some(q) = app
+        .world_mut()
+        .resource_mut::<oo_sim::script::ScriptState>()
+        .quests
+        .get_mut(&chargen)
+    {
+        q.running = false;
+    }
+}
+
 fn player(app: &mut App) -> Entity {
     app.world_mut()
         .query_filtered::<Entity, With<Player>>()
@@ -82,6 +103,7 @@ fn tutorial_prison_spawn_walls_and_doors() {
     let mut app = app(data);
     // The first frame loads the cell and spawns the player on its marker.
     run(&mut app, 1);
+    skip_chargen(&mut app);
     let player = player(&mut app);
     let marker = app.world().resource::<oo_sim::SpawnPoint>().position;
     let (start, _, intent) = state(&app, player);
@@ -256,6 +278,7 @@ fn tutorial_prison_stairs_down_and_up() {
     };
     let mut app = app(data);
     run(&mut app, 1);
+    skip_chargen(&mut app);
     let player = player(&mut app);
 
     let mut steps: Vec<Vec3> = app
