@@ -104,6 +104,8 @@ fn order() -> LoadOrder {
             field(b"MODL", &zstr("Characters\\_Male\\skeleton.nif")),
             field(b"ACBS", &acbs),
             field(b"CNTO", &cnto),
+            field(b"SNAM", &[0x50, 0, 0, 0, 2, 0, 0, 0]),
+            field(b"CNAM", &u32s(&[0x51])),
             field(b"RNAM", &u32s(&[RACE])),
             field(b"HNAM", &u32s(&[HAIR])),
             field(b"ENAM", &u32s(&[EYES])),
@@ -150,6 +152,8 @@ fn reads_npcs_creatures_races_and_wearables() {
     assert_eq!(npc.hair, Some(HAIR));
     assert_eq!(npc.eyes, Some(EYES));
     assert_eq!(npc.hair_color, [10, 20, 30]);
+    assert_eq!(npc.factions, [(0x50, 2)]);
+    assert_eq!(npc.class, Some(0x51));
     assert_eq!(
         npc.skeleton.as_deref(),
         Some("Characters\\_Male\\skeleton.nif")

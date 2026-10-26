@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use oo_formats::bsa::Archive;
+use oo_formats::commands;
+use oo_formats::dialogue::{Comparand, Condition, dialogue_data};
 use oo_formats::esm::Plugin;
 
 #[derive(Parser)]
@@ -32,6 +34,14 @@ enum Command {
     EsmCells { plugin: PathBuf },
     /// Find records by editor ID (case-insensitive substring match).
     EsmFind { plugin: PathBuf, editor_id: String },
+    /// Count topics, lines and quests, or with a topic editor ID (substring,
+    /// case-insensitive) print its lines and their conditions.
+    Dialogue {
+        plugin: PathBuf,
+        topic: Option<String>,
+    },
+    /// Print a quest's stages, journal text and conditions.
+    Quest { plugin: PathBuf, quest: String },
     /// Print a menu's tile tree (names, IDs and traits), with includes
     /// expanded. Reads loose files first, then every BSA in the Data folder.
     MenuTiles {
@@ -100,6 +110,31 @@ fn print_tiles(doc: &byroredux_menuxml::Document, tile: usize, depth: usize) {
     }
 }
 
+fn open_single(plugin: &PathBuf) -> Result<oo_formats::load_order::LoadOrder> {
+    let esm = Plugin::open(plugin).with_context(|| format!("opening {}", plugin.display()))?;
+    let name = plugin
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Ok(oo_formats::load_order::LoadOrder::new(vec![(name, esm)])?)
+}
+
+fn print_conditions(indent: &str, conditions: &[Condition]) {
+    for c in conditions {
+        let name = commands::by_opcode(c.function).map_or("?", |f| f.name);
+        let value = match c.comparand {
+            Comparand::Value(v) => format!("{v}"),
+            Comparand::Global(g) => format!("global {g:08X}"),
+        };
+        let target = if c.on_target { "target." } else { "" };
+        let or = if c.or { " OR" } else { "" };
+        println!(
+            "{indent}{target}{name}({:08X}, {:08X}) {:?} {value}{or}",
+            c.params[0], c.params[1], c.op
+        );
+    }
+}
+
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::BsaList { archive } => {
@@ -143,13 +178,7 @@ fn main() -> Result<()> {
             println!("total {:>8}", counts.values().sum::<usize>());
         }
         Command::EsmCells { plugin } => {
-            let esm =
-                Plugin::open(&plugin).with_context(|| format!("opening {}", plugin.display()))?;
-            let name = plugin
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let order = oo_formats::load_order::LoadOrder::new(vec![(name, esm)])?;
+            let order = open_single(&plugin)?;
             for id in oo_formats::world::interior_cell_ids(&order)? {
                 println!("{id}");
             }
@@ -170,6 +199,85 @@ fn main() -> Result<()> {
             })?;
             if let Some(e) = error {
                 return Err(e.into());
+            }
+        }
+        Command::Dialogue { plugin, topic } => {
+            let d = dialogue_data(&open_single(&plugin)?)?;
+            let Some(topic) = topic else {
+                let conditions = d.infos.values().flat_map(|i| &i.conditions);
+                let unknown = conditions
+                    .clone()
+                    .filter(|c| commands::by_opcode(c.function).is_none())
+                    .count();
+                let scripts = d.infos.values().filter(|i| i.result.is_some()).count();
+                println!("topics      {}", d.topics.len());
+                println!("lines       {}", d.infos.len());
+                println!("quests      {}", d.quests.len());
+                println!(
+                    "conditions  {} ({unknown} unknown functions)",
+                    conditions.count()
+                );
+                println!("results     {scripts} lines with a result script");
+                return Ok(());
+            };
+            let needle = topic.to_ascii_lowercase();
+            let mut topics: Vec<_> = d
+                .topics
+                .iter()
+                .filter(|(_, t)| t.editor_id.to_ascii_lowercase().contains(&needle))
+                .collect();
+            topics.sort_by_key(|(id, _)| **id);
+            for (id, t) in topics {
+                println!(
+                    "{id:08X} {} {:?} ({:?}, {} lines)",
+                    t.editor_id,
+                    t.name,
+                    t.kind,
+                    t.infos.len()
+                );
+                for info_id in &t.infos {
+                    let i = &d.infos[info_id];
+                    let quest = d.quests.get(&i.quest).map_or("?", |q| q.editor_id.as_str());
+                    println!("  {info_id:08X} [{quest}] flags {:02X}", i.flags);
+                    print_conditions("      if ", &i.conditions);
+                    for r in &i.responses {
+                        println!("      {}: {}", r.number, r.text);
+                    }
+                    if let Some(s) = &i.result {
+                        for line in s.source.lines().filter(|l| !l.trim().is_empty()) {
+                            println!("      > {}", line.trim());
+                        }
+                    }
+                }
+            }
+        }
+        Command::Quest { plugin, quest } => {
+            let d = dialogue_data(&open_single(&plugin)?)?;
+            let needle = quest.to_ascii_lowercase();
+            for (id, q) in d
+                .quests
+                .iter()
+                .filter(|(_, q)| q.editor_id.to_ascii_lowercase().contains(&needle))
+            {
+                println!(
+                    "{id:08X} {} {:?} priority {} flags {:02X}",
+                    q.editor_id, q.name, q.priority, q.flags
+                );
+                print_conditions("    if ", &q.conditions);
+                for s in &q.stages {
+                    println!("  stage {}", s.index);
+                    for e in &s.entries {
+                        print_conditions("      if ", &e.conditions);
+                        if !e.log.is_empty() {
+                            println!("      log: {}", e.log);
+                        }
+                        if let Some(r) = &e.result {
+                            for line in r.source.lines().filter(|l| !l.trim().is_empty()) {
+                                println!("      > {}", line.trim());
+                            }
+                        }
+                    }
+                }
             }
         }
         Command::MenuTiles { data, menu } => {

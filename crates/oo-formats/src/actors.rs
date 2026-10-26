@@ -24,6 +24,9 @@ pub struct NpcInfo {
     pub eyes: Option<u32>,
     /// Base inventory (`CNTO`); entries may be leveled lists.
     pub inventory: Vec<Stack>,
+    pub class: Option<u32>,
+    /// Faction memberships and rank (`SNAM`).
+    pub factions: Vec<(u32, i8)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -34,6 +37,7 @@ pub struct CreatureInfo {
     /// Body models (`NIFZ`), relative to the skeleton's directory.
     pub body_models: Vec<String>,
     pub inventory: Vec<Stack>,
+    pub factions: Vec<(u32, i8)>,
 }
 
 /// One piece of a race's head (`NAM0` section) or body (`NAM1`).
@@ -180,6 +184,13 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
                 })
                 .collect::<Vec<_>>()
         };
+        let factions = || {
+            fields
+                .iter()
+                .filter(|f| f.tag.0 == *b"SNAM" && f.data.len() >= 5)
+                .map(|f| (global(u32_at(f.data, 0)), f.data[4] as i8))
+                .collect::<Vec<_>>()
+        };
         let editor_id = string(b"EDID").unwrap_or_default();
         let name = string(b"FULL").unwrap_or_else(|| editor_id.clone());
         match &r.tag.0 {
@@ -204,6 +215,8 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
                         hair_color,
                         eyes: form(b"ENAM"),
                         inventory: inventory(),
+                        class: form(b"CNAM"),
+                        factions: factions(),
                     },
                 );
             }
@@ -223,6 +236,7 @@ pub fn actor_data(order: &LoadOrder) -> Result<ActorData> {
                         skeleton: string(b"MODL"),
                         body_models,
                         inventory: inventory(),
+                        factions: factions(),
                     },
                 );
             }

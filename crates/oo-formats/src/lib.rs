@@ -5,6 +5,8 @@
 
 pub mod actors;
 pub mod bsa;
+pub mod commands;
+pub mod dialogue;
 pub mod esm;
 pub mod items;
 pub mod load_order;
