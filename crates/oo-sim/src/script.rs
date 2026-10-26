@@ -26,6 +26,11 @@ pub const PLAYER_REF: u32 = 0x0000_0014;
 /// Seconds between a quest script's runs, unless it sets `fQuestDelayTime`.
 pub const QUEST_DELAY: f32 = 5.0;
 
+/// The quest a new game starts, whatever its flags: the `sCharGenQuest` INI
+/// setting's built-in default, `CharacterGen`. Its scripts start `MQ01` and
+/// move the player to the start marker.
+pub const CHARGEN_QUEST: u32 = 0x0002_466E;
+
 /// Dialogue, quests and scripts as loaded, with every script decoded once.
 #[derive(Default)]
 pub struct ScriptData {
@@ -36,6 +41,8 @@ pub struct ScriptData {
     pub decoded: HashMap<u32, Vec<Statement>>,
     /// Scripted base forms' scripts.
     pub object_scripts: HashMap<u32, u32>,
+    /// The quest a new game starts; see [`CHARGEN_QUEST`].
+    pub chargen_quest: u32,
 }
 
 impl ScriptData {
@@ -83,6 +90,7 @@ impl ScriptData {
             scripts,
             decoded,
             object_scripts: object_scripts(order)?,
+            chargen_quest: CHARGEN_QUEST,
         })
     }
 }
@@ -127,16 +135,23 @@ pub struct ScriptState {
     pub activated: HashMap<u32, u32>,
     /// Scripts that failed to evaluate and won't run again this session.
     pub disabled: HashSet<u32>,
+    /// Character generation is under way (`SetInChargen`).
+    pub in_chargen: bool,
     started: bool,
 }
 
 impl ScriptState {
-    /// Starts the quests flagged to run from the beginning, once.
+    /// Starts a new game, once: the chargen quest regardless of its flags,
+    /// and the quests flagged to run from the beginning.
     pub fn start(&mut self, data: &ScriptData) {
         if self.started {
             return;
         }
         self.started = true;
+        if data.dialogue.quests.contains_key(&data.chargen_quest) {
+            self.quests.entry(data.chargen_quest).or_default().running = true;
+            self.in_chargen = true;
+        }
         for (&id, q) in &data.dialogue.quests {
             if q.flags & Quest::START_GAME_ENABLED != 0 {
                 self.quests.entry(id).or_default().running = true;
@@ -206,6 +221,11 @@ pub enum WorldEffect {
         to: u32,
         item: u32,
         count: i32,
+    },
+    /// Move `who` to where `marker` stands, in whatever cell that is.
+    MoveTo {
+        who: u32,
+        marker: u32,
     },
     /// Activate `target` as `by`. Without `run_script`, do what activation
     /// normally does, as a script's own `Activate` does from its OnActivate.
@@ -531,6 +551,62 @@ impl Host for GameHost<'_> {
                     .unwrap_or(0),
             ),
             "GetButtonPressed" => -1.0,
+            "SameSex" => flag(
+                self.facts(Some(form(0)))
+                    .is_some_and(|o| o.female == facts.female),
+            ),
+            "SameRace" => flag(
+                self.facts(Some(form(0)))
+                    .is_some_and(|o| o.race == facts.race),
+            ),
+            "GetInCellParam" => flag(self.facts(Some(form(1))).is_some_and(|o| o.cell == form(0))),
+            "GetCurrentTime" => f64::from(crate::ai::clock(self.data, self.state).hour),
+            // Only interiors are loaded so far.
+            "IsInInterior" => 1.0,
+            "GetInWorldspace" => 0.0,
+            // Until actor values exist: an average 50 in everything.
+            "GetActorValue" | "GetBaseActorValue" => 50.0,
+            // Nothing below is modelled yet; these are what the game would
+            // answer for a peaceful, law-abiding start.
+            "IsInCombat"
+            | "IsSneaking"
+            | "IsRidingHorse"
+            | "IsPlayerInJail"
+            | "IsPCAMurderer"
+            | "IsTrespassing"
+            | "IsTurnArrest"
+            | "IsSpellTarget"
+            | "IsWeaponOut"
+            | "GetPCFame"
+            | "GetPCInfamy"
+            | "GetCrime"
+            | "CanPayCrimeGold"
+            | "GetDestroyed"
+            | "GetEquipped"
+            | "GetLocked"
+            | "IsInMyOwnedCell"
+            | "GetCurrentAIProcedure" => 0.0,
+            "MoveTo" | "MoveToMarker" => {
+                let Some(who) = subject else {
+                    return Err(format!("{} requires a reference", command.name));
+                };
+                self.effects.push(WorldEffect::MoveTo {
+                    who,
+                    marker: form(0),
+                });
+                1.0
+            }
+            // Accepted and ignored until what they change exists.
+            "SetGhost" | "SetUnconscious" | "SetDestroyed" | "RemoveSpell" | "AddSpell"
+            | "ModDisposition" | "ForceActorValue" | "SetActorValue" | "ModActorValue" | "Lock"
+            | "Unlock" | "PlaySound" | "PlaySound3D" | "PlayGroup" | "LoopGroup" | "PickIdle"
+            | "Say" | "SayTo" | "EvaluatePackage" | "SetAlert" | "SetRestrained"
+            | "SetNoAvoidance" | "SetOpenState" | "SetForceRun" | "SetForceSneak" => {
+                if self.state.unsupported.insert(command.name.to_owned()) {
+                    debug!("script command {} has no effect yet", command.name);
+                }
+                1.0
+            }
             "GetDisabled" => 0.0,
 
             // What scripts do.
@@ -540,6 +616,10 @@ impl Host for GameHost<'_> {
             }
             "StartQuest" => {
                 self.state.quests.entry(form(0)).or_default().running = true;
+                1.0
+            }
+            "SetInChargen" => {
+                self.state.in_chargen = arg_number(args, 0) != 0.0;
                 1.0
             }
             "StopQuest" => {
@@ -707,17 +787,23 @@ pub fn tick_quests(
         let mut locals = std::mem::take(&mut state.quests.get_mut(&quest).unwrap().locals);
         let mut host = GameHost::new(data, state, facts, Some(quest));
         let outcome = host.run_script(script, &mut locals, Event::GameMode);
-        host.apply_stages();
+        let stages = std::mem::take(&mut host.stages);
         effects.append(&mut host.effects);
         if let Outcome::Disabled(e) | Outcome::Aborted(e) = &outcome {
             debug!("quest script {script:08X}: {e}");
         }
+        // Put the variables back before stage results run, as those can set
+        // this quest's own variables (its fQuestDelayTime, say).
+        state.quests.get_mut(&quest).unwrap().locals = locals;
+        let mut host = GameHost::new(data, state, facts, Some(quest));
+        host.stages = stages;
+        host.apply_stages();
+        effects.append(&mut host.effects);
         // The script's own fQuestDelayTime overrides the default.
+        let progress = state.quests.get_mut(&quest).unwrap();
         let own_delay = data.scripts[&script]
             .variable("fQuestDelayTime")
-            .map_or(0.0, |v| locals.get(v.index as u16) as f32);
-        let progress = state.quests.get_mut(&quest).unwrap();
-        progress.locals = locals;
+            .map_or(0.0, |v| progress.locals.get(v.index as u16) as f32);
         progress.delay = if own_delay > 0.0 {
             own_delay
         } else {
@@ -735,6 +821,21 @@ mod tests {
     fn formats_messages() {
         assert_eq!(format_message("%.0f gold, 100%%", &[12.6]), "13 gold, 100%");
         assert_eq!(format_message("%g left", &[2.5]), "2.5 left");
+    }
+
+    #[test]
+    fn new_game_starts_chargen_whatever_its_flags() {
+        let mut data = ScriptData {
+            chargen_quest: CHARGEN_QUEST,
+            ..Default::default()
+        };
+        data.dialogue.quests.insert(CHARGEN_QUEST, Quest::default());
+        data.dialogue.quests.insert(0x10, Quest::default());
+        let mut state = ScriptState::default();
+        state.start(&data);
+        assert!(state.running(CHARGEN_QUEST));
+        assert!(!state.running(0x10));
+        assert!(state.in_chargen);
     }
 }
 
@@ -817,6 +918,8 @@ pub struct Pending {
     /// Activations scripts asked for: target, activator, and whether the
     /// target's own script gets to handle it.
     pub activations: Vec<(u32, u32, bool)>,
+    /// `MoveTo`s: who, and the reference to stand at.
+    pub moves: Vec<(u32, u32)>,
 }
 
 /// A snapshot of the actors in the loaded cell and the player, for scripts and
@@ -892,6 +995,7 @@ pub(crate) fn apply_effects(
                 by,
                 run_script,
             } => pending.activations.push((target, by, run_script)),
+            WorldEffect::MoveTo { who, marker } => pending.moves.push((who, marker)),
             WorldEffect::AddItem { to, .. } => {
                 debug!("AddItem on {to:08X}: only the player's inventory is kept so far");
             }

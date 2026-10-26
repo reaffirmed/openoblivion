@@ -576,3 +576,68 @@ pub(crate) fn resync_cell(
         }
     }
 }
+
+/// Carries out scripts' `MoveTo`s: within the loaded cell an actor or the
+/// player just moves; the player going to a marker elsewhere changes cell,
+/// and an actor leaving for another cell leaves this one.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_moves(
+    mut commands: Commands,
+    mut pending: ResMut<crate::script::Pending>,
+    mut transition: ResMut<PendingTransition>,
+    world: Option<Res<WorldData>>,
+    current: Option<Res<CurrentCell>>,
+    mut placed: Query<(Entity, &PlacedRef, &mut Transform), Without<Player>>,
+    mut players: Query<(&mut Transform, &mut StepPositions), With<Player>>,
+) {
+    let moves = std::mem::take(&mut pending.moves);
+    let (Some(world), Some(current)) = (world, current) else {
+        return;
+    };
+    for (who, marker) in moves {
+        // Where the marker stands: here, or in its own cell.
+        let here = placed
+            .iter()
+            .find(|(_, r, _)| r.0 == marker)
+            .map(|(_, _, t)| (current.form_id, t.translation, t.rotation));
+        let there = here.or_else(|| {
+            let cell = *world.reference_cells.get(&marker)?;
+            let r = interior_cell_by_form_id(&world.order, cell)
+                .ok()??
+                .references
+                .into_iter()
+                .find(|r| r.form_id == marker)?;
+            let [rx, ry, rz] = r.rotation;
+            Some((
+                cell,
+                Vec3::from(zup_to_yup_pos(r.position)),
+                euler_zup_to_quat_yup(rx, ry, rz),
+            ))
+        });
+        let Some((cell, position, rotation)) = there else {
+            warn!("MoveTo {marker:08X}: no such reference in an interior");
+            continue;
+        };
+        if who == crate::script::PLAYER_REF {
+            if cell == current.form_id {
+                for (mut t, mut steps) in &mut players {
+                    t.translation = position + Vec3::Y * (PLAYER_HALF_HEIGHT + PLAYER_RADIUS + 1.0);
+                    *steps = StepPositions::at(t.translation);
+                }
+            } else {
+                let (_, yaw, _) = rotation.to_euler(EulerRot::YXZ);
+                transition.0 = Some((cell, SpawnPoint { position, yaw }));
+            }
+            continue;
+        }
+        let Some((entity, _, mut t)) = placed.iter_mut().find(|(_, r, _)| r.0 == who) else {
+            continue;
+        };
+        if cell == current.form_id {
+            t.translation = position;
+            t.rotation = rotation;
+        } else {
+            commands.entity(entity).despawn();
+        }
+    }
+}

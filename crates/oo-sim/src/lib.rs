@@ -74,6 +74,7 @@ impl Plugin for SimPlugin {
                     script::run_object_scripts,
                     ai::run_ai,
                     cell::resync_cell,
+                    cell::apply_moves,
                     cell::apply_transition,
                 )
                     .chain()
