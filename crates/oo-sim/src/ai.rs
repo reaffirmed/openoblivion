@@ -36,6 +36,8 @@ const AMBUSH_HOME: f32 = 200.0;
 const AMBUSH_LEASH: f32 = 300.0;
 /// How close an actor comes to start talking.
 const GREET_DISTANCE: f32 = 100.0;
+/// How close an actor gets to what its package uses before activating it.
+const USE_DISTANCE: f32 = 120.0;
 /// An escort waits when the escorted falls this far behind.
 const ESCORT_WAIT_DISTANCE: f32 = 600.0;
 
@@ -414,7 +416,12 @@ pub(crate) fn run_ai(
             let list = ai.packages.clone();
             let picked = pick_package(data, &world.packages, &mut state, &facts, &list, placed.0);
             if picked != ai.current {
-                debug!("{:08X} picked package {:08X?}", placed.0, picked);
+                info!(
+                    "{:08X} picked package {:08X?} ({:?})",
+                    placed.0,
+                    picked,
+                    picked.and_then(|p| world.packages.get(&p)).map(|p| p.kind)
+                );
                 if let Some(old) = ai.current {
                     state.raise(placed.0, old, event::PACKAGE_CHANGE);
                 }
@@ -555,6 +562,34 @@ pub(crate) fn run_ai(
                     {
                         goal = Some(c);
                         speed = pace;
+                    }
+                }
+                // Use an item at: go to the target reference (or the
+                // package's place) and activate it, as with a lever or a
+                // switch. Not yet checked against the game.
+                PackageKind::UseItemAt if !ai.finished => {
+                    let target = package_target(p);
+                    let to = target
+                        .and_then(|t| positions.get(&t).copied())
+                        .or_else(|| destination(p, &ai, here, &positions).map(|(c, _)| c));
+                    match to {
+                        Some(to)
+                            if Vec3::new(to.x - here.x, 0.0, to.z - here.z).length()
+                                > USE_DISTANCE =>
+                        {
+                            goal = Some(to);
+                            speed = pace;
+                        }
+                        _ => {
+                            ai.finished = true;
+                            if let Some(t) = target {
+                                info!("{:08X} uses {t:08X}", placed.0);
+                                pending.activations.push((t, placed.0, true));
+                            }
+                            if let Some(current) = ai.current {
+                                state.raise(placed.0, current, event::PACKAGE_DONE);
+                            }
+                        }
                     }
                 }
                 PackageKind::Wander => {

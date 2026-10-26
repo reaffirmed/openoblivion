@@ -757,6 +757,12 @@ impl Host for GameHost<'_> {
                     .copied()
                     .unwrap_or(0),
             ),
+            // Whether the reference that activated this one is the given one.
+            "IsActionRef" => flag(
+                self.this
+                    .and_then(|t| self.state.activated.get(&t))
+                    .is_some_and(|&by| by == form(0)),
+            ),
             "GetButtonPressed" => -1.0,
             "SameSex" => flag(
                 self.facts(Some(form(0)))

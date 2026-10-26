@@ -138,6 +138,9 @@ pub(crate) fn activate(
         else {
             continue;
         };
+        if by != PLAYER_REF {
+            info!("{by:08X} activates {:08X}", placed.0);
+        }
         if run_script
             && let Some(Scripted(script)) = scripted
             && world.scripting.handles_activation(*script)
