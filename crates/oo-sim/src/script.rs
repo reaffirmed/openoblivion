@@ -111,6 +111,19 @@ pub struct QuestProgress {
     pub since_run: f32,
 }
 
+impl QuestProgress {
+    /// Starts the quest and marks `stage` done. The current stage only moves
+    /// up: vanilla scripts set lower stages to make sure their results ran
+    /// (the tutorial's stage 24 sets 23 "to make sure", and each ambush
+    /// assassin's death sets 23 before checking for 26), which only works if
+    /// `GetStage` keeps the highest. Waiting on the RE notes to confirm.
+    pub fn set_stage(&mut self, stage: u16) {
+        self.running = true;
+        self.stage = self.stage.max(stage);
+        self.done.insert(stage);
+    }
+}
+
 /// A door's or container's lock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Lock {
@@ -511,10 +524,7 @@ impl<'a> GameHost<'a> {
             let Some(q) = self.data.dialogue.quests.get(&quest) else {
                 continue;
             };
-            let progress = self.state.quests.entry(quest).or_default();
-            progress.running = true;
-            progress.stage = stage;
-            progress.done.insert(stage);
+            self.state.quests.entry(quest).or_default().set_stage(stage);
             let Some(stage) = q.stages.iter().find(|s| s.index == stage) else {
                 continue;
             };
@@ -738,7 +748,8 @@ impl Host for GameHost<'_> {
                 }
                 1.0
             }
-            "Kill" => {
+            "KillActor" => {
+                // The optional argument is the killer.
                 if let Some(v) = subject.and_then(|r| self.state.vitals.get_mut(&r))
                     && !v.dead
                 {
@@ -937,10 +948,7 @@ impl Host for GameHost<'_> {
             "SetStage" => {
                 let (quest, stage) = (form(0), arg_number(args, 1) as u16);
                 if self.data.dialogue.quests.contains_key(&quest) {
-                    let progress = self.state.quests.entry(quest).or_default();
-                    progress.running = true;
-                    progress.stage = stage;
-                    progress.done.insert(stage);
+                    self.state.quests.entry(quest).or_default().set_stage(stage);
                 }
                 self.stages.push((quest, stage));
                 1.0
@@ -1179,6 +1187,15 @@ mod tests {
         assert!(state.running(CHARGEN_QUEST));
         assert!(!state.running(0x10));
         assert!(state.in_chargen);
+    }
+
+    #[test]
+    fn a_lower_stage_runs_but_keeps_the_current_one() {
+        let mut q = QuestProgress::default();
+        q.set_stage(24);
+        q.set_stage(23);
+        assert_eq!(q.stage, 24);
+        assert!(q.done.contains(&23) && q.done.contains(&24));
     }
 
     #[test]
