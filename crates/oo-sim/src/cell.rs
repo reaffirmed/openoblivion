@@ -83,7 +83,7 @@ pub struct SpawnPoint {
 pub struct WorldData {
     pub order: LoadOrder,
     pub models: HashMap<u32, String>,
-    reference_cells: HashMap<u32, u32>,
+    pub(crate) reference_cells: HashMap<u32, u32>,
     cell_names: HashMap<u32, String>,
     coc_marker: Option<u32>,
     lights: HashMap<u32, Light>,
@@ -390,6 +390,10 @@ fn spawn_cell(
         if changes.removed.contains(&r.form_id) {
             continue;
         }
+        let moved = changes.relocated.get(&r.form_id);
+        if moved.is_some_and(|m| m.cell != cell.form_id) {
+            continue;
+        }
         if !is_enabled(r, &by_id, changes) {
             disabled += 1;
             continue;
@@ -403,7 +407,7 @@ fn spawn_cell(
                     .map(|p| (format!("{:08X}", p.reference), p.opposite)),
             );
         }
-        let spawned = spawn_reference(commands, world, r);
+        let spawned = spawn_reference_at(commands, world, r, moved);
         if spawned.has_model {
             placed.push(spawned.translation);
         }
@@ -413,6 +417,7 @@ fn spawn_cell(
         }
         doors += usize::from(spawned.load_door);
     }
+    spawn_visitors(commands, world, changes, cell.form_id);
     let marker = spawn.is_some();
     // Oblivion.esm has no COCMarkerHeading (that's a later games' convention), so
     // most cells have no marker. The next best place is where the game itself puts
@@ -476,6 +481,25 @@ fn spawn_cell(
     })
 }
 
+/// Spawns the actors placed in other cells that have come to this one.
+fn spawn_visitors(commands: &mut Commands, world: &WorldData, changes: &WorldChanges, here: u32) {
+    for (&id, moved) in &changes.relocated {
+        let Some(&home) = world.reference_cells.get(&id) else {
+            continue;
+        };
+        if moved.cell != here || home == here || changes.removed.contains(&id) {
+            continue;
+        }
+        let Ok(Some(cell)) = interior_cell_by_form_id(&world.order, home) else {
+            continue;
+        };
+        if let Some(r) = cell.references.iter().find(|r| r.form_id == id) {
+            info!("{id:08X} has come here from {home:08X}");
+            spawn_reference_at(commands, world, r, Some(moved));
+        }
+    }
+}
+
 /// What spawning one reference found out, for picking a spawn point.
 #[derive(Default)]
 struct Spawned {
@@ -488,14 +512,21 @@ struct Spawned {
 }
 
 /// Spawns one reference with everything its base form calls for.
-fn spawn_reference(commands: &mut Commands, world: &WorldData, r: &Reference) -> Spawned {
-    let translation = Vec3::from(zup_to_yup_pos(r.position));
+/// `at`, for an actor that has moved since, is its place instead of the
+/// record's.
+fn spawn_reference_at(
+    commands: &mut Commands,
+    world: &WorldData,
+    r: &Reference,
+    at: Option<&crate::inventory::Relocation>,
+) -> Spawned {
     let [rx, ry, rz] = r.rotation;
     let transform = Transform {
-        translation,
-        rotation: euler_zup_to_quat_yup(rx, ry, rz),
+        translation: at.map_or_else(|| Vec3::from(zup_to_yup_pos(r.position)), |a| a.position),
+        rotation: at.map_or_else(|| euler_zup_to_quat_yup(rx, ry, rz), |a| a.rotation),
         scale: Vec3::splat(r.scale),
     };
+    let translation = transform.translation;
     let mut out = Spawned {
         translation,
         ..default()
@@ -680,6 +711,10 @@ pub(crate) fn resync_cell(
     let by_id: HashMap<u32, &Reference> = cell.references.iter().map(|r| (r.form_id, r)).collect();
     let present: HashMap<u32, Entity> = spawned.iter().map(|(e, r)| (r.0, e)).collect();
     for r in &cell.references {
+        let moved = changes.relocated.get(&r.form_id);
+        if moved.is_some_and(|m| m.cell != current.form_id) {
+            continue;
+        }
         let wanted = !changes.removed.contains(&r.form_id) && is_enabled(r, &by_id, &changes);
         match (wanted, present.get(&r.form_id)) {
             (false, Some(&e)) => {
@@ -688,7 +723,7 @@ pub(crate) fn resync_cell(
             }
             (true, None) => {
                 debug!("enabling {:08X}", r.form_id);
-                spawn_reference(&mut commands, &world, r);
+                spawn_reference_at(&mut commands, &world, r, moved);
             }
             _ => {}
         }
@@ -703,6 +738,7 @@ pub(crate) fn apply_moves(
     mut commands: Commands,
     mut pending: ResMut<crate::script::Pending>,
     mut state: ResMut<ScriptState>,
+    mut changes: ResMut<WorldChanges>,
     mut transition: ResMut<PendingTransition>,
     world: Option<Res<WorldData>>,
     current: Option<Res<CurrentCell>>,
@@ -710,9 +746,24 @@ pub(crate) fn apply_moves(
     mut players: Query<(&mut Transform, &mut StepPositions), With<Player>>,
 ) {
     let moves = std::mem::take(&mut pending.moves);
+    let leaving = std::mem::take(&mut pending.leaving);
     let (Some(world), Some(current)) = (world, current) else {
         return;
     };
+    // Actors going through load doors.
+    for (who, to) in leaving {
+        let Some((entity, _, mut t)) = placed.iter_mut().find(|(_, r, _)| r.0 == who) else {
+            continue;
+        };
+        info!("{who:08X} goes through a door to {:08X}", to.cell);
+        if to.cell == current.form_id {
+            t.translation = to.position;
+            t.rotation = to.rotation;
+        } else {
+            commands.entity(entity).despawn();
+        }
+        changes.relocated.insert(who, to);
+    }
     for (who, marker) in moves {
         // Where the marker stands: here, or in its own cell.
         let here = placed
@@ -769,6 +820,14 @@ pub(crate) fn apply_moves(
             t.rotation = rotation;
         } else {
             commands.entity(entity).despawn();
+            changes.relocated.insert(
+                who,
+                crate::inventory::Relocation {
+                    cell,
+                    position,
+                    rotation,
+                },
+            );
         }
     }
 }

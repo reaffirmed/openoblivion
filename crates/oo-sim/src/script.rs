@@ -1432,6 +1432,8 @@ pub struct Pending {
     pub activations: Vec<(u32, u32, bool)>,
     /// `MoveTo`s: who, and the reference to stand at.
     pub moves: Vec<(u32, u32)>,
+    /// Actors going through a load door: who, and where they come out.
+    pub leaving: Vec<(u32, crate::inventory::Relocation)>,
     /// Doors to open or close and animation groups to play, by reference.
     pub animations: Vec<(u32, AnimRequest)>,
     /// Actors who came up to the player to talk, oldest first.

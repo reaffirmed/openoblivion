@@ -354,6 +354,9 @@ fn reached(here: Vec3, to: Vec3, radius: f32) -> bool {
     across <= radius && (here.y - to.y).abs() <= REACH_HEIGHT
 }
 
+/// How close to a load door an actor goes through it.
+const DOOR_DISTANCE: f32 = 96.0;
+
 /// How far above or below a goal still counts as at it.
 const REACH_HEIGHT: f32 = 128.0;
 
@@ -373,9 +376,20 @@ pub(crate) fn run_ai(
         Without<crate::combat::Dead>,
     >,
     players: Query<PlayerView, (With<Player>, Without<Ai>)>,
+    doors: Query<(&Transform, &crate::cell::LoadDoor), Without<Ai>>,
+    changes: Res<crate::inventory::WorldChanges>,
 ) {
     let Some(world) = world else { return };
     let dt = time.delta_secs();
+    let here_cell = cell.as_ref().map_or(0, |c| c.form_id);
+    // The interior a reference is in now, if known.
+    let whereabouts = |r: u32| {
+        changes
+            .relocated
+            .get(&r)
+            .map(|m| m.cell)
+            .or_else(|| world.reference_cells.get(&r).copied())
+    };
     let data = &world.scripting;
     advance_clock(data, &mut state, dt);
 
@@ -459,7 +473,68 @@ pub(crate) fn run_ai(
         } else if let Some(p) = package {
             let run = p.flags & Package::ALWAYS_RUN != 0;
             let pace = if run { RUN_SPEED } else { WALK_SPEED };
+            // A package whose place or target is in another interior: make
+            // for the load door there and go through it.
+            let elsewhere = |r: u32| {
+                (!positions.contains_key(&r))
+                    .then(|| whereabouts(r))
+                    .flatten()
+                    .filter(|&c| c != here_cell)
+            };
+            let away = match (p.kind, p.location) {
+                (PackageKind::Travel | PackageKind::Escort, _) if ai.arrived => None,
+                (PackageKind::Find, _) if ai.finished => None,
+                (
+                    PackageKind::Travel | PackageKind::Escort | PackageKind::Find,
+                    Some(Location::NearReference(r)),
+                ) => elsewhere(r),
+                (
+                    PackageKind::Travel | PackageKind::Escort | PackageKind::Find,
+                    Some(Location::InCell(c)),
+                ) => Some(c).filter(|&c| c != here_cell),
+                (PackageKind::Follow | PackageKind::Accompany, _) => {
+                    package_target(p).and_then(elsewhere)
+                }
+                _ => None,
+            };
             match p.kind {
+                _ if let Some(away) = away => {
+                    let door = doors
+                        .iter()
+                        .filter(|(_, d)| d.cell == Some(away))
+                        .min_by(|a, b| {
+                            a.0.translation
+                                .distance(here)
+                                .total_cmp(&b.0.translation.distance(here))
+                        });
+                    match door {
+                        Some((t, d)) if reached(here, t.translation, DOOR_DISTANCE) => {
+                            pending.leaving.push((
+                                placed.0,
+                                crate::inventory::Relocation {
+                                    cell: away,
+                                    position: d.arrival.position,
+                                    rotation: Quat::from_rotation_y(d.arrival.yaw),
+                                },
+                            ));
+                        }
+                        Some((t, _)) => {
+                            goal = Some(t.translation);
+                            speed = pace;
+                        }
+                        None => {
+                            if state
+                                .unsupported
+                                .insert(format!("no door {:08X} {away:08X}", placed.0))
+                            {
+                                info!(
+                                    "{:08X}: package {:08X?} is in {away:08X}, with no door there from here",
+                                    placed.0, ai.current
+                                );
+                            }
+                        }
+                    }
+                }
                 PackageKind::Travel | PackageKind::Escort if !ai.arrived => {
                     let target = destination(p, &ai, here, &positions);
                     if target.is_none() {

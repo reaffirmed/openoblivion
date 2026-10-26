@@ -31,6 +31,17 @@ pub struct WorldChanges {
     pub containers: HashMap<u32, Vec<Stack>>,
     /// References enabled or disabled since the game started, by scripts.
     pub enabled: HashMap<u32, bool>,
+    /// Actors that have gone to another cell than the one they were placed
+    /// in, or moved within it while it wasn't loaded: where they are now.
+    pub relocated: HashMap<u32, Relocation>,
+}
+
+/// Where a reference is now: its cell and its place there (Y-up).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Relocation {
+    pub cell: u32,
+    pub position: bevy::math::Vec3,
+    pub rotation: bevy::math::Quat,
 }
 
 /// What a player carries.
