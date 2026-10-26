@@ -79,7 +79,12 @@ fn main() -> Result<()> {
         Command::EsmCells { plugin } => {
             let esm =
                 Plugin::open(&plugin).with_context(|| format!("opening {}", plugin.display()))?;
-            for id in oo_formats::world::interior_cell_ids(&esm)? {
+            let name = plugin
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let order = oo_formats::load_order::LoadOrder::new(vec![(name, esm)])?;
+            for id in oo_formats::world::interior_cell_ids(&order)? {
                 println!("{id}");
             }
         }

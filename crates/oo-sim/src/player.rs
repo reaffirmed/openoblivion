@@ -41,6 +41,41 @@ pub struct PlayerIntent {
     pub activate: bool,
 }
 
+/// The player's position at the last two simulation steps. The simulation runs
+/// at a fixed rate and the renderer at whatever the display allows; drawing
+/// between these two positions keeps motion smooth at any framerate.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct StepPositions {
+    pub previous: Vec3,
+    pub current: Vec3,
+}
+
+impl StepPositions {
+    pub fn at(position: Vec3) -> Self {
+        Self {
+            previous: position,
+            current: position,
+        }
+    }
+
+    /// Where to draw, `fraction` of the way from the last step to the next.
+    pub fn interpolate(&self, fraction: f32) -> Vec3 {
+        self.previous.lerp(self.current, fraction)
+    }
+}
+
+fn remember_position(mut players: Query<&mut StepPositions>) {
+    for mut p in &mut players {
+        p.previous = p.current;
+    }
+}
+
+fn record_position(mut players: Query<(&Transform, &mut StepPositions)>) {
+    for (t, mut p) in &mut players {
+        p.current = t.translation;
+    }
+}
+
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct PlayerMotion {
     pub vertical_speed: f32,
@@ -52,7 +87,9 @@ pub struct PlayerPlugin;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PostStartup, spawn_player)
-            .add_systems(Update, move_player);
+            .add_systems(FixedFirst, remember_position)
+            .add_systems(FixedUpdate, move_player.before(PhysicsSet::SyncBackend))
+            .add_systems(FixedLast, record_position);
     }
 }
 
@@ -71,6 +108,7 @@ pub fn spawn_player(mut commands: Commands, spawn: Option<Res<SpawnPoint>>) {
         },
         PlayerMotion::default(),
         LookingAt::default(),
+        StepPositions::at(centre),
         Transform::from_translation(centre),
         RigidBody::KinematicPositionBased,
         Collider::capsule_y(PLAYER_HALF_HEIGHT, PLAYER_RADIUS),
@@ -116,7 +154,9 @@ pub fn move_player(
 
         motion.grounded = output.is_some_and(|o| o.grounded);
         if motion.grounded {
-            motion.vertical_speed = if intent.jump { JUMP_SPEED } else { -1.0 };
+            // No downward push while grounded: snap_to_ground keeps us on slopes and
+            // stairs, and pushing into the floor every step slowly sinks the capsule.
+            motion.vertical_speed = if intent.jump { JUMP_SPEED } else { 0.0 };
         } else {
             motion.vertical_speed -= GRAVITY * dt;
         }

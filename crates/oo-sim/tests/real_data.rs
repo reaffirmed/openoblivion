@@ -33,7 +33,7 @@ fn app(data: PathBuf) -> App {
         .insert_resource(TimeUpdateStrategy::ManualDuration(FRAME))
         .add_plugins(SimPlugin(WorldConfig {
             data_dir: Some(data),
-            plugin: "Oblivion.esm".into(),
+            plugins: vec!["Oblivion.esm".into()],
             cell: Some(CELL.into()),
         }));
     app

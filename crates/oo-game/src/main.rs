@@ -10,12 +10,12 @@ use std::path::PathBuf;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
-use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+use bevy::window::{CursorGrabMode, CursorOptions, PresentMode, PrimaryWindow};
 use bevy_rapier3d::render::{DebugRenderContext, RapierDebugRenderPlugin};
 use clap::Parser;
 use oo_sim::{
-    CurrentCell, EYE_HEIGHT, LoadDoor, LookingAt, Player, PlayerIntent, SimPlugin, UNITS_PER_METRE,
-    WorldConfig,
+    CurrentCell, EYE_HEIGHT, LoadDoor, LookingAt, Player, PlayerIntent, SimPlugin, StepPositions,
+    UNITS_PER_METRE, WorldConfig,
 };
 
 use crate::model::ModelCache;
@@ -28,12 +28,19 @@ struct Args {
     /// The game's Data directory, e.g. ".../Oblivion/Data".
     #[arg(long)]
     data: Option<PathBuf>,
-    /// The plugin to load. Only one for now: form IDs from other plugins aren't remapped yet.
-    #[arg(long, default_value = "Oblivion.esm")]
-    plugin: String,
+    /// Plugins to load (repeat the flag, or comma-separate). Ignored if --plugins-txt is given.
+    #[arg(long = "plugin", value_delimiter = ',', default_value = "Oblivion.esm")]
+    plugins: Vec<String>,
+    /// Read the active plugins from Oblivion's Plugins.txt instead, usually
+    /// %LOCALAPPDATA%\Oblivion\Plugins.txt.
+    #[arg(long)]
+    plugins_txt: Option<PathBuf>,
     /// Editor ID of the interior cell to load (`oo-inspect esm-cells` lists them).
     #[arg(long)]
     cell: Option<String>,
+    /// Turn off vsync to run as fast as the GPU allows.
+    #[arg(long)]
+    no_vsync: bool,
     /// Save a screenshot here once the cell has loaded, then quit. For testing.
     #[arg(long)]
     screenshot: Option<PathBuf>,
@@ -64,13 +71,18 @@ fn main() {
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             title: "OpenOblivion".into(),
+            present_mode: if args.no_vsync {
+                PresentMode::AutoNoVsync
+            } else {
+                PresentMode::AutoVsync
+            },
             ..default()
         }),
         ..default()
     }))
     .add_plugins(SimPlugin(WorldConfig {
         data_dir: args.data,
-        plugin: args.plugin,
+        plugins: oo_sim::active_plugins(args.plugins, args.plugins_txt.as_deref()),
         cell: args.cell,
     }))
     .add_plugins(RapierDebugRenderPlugin {
@@ -88,9 +100,7 @@ fn main() {
         (
             model::attach_models,
             grab_cursor,
-            (player_input, follow_player)
-                .chain()
-                .before(oo_sim::player::move_player),
+            (player_input, follow_player).chain(),
             debug_keys,
             update_hud,
         ),
@@ -112,9 +122,10 @@ fn main() {
 /// Applies `--camera`: moves the player there and turns on noclip so they stay put.
 fn place_camera_start(
     start: Option<Res<CameraStart>>,
-    mut players: Query<(&mut Transform, &mut PlayerIntent), With<Player>>,
+    mut players: Query<(&mut Transform, &mut PlayerIntent, &mut StepPositions), With<Player>>,
 ) {
-    let (Some(start), Ok((mut transform, mut intent))) = (start, players.single_mut()) else {
+    let (Some(start), Ok((mut transform, mut intent, mut steps))) = (start, players.single_mut())
+    else {
         return;
     };
     let c = &start.0;
@@ -124,6 +135,7 @@ fn place_camera_start(
     intent.yaw = c[3].to_radians();
     intent.pitch = c[4].to_radians();
     intent.noclip = true;
+    *steps = StepPositions::at(transform.translation);
 }
 
 /// Waits for models and textures to settle, saves one screenshot, then exits.
@@ -224,16 +236,21 @@ fn player_input(
 }
 
 /// First-person camera at the player's eyes.
+/// Position comes from the last two simulation steps, interpolated by how far
+/// the renderer is into the next one, so it's smooth at any framerate. Looking
+/// around uses the mouse directly, every frame.
 fn follow_player(
-    players: Query<(&Transform, &PlayerIntent), With<Player>>,
+    fixed: Res<Time<Fixed>>,
+    players: Query<(&StepPositions, &PlayerIntent), With<Player>>,
     mut camera: Query<&mut Transform, (With<Camera3d>, Without<Player>)>,
 ) {
-    let (Ok((player, intent)), Ok(mut camera)) = (players.single(), camera.single_mut()) else {
+    let (Ok((steps, intent)), Ok(mut camera)) = (players.single(), camera.single_mut()) else {
         return;
     };
-    // The player's transform is the capsule centre; eyes are measured from the feet.
-    let feet = player.translation
-        - Vec3::Y * (oo_sim::player::PLAYER_HALF_HEIGHT + oo_sim::player::PLAYER_RADIUS);
+    let centre = steps.interpolate(fixed.overstep_fraction());
+    // The player's position is the capsule centre; eyes are measured from the feet.
+    let feet =
+        centre - Vec3::Y * (oo_sim::player::PLAYER_HALF_HEIGHT + oo_sim::player::PLAYER_RADIUS);
     camera.translation = feet + Vec3::Y * EYE_HEIGHT;
     camera.rotation = Quat::from_euler(EulerRot::YXZ, intent.yaw, intent.pitch, 0.0);
 }

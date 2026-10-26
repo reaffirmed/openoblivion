@@ -183,7 +183,7 @@ fn app(dir: PathBuf) -> App {
     app.add_plugins((MinimalPlugins, TransformPlugin))
         .add_plugins(SimPlugin(WorldConfig {
             data_dir: Some(dir),
-            plugin: "Oblivion.esm".into(),
+            plugins: vec!["Oblivion.esm".into()],
             cell: Some("testprisoncell".into()),
         }));
     app.update();
@@ -294,7 +294,7 @@ fn player_falls_onto_a_floor_walks_and_is_stopped_by_a_wall() {
         ))
         .add_plugins(SimPlugin(WorldConfig {
             data_dir: None,
-            plugin: "Oblivion.esm".into(),
+            plugins: vec!["Oblivion.esm".into()],
             cell: None,
         }));
     // A floor at y = 0 and a wall 300 units ahead (-Z).

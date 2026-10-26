@@ -5,6 +5,7 @@
 
 pub mod bsa;
 pub mod esm;
+pub mod load_order;
 pub mod world;
 
 mod error;

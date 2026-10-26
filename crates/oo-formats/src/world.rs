@@ -1,5 +1,6 @@
-//! Higher-level views over a plugin: interior cells, the references placed in
-//! them, and which model each base object uses.
+//! Higher-level views over a load order: interior cells, the references placed
+//! in them, and which model each base object uses. Form IDs in and out are
+//! global (see [`LoadOrder`]).
 //!
 //! Positions and rotations are returned exactly as stored: Bethesda units
 //! (about 70 per metre), Z-up, Euler angles in radians. Converting to an
@@ -8,6 +9,7 @@
 use std::collections::HashMap;
 
 use crate::esm::{Group, GroupKind, Node, Nodes, Plugin, Record, Tag};
+use crate::load_order::LoadOrder;
 use crate::{Error, Result};
 
 /// An object placed in a cell: a `REFR`, `ACHR` (NPC) or `ACRE` (creature).
@@ -86,86 +88,199 @@ impl Reference {
 
 /// Maps every record with a model (`MODL`) to that model's path, relative to
 /// `meshes\`. Covers statics, doors, containers, lights, furniture and so on.
-pub fn model_paths(plugin: &Plugin) -> Result<HashMap<u32, String>> {
+/// Later plugins override earlier ones.
+pub fn model_paths(order: &LoadOrder) -> Result<HashMap<u32, String>> {
     let mut out = HashMap::new();
-    let mut error = None;
-    plugin.for_each_record(|r| {
-        if matches!(
-            &r.tag.0,
-            b"CELL" | b"REFR" | b"ACHR" | b"ACRE" | b"LAND" | b"PGRD"
-        ) {
-            return;
-        }
-        let fields = match r.fields() {
-            Ok(f) => f,
-            Err(e) => {
-                error.get_or_insert(e);
+    for (index, _, plugin) in order.plugins() {
+        let mut error = None;
+        plugin.for_each_record(|r| {
+            if matches!(
+                &r.tag.0,
+                b"CELL" | b"REFR" | b"ACHR" | b"ACRE" | b"LAND" | b"PGRD"
+            ) {
                 return;
             }
-        };
-        for field in fields.iter().flatten() {
-            if field.tag.0 == *b"MODL" {
-                out.insert(r.form_id, field.zstring());
-                break;
+            let fields = match r.fields() {
+                Ok(f) => f,
+                Err(e) => {
+                    error.get_or_insert(e);
+                    return;
+                }
+            };
+            let id = order.global(index, r.form_id);
+            match fields.iter().flatten().find(|f| f.tag.0 == *b"MODL") {
+                Some(field) => {
+                    out.insert(id, field.zstring());
+                }
+                // An override without a model (or a deletion) removes the old one.
+                None => {
+                    out.remove(&id);
+                }
             }
+        })?;
+        if let Some(e) = error {
+            return Err(e);
         }
-    })?;
-    match error {
-        Some(e) => Err(e),
-        None => Ok(out),
     }
+    Ok(out)
 }
 
-/// Editor IDs of every interior cell, in file order.
-pub fn interior_cell_ids(plugin: &Plugin) -> Result<Vec<String>> {
-    let mut ids = Vec::new();
-    for_each_interior_cell(plugin, &mut |cell, _| {
-        if let Some(id) = cell.editor_id()? {
-            ids.push(id);
-        }
-        Ok(false)
-    })?;
+/// Editor IDs of every interior cell, in load order.
+pub fn interior_cell_ids(order: &LoadOrder) -> Result<Vec<String>> {
+    let mut ids: Vec<String> = Vec::new();
+    let mut seen: HashMap<u32, usize> = HashMap::new();
+    for (index, _, plugin) in order.plugins() {
+        for_each_interior_cell(plugin, &mut |cell, _| {
+            if let Some(id) = cell.editor_id()? {
+                let global = order.global(index, cell.form_id);
+                match seen.get(&global) {
+                    Some(&i) => ids[i] = id,
+                    None => {
+                        seen.insert(global, ids.len());
+                        ids.push(id);
+                    }
+                }
+            }
+            Ok(false)
+        })?;
+    }
     Ok(ids)
 }
 
-/// Finds an interior cell by editor ID (case-insensitive) and collects its references.
-pub fn interior_cell(plugin: &Plugin, editor_id: &str) -> Result<Option<Cell>> {
-    find_interior_cell(plugin, |cell| {
-        Ok(cell
-            .editor_id()?
-            .is_some_and(|id| id.eq_ignore_ascii_case(editor_id)))
-    })
-}
-
-/// Finds an interior cell by form ID and collects its references.
-pub fn interior_cell_by_form_id(plugin: &Plugin, form_id: u32) -> Result<Option<Cell>> {
-    find_interior_cell(plugin, |cell| Ok(cell.form_id == form_id))
-}
-
-/// Maps every reference in an interior cell to that cell's form ID. Reads only
-/// record headers, so it's quick enough to build at startup.
-pub fn interior_reference_cells(plugin: &Plugin) -> Result<HashMap<u32, u32>> {
-    let mut out = HashMap::new();
-    for_each_interior_cell(plugin, &mut |cell, children| {
-        if let Some(children) = children {
-            index_references(children.children(), cell.form_id, &mut out)?;
+/// Finds an interior cell by editor ID (case-insensitive) and collects its
+/// references from every plugin that touches it.
+pub fn interior_cell(order: &LoadOrder, editor_id: &str) -> Result<Option<Cell>> {
+    let mut found = None;
+    for (index, _, plugin) in order.plugins().rev() {
+        for_each_interior_cell(plugin, &mut |cell, _| {
+            if cell
+                .editor_id()?
+                .is_some_and(|id| id.eq_ignore_ascii_case(editor_id))
+            {
+                found = Some(order.global(index, cell.form_id));
+                return Ok(true);
+            }
+            Ok(false)
+        })?;
+        if found.is_some() {
+            break;
         }
-        Ok(false)
-    })?;
+    }
+    match found {
+        Some(id) => interior_cell_by_form_id(order, id),
+        None => Ok(None),
+    }
+}
+
+/// Finds an interior cell by global form ID and merges its references across
+/// the load order: a later plugin's version of a reference replaces the earlier
+/// one, and a deleted reference disappears.
+pub fn interior_cell_by_form_id(order: &LoadOrder, form_id: u32) -> Result<Option<Cell>> {
+    let mut found: Option<Cell> = None;
+    let mut positions: HashMap<u32, usize> = HashMap::new();
+    let mut slots: Vec<Option<Reference>> = Vec::new();
+    for (index, _, plugin) in order.plugins() {
+        for_each_interior_cell(plugin, &mut |cell, children| {
+            if order.global(index, cell.form_id) != form_id {
+                return Ok(false);
+            }
+            let (editor_id, name) = cell_names(cell)?;
+            found = Some(Cell {
+                form_id,
+                editor_id: editor_id.unwrap_or_default(),
+                name,
+                references: Vec::new(),
+            });
+            if let Some(children) = children {
+                let mut raw = Vec::new();
+                collect_references(children.children(), &mut raw)?;
+                for (mut r, deleted) in raw {
+                    remap_reference(order, index, &mut r);
+                    let value = (!deleted).then_some(r.clone());
+                    match positions.get(&r.form_id) {
+                        Some(&i) => slots[i] = value,
+                        None => {
+                            positions.insert(r.form_id, slots.len());
+                            slots.push(value);
+                        }
+                    }
+                }
+            }
+            Ok(true)
+        })?;
+    }
+    Ok(found.map(|mut cell| {
+        cell.references = slots.into_iter().flatten().collect();
+        cell
+    }))
+}
+
+fn remap_reference(order: &LoadOrder, index: usize, r: &mut Reference) {
+    r.form_id = order.global(index, r.form_id);
+    r.base = order.global(index, r.base);
+    if let Some(t) = &mut r.teleport {
+        t.door = order.global(index, t.door);
+    }
+}
+
+/// Maps every reference in an interior cell to that cell's global form ID.
+/// Reads only record headers, so it's quick enough to build at startup.
+pub fn interior_reference_cells(order: &LoadOrder) -> Result<HashMap<u32, u32>> {
+    let mut out = HashMap::new();
+    for (index, _, plugin) in order.plugins() {
+        for_each_interior_cell(plugin, &mut |cell, children| {
+            if let Some(children) = children {
+                let cell_id = order.global(index, cell.form_id);
+                index_references(children.children(), &mut |r| {
+                    out.insert(order.global(index, r), cell_id);
+                })?;
+            }
+            Ok(false)
+        })?;
+    }
     Ok(out)
 }
 
-/// Maps every interior cell's form ID to its in-game name, falling back to its editor ID.
-pub fn interior_cell_names(plugin: &Plugin) -> Result<HashMap<u32, String>> {
+/// Maps every interior cell's global form ID to its in-game name, falling back
+/// to its editor ID. Later plugins override earlier ones.
+pub fn interior_cell_names(order: &LoadOrder) -> Result<HashMap<u32, String>> {
     let mut out = HashMap::new();
-    for_each_interior_cell(plugin, &mut |cell, _| {
-        let (editor_id, name) = cell_names(cell)?;
-        if let Some(n) = name.or(editor_id) {
-            out.insert(cell.form_id, n);
-        }
-        Ok(false)
-    })?;
+    for (index, _, plugin) in order.plugins() {
+        for_each_interior_cell(plugin, &mut |cell, _| {
+            let (editor_id, name) = cell_names(cell)?;
+            if let Some(n) = name.or(editor_id) {
+                out.insert(order.global(index, cell.form_id), n);
+            }
+            Ok(false)
+        })?;
+    }
     Ok(out)
+}
+
+/// Finds the global form ID of a record by editor ID (case-insensitive),
+/// preferring the latest plugin that defines it.
+pub fn form_id_by_editor_id(order: &LoadOrder, editor_id: &str) -> Result<Option<u32>> {
+    for (index, _, plugin) in order.plugins().rev() {
+        let mut found = None;
+        let mut error = None;
+        plugin.for_each_record(|r| {
+            if found.is_some() || error.is_some() {
+                return;
+            }
+            match r.editor_id() {
+                Ok(Some(id)) if id.eq_ignore_ascii_case(editor_id) => found = Some(r.form_id),
+                Ok(_) => {}
+                Err(e) => error = Some(e),
+            }
+        })?;
+        if let Some(e) = error {
+            return Err(e);
+        }
+        if let Some(local) = found {
+            return Ok(Some(order.global(index, local)));
+        }
+    }
+    Ok(None)
 }
 
 /// A cell's editor ID (`EDID`) and display name (`FULL`).
@@ -183,41 +298,14 @@ fn cell_names(cell: &Record<'_>) -> Result<(Option<String>, Option<String>)> {
     Ok((editor_id, name))
 }
 
-fn index_references(nodes: Nodes<'_>, cell: u32, out: &mut HashMap<u32, u32>) -> Result<()> {
+fn index_references(nodes: Nodes<'_>, f: &mut dyn FnMut(u32)) -> Result<()> {
     for node in nodes {
         match node? {
-            Node::Record(r) => {
-                out.insert(r.form_id, cell);
-            }
-            Node::Group(g) => index_references(g.children(), cell, out)?,
+            Node::Record(r) => f(r.form_id),
+            Node::Group(g) => index_references(g.children(), f)?,
         }
     }
     Ok(())
-}
-
-fn find_interior_cell(
-    plugin: &Plugin,
-    mut matches: impl FnMut(&Record<'_>) -> Result<bool>,
-) -> Result<Option<Cell>> {
-    let mut found = None;
-    for_each_interior_cell(plugin, &mut |cell, children| {
-        if !matches(cell)? {
-            return Ok(false);
-        }
-        let mut references = Vec::new();
-        if let Some(children) = children {
-            collect_references(children.children(), &mut references)?;
-        }
-        let (editor_id, name) = cell_names(cell)?;
-        found = Some(Cell {
-            form_id: cell.form_id,
-            editor_id: editor_id.unwrap_or_default(),
-            name,
-            references,
-        });
-        Ok(true)
-    })?;
-    Ok(found)
 }
 
 /// Calls `f` with each interior `CELL` record and its children group, if any.
@@ -278,12 +366,26 @@ fn walk_cell_blocks<'a>(
     Ok(false)
 }
 
-fn collect_references(nodes: Nodes<'_>, out: &mut Vec<Reference>) -> Result<()> {
+/// Collects references with their deleted flag; deletions matter when merging
+/// a load order, since they remove a master's reference.
+fn collect_references(nodes: Nodes<'_>, out: &mut Vec<(Reference, bool)>) -> Result<()> {
     for node in nodes {
         match node? {
             Node::Record(r) if matches!(&r.tag.0, b"REFR" | b"ACHR" | b"ACRE") => {
-                if !r.is_deleted() {
-                    out.push(Reference::from_record(&r)?);
+                if r.is_deleted() {
+                    // Deleted records may be stripped down to nothing but the header.
+                    let stub = Reference {
+                        tag: r.tag,
+                        form_id: r.form_id,
+                        base: 0,
+                        position: [0.0; 3],
+                        rotation: [0.0; 3],
+                        scale: 1.0,
+                        teleport: None,
+                    };
+                    out.push((stub, true));
+                } else {
+                    out.push((Reference::from_record(&r)?, false));
                 }
             }
             Node::Record(_) => {}
@@ -299,24 +401,4 @@ fn u32_at(d: &[u8], at: usize) -> u32 {
 
 fn f32_at(d: &[u8], at: usize) -> f32 {
     f32::from_le_bytes(d[at..at + 4].try_into().unwrap())
-}
-
-/// Finds the form ID of the first record with this editor ID (case-insensitive).
-pub fn form_id_by_editor_id(plugin: &Plugin, editor_id: &str) -> Result<Option<u32>> {
-    let mut found = None;
-    let mut error = None;
-    plugin.for_each_record(|r| {
-        if found.is_some() || error.is_some() {
-            return;
-        }
-        match r.editor_id() {
-            Ok(Some(id)) if id.eq_ignore_ascii_case(editor_id) => found = Some(r.form_id),
-            Ok(_) => {}
-            Err(e) => error = Some(e),
-        }
-    })?;
-    match error {
-        Some(e) => Err(e),
-        None => Ok(found),
-    }
 }

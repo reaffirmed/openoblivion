@@ -14,20 +14,32 @@ pub struct GameData {
 }
 
 impl GameData {
-    pub fn open(dir: &Path) -> anyhow::Result<Self> {
-        let mut names: Vec<_> = std::fs::read_dir(dir)?
+    /// Opens the archives the game would: the vanilla `Oblivion - *.bsa` set,
+    /// then for each plugin in load order, archives named after it
+    /// (`DLCShiveringIsles.esp` loads `DLCShiveringIsles - Meshes.bsa` and so on).
+    /// Archives no plugin claims aren't loaded, which matches the game.
+    pub fn open(dir: &Path, plugins: &[&str]) -> anyhow::Result<Self> {
+        let mut available: Vec<String> = std::fs::read_dir(dir)?
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.to_ascii_lowercase().ends_with(".bsa"))
             .collect();
-        // Vanilla archives first, then DLC; within each, alphabetical. Real
-        // load order comes from plugins.txt, which we don't read yet.
-        names.sort_by_key(|n| {
-            (
-                !n.to_ascii_lowercase().starts_with("oblivion - "),
-                n.to_ascii_lowercase(),
-            )
-        });
+        available.sort_by_key(|n| n.to_ascii_lowercase());
+
+        let mut names: Vec<String> = Vec::new();
+        let mut claim = |prefix: &str| {
+            let prefix = prefix.to_ascii_lowercase();
+            for n in &available {
+                if n.to_ascii_lowercase().starts_with(&prefix) && !names.contains(n) {
+                    names.push(n.clone());
+                }
+            }
+        };
+        claim("oblivion - ");
+        for plugin in plugins {
+            let stem = plugin.rsplit_once('.').map_or(*plugin, |(stem, _)| stem);
+            claim(stem);
+        }
 
         let mut archives = Vec::new();
         for name in names {

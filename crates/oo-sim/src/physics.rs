@@ -19,8 +19,15 @@ pub struct PhysicsPlugin;
 
 impl Plugin for PhysicsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(
-            RapierPhysicsPlugin::<NoUserData>::default().with_length_unit(UNITS_PER_METRE),
+        // One physics step per simulation step, at the simulation's rate.
+        app.insert_resource(TimestepMode::Fixed {
+            dt: 1.0 / crate::SIM_HZ as f32,
+            substeps: 1,
+        })
+        .add_plugins(
+            RapierPhysicsPlugin::<NoUserData>::default()
+                .with_length_unit(UNITS_PER_METRE)
+                .in_fixed_schedule(),
         )
         .init_resource::<CollisionCache>()
         .add_systems(Update, attach_colliders);

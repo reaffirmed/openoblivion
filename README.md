@@ -49,6 +49,10 @@ cargo run -p oo-sim --bin oo-headless -- --data "$DATA" --cell ImperialDungeon01
 cargo run -p oo-game --release -- --data "$DATA" --cell ImperialDungeon01
 ```
 
+Mods: pass `--plugin` more than once (`--plugin Oblivion.esm --plugin MyMod.esp`), or
+`--plugins-txt` with the game's `Plugins.txt`. Order follows the game's rules: masters
+first, then by file date. `--no-vsync` uncaps the framerate.
+
 Controls follow Oblivion's defaults: click to capture the mouse (Escape releases it),
 WASD to move, Shift to run (Caps Lock toggles always-run), E to jump, Space to activate.
 Debug keys: N toggles noclip, F3 shows collision shapes. Interior lighting isn't
@@ -60,18 +64,9 @@ degrees) puts the player's eyes there in noclip.
 
 ## Roadmap
 
-1. **Data files.** Plugin and BSA readers, interior cells and references (done).
-2. **Walk around.** NIF meshes and DDS textures, Havok collision, a first-person
-   character controller, load doors between interior cells. All of it works on the real
-   tutorial prison; `OO_DATA=/path/to/Data cargo test -p oo-sim --test real_data` checks
-   landing, walls and a load door against your own copy of the game.
-3. **Interact.** Pick up items, containers, inventory, the activate prompt for each.
-4. **People.** NPCs standing where they're placed, then dialogue topics.
-5. **The tutorial.** Enough scripting, AI and combat to play from the prison cell to
-   the sewer exit. This is the first playable target.
-6. **Co-op skeleton.** `bevy_replicon` host and client in the same cells.
-7. **Exteriors and everything else.** `LAND` heightmaps and cell streaming, lighting,
-   animation, magic, UI, save games.
+The goal is a complete open engine in the spirit of OpenMW: the whole game, uncapped
+framerates at any resolution, mod support and co-op. Milestones, and where each kind of
+mod stands, are in [ROADMAP.md](ROADMAP.md).
 
 ## Rules
 

@@ -12,13 +12,15 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use byroredux_core::math::coord::{euler_zup_to_quat_yup, zup_to_yup_pos};
-use oo_formats::esm::Plugin;
+use oo_formats::load_order::LoadOrder;
 use oo_formats::world::{
     Cell, form_id_by_editor_id, interior_cell, interior_cell_by_form_id, interior_cell_ids,
     interior_cell_names, interior_reference_cells, model_paths,
 };
 
-use crate::player::{PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent, PlayerMotion};
+use crate::player::{
+    PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent, PlayerMotion, StepPositions,
+};
 use crate::{GameData, WorldConfig};
 
 /// A reference placed in the world. Its form ID is stable across machines
@@ -55,10 +57,10 @@ pub struct SpawnPoint {
     pub yaw: f32,
 }
 
-/// The loaded plugin and the indexes built from it.
+/// The load order and the indexes built from it. Form IDs are global.
 #[derive(Resource)]
 pub struct WorldData {
-    pub plugin: Plugin,
+    pub order: LoadOrder,
     models: HashMap<u32, String>,
     reference_cells: HashMap<u32, u32>,
     cell_names: HashMap<u32, String>,
@@ -94,31 +96,45 @@ pub(crate) fn load_world(mut commands: Commands, config: Res<WorldConfig>) {
         warn!("no Data directory given; the world is empty");
         return;
     };
-    let data = match GameData::open(dir) {
+    let order = match LoadOrder::open(dir, &config.plugins) {
+        Ok(o) => o,
+        Err(e) => {
+            error!("couldn't load plugins from {}: {e}", dir.display());
+            return;
+        }
+    };
+    for (index, name, plugin) in order.plugins() {
+        let h = plugin.header();
+        info!(
+            "[{index:02X}] {name}: version {}, {} records",
+            h.version, h.num_records
+        );
+    }
+    let plugin_names: Vec<&str> = order.plugins().map(|(_, n, _)| n).collect();
+    let data = match GameData::open(dir, &plugin_names) {
         Ok(d) => d,
         Err(e) => {
             error!("couldn't read {}: {e}", dir.display());
             return;
         }
     };
-    let path = dir.join(&config.plugin);
-    let world = match open_world(&path) {
+    let world = match open_world(order) {
         Ok(w) => w,
         Err(e) => {
-            error!("couldn't load {}: {e}", path.display());
+            error!("couldn't index plugins: {e}");
             return;
         }
     };
     commands.insert_resource(data);
 
     match &config.cell {
-        Some(editor_id) => match interior_cell(&world.plugin, editor_id) {
+        Some(editor_id) => match interior_cell(&world.order, editor_id) {
             Ok(Some(cell)) => {
                 if let Some(spawn) = spawn_cell(&mut commands, &world, &cell) {
                     commands.insert_resource(spawn);
                 }
             }
-            Ok(None) => error!("{}", unknown_cell_message(&world.plugin, editor_id)),
+            Ok(None) => error!("{}", unknown_cell_message(&world.order, editor_id)),
             Err(e) => error!("{e}"),
         },
         None => warn!("no cell given; pass an interior cell's editor ID to load it"),
@@ -126,27 +142,19 @@ pub(crate) fn load_world(mut commands: Commands, config: Res<WorldConfig>) {
     commands.insert_resource(world);
 }
 
-fn open_world(path: &std::path::Path) -> anyhow::Result<WorldData> {
-    let plugin = Plugin::open(path)?;
-    let h = plugin.header();
-    info!(
-        "{}: version {}, {} records",
-        path.display(),
-        h.version,
-        h.num_records
-    );
+fn open_world(order: LoadOrder) -> anyhow::Result<WorldData> {
     Ok(WorldData {
-        models: model_paths(&plugin)?,
-        reference_cells: interior_reference_cells(&plugin)?,
-        cell_names: interior_cell_names(&plugin)?,
+        models: model_paths(&order)?,
+        reference_cells: interior_reference_cells(&order)?,
+        cell_names: interior_cell_names(&order)?,
         // The marker the `coc` console command drops you at.
-        coc_marker: form_id_by_editor_id(&plugin, "COCMarkerHeading")?,
-        plugin,
+        coc_marker: form_id_by_editor_id(&order, "COCMarkerHeading")?,
+        order,
     })
 }
 
-fn unknown_cell_message(plugin: &Plugin, editor_id: &str) -> String {
-    let ids = interior_cell_ids(plugin).unwrap_or_default();
+fn unknown_cell_message(order: &LoadOrder, editor_id: &str) -> String {
+    let ids = interior_cell_ids(order).unwrap_or_default();
     let needle = editor_id.to_ascii_lowercase();
     let similar: Vec<_> = ids
         .iter()
@@ -273,7 +281,7 @@ fn spawn_cell(commands: &mut Commands, world: &WorldData, cell: &Cell) -> Option
 
 /// Where a door in cell `other` drops you when you go through it, if it's a load door.
 fn arrival_through(world: &WorldData, other: u32, door: u32) -> Option<SpawnPoint> {
-    let cell = interior_cell_by_form_id(&world.plugin, other).ok()??;
+    let cell = interior_cell_by_form_id(&world.order, other).ok()??;
     let t = cell
         .references
         .iter()
@@ -291,13 +299,21 @@ pub(crate) fn apply_transition(
     mut pending: ResMut<PendingTransition>,
     world: Option<Res<WorldData>>,
     members: Query<Entity, With<CellMember>>,
-    mut players: Query<(&mut Transform, &mut PlayerIntent, &mut PlayerMotion), With<Player>>,
+    mut players: Query<
+        (
+            &mut Transform,
+            &mut PlayerIntent,
+            &mut PlayerMotion,
+            &mut StepPositions,
+        ),
+        With<Player>,
+    >,
 ) {
     let Some((cell_id, arrival)) = pending.0.take() else {
         return;
     };
     let Some(world) = world else { return };
-    let cell = match interior_cell_by_form_id(&world.plugin, cell_id) {
+    let cell = match interior_cell_by_form_id(&world.order, cell_id) {
         Ok(Some(c)) => c,
         Ok(None) => {
             warn!("door leads to cell {cell_id:08X}, which isn't an interior");
@@ -312,9 +328,11 @@ pub(crate) fn apply_transition(
         commands.entity(entity).despawn();
     }
     spawn_cell(&mut commands, &world, &cell);
-    for (mut transform, mut intent, mut motion) in &mut players {
+    for (mut transform, mut intent, mut motion, mut steps) in &mut players {
         transform.translation =
             arrival.position + Vec3::Y * (PLAYER_HALF_HEIGHT + PLAYER_RADIUS + 1.0);
+        // A teleport, not motion: don't draw the player sliding across.
+        *steps = StepPositions::at(transform.translation);
         intent.yaw = arrival.yaw;
         intent.pitch = 0.0;
         *motion = PlayerMotion::default();

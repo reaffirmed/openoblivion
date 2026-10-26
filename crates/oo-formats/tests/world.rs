@@ -4,6 +4,7 @@ mod common;
 
 use common::{field, group, record, zstr};
 use oo_formats::esm::{Plugin, Tag, flags};
+use oo_formats::load_order::LoadOrder;
 use oo_formats::world::{
     Teleport, form_id_by_editor_id, interior_cell, interior_cell_by_form_id, interior_cell_ids,
     interior_cell_names, interior_reference_cells, model_paths,
@@ -27,6 +28,10 @@ fn refr(
         fields.push(field(b"XSCL", &s.to_le_bytes()));
     }
     record(b"REFR", flags, form_id, &fields)
+}
+
+fn plugin() -> LoadOrder {
+    LoadOrder::new(vec![("Test.esm".into(), master())]).unwrap()
 }
 
 fn door(form_id: u32, base: u32, pos: [f32; 3], rot: [f32; 3], destination: u32) -> Vec<u8> {
@@ -77,7 +82,7 @@ fn cell(
     out
 }
 
-fn plugin() -> Plugin {
+fn master() -> Plugin {
     let mut hedr = 1.0f32.to_le_bytes().to_vec();
     hedr.extend_from_slice(&[0; 8]);
     let header = record(b"TES4", flags::MASTER, 0, &[field(b"HEDR", &hedr)]);
@@ -232,4 +237,124 @@ fn reads_cell_names() {
     let names = interior_cell_names(&p).unwrap();
     assert_eq!(names[&0x200], "The Test Tavern");
     assert_eq!(names[&0x300], "LastCell");
+}
+
+/// A mod that overrides and extends `master()`.
+fn esp() -> Plugin {
+    let mut hedr = 1.0f32.to_le_bytes().to_vec();
+    hedr.extend_from_slice(&[0; 8]);
+    let header = record(
+        b"TES4",
+        0,
+        0,
+        &[
+            field(b"HEDR", &hedr),
+            field(b"MAST", &zstr("Test.esm")),
+            field(b"DATA", &[0; 8]),
+        ],
+    );
+    // Index 00 is Test.esm, 01 is this plugin.
+    let stats = group(
+        b"STAT",
+        0,
+        &[
+            // Retexture the barrel, and add a new static.
+            record(
+                b"STAT",
+                0,
+                0x10,
+                &[
+                    field(b"EDID", &zstr("Barrel")),
+                    field(b"MODL", &zstr("Mod\\Barrel.nif")),
+                ],
+            ),
+            record(
+                b"STAT",
+                0,
+                0x0100_0050,
+                &[
+                    field(b"EDID", &zstr("ModStatue")),
+                    field(b"MODL", &zstr("Mod\\Statue.nif")),
+                ],
+            ),
+        ],
+    );
+    let tavern = vec![
+        record(
+            b"CELL",
+            0,
+            0x200,
+            &[
+                field(b"EDID", &zstr("TestTavern")),
+                field(b"FULL", &zstr("Renamed Tavern")),
+            ],
+        ),
+        group(
+            &0x200u32.to_le_bytes(),
+            6,
+            &[group(
+                &0x200u32.to_le_bytes(),
+                9,
+                &[
+                    // Move the master's 0x202, delete its door 0x201, place a statue.
+                    refr(0x202, 0x11, [40.0, 50.0, 60.0], [0.0; 3], None, 0),
+                    record(b"REFR", flags::DELETED, 0x201, &[]),
+                    refr(0x0100_0060, 0x0100_0050, [1.0; 3], [0.0; 3], None, 0),
+                ],
+            )],
+        ),
+    ];
+    let cells = group(
+        b"CELL",
+        0,
+        &[group(
+            &0i32.to_le_bytes(),
+            2,
+            &[group(&0i32.to_le_bytes(), 3, &tavern)],
+        )],
+    );
+    Plugin::from_bytes([header, stats, cells].concat()).unwrap()
+}
+
+#[test]
+fn later_plugins_override_and_extend_earlier_ones() {
+    // The mod's own IDs (top byte 01) land at its load order index, here 05.
+    let mut plugins: Vec<(String, Plugin)> = (0..4)
+        .map(|i| (format!("Filler{i}.esm"), master()))
+        .collect();
+    plugins.insert(0, ("Test.esm".into(), master()));
+    plugins.push(("Mod.esp".into(), esp()));
+    let order = LoadOrder::new(plugins).unwrap();
+    assert_eq!(order.global(5, 0x0100_0050), 0x0500_0050);
+    assert_eq!(order.global(5, 0x10), 0x10);
+
+    let models = model_paths(&order).unwrap();
+    assert_eq!(models[&0x10], "Mod\\Barrel.nif");
+    assert_eq!(models[&0x0500_0050], "Mod\\Statue.nif");
+    assert_eq!(models[&0x11], "Arch\\Wall.nif");
+
+    let cell = interior_cell(&order, "TestTavern").unwrap().unwrap();
+    assert_eq!(cell.name.as_deref(), Some("Renamed Tavern"));
+    let refs: Vec<_> = cell
+        .references
+        .iter()
+        .map(|r| (r.form_id, r.base, r.position))
+        .collect();
+    assert_eq!(
+        refs,
+        [
+            (0x202, 0x11, [40.0, 50.0, 60.0]),
+            (0x0500_0060, 0x0500_0050, [1.0; 3])
+        ],
+        "moved, deleted and added references"
+    );
+    assert_eq!(
+        form_id_by_editor_id(&order, "ModStatue").unwrap(),
+        Some(0x0500_0050)
+    );
+}
+
+#[test]
+fn missing_master_is_an_error() {
+    assert!(LoadOrder::new(vec![("Mod.esp".into(), esp())]).is_err());
 }

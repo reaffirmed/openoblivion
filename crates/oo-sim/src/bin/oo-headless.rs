@@ -14,8 +14,13 @@ use oo_sim::{Model, PlacedRef, SimPlugin, WorldConfig};
 struct Args {
     #[arg(long)]
     data: PathBuf,
-    #[arg(long, default_value = "Oblivion.esm")]
-    plugin: String,
+    /// Plugins to load (repeat the flag, or comma-separate). Ignored if --plugins-txt is given.
+    #[arg(long = "plugin", value_delimiter = ',', default_value = "Oblivion.esm")]
+    plugins: Vec<String>,
+    /// Read the active plugins from Oblivion's Plugins.txt instead, usually
+    /// %LOCALAPPDATA%\Oblivion\Plugins.txt.
+    #[arg(long)]
+    plugins_txt: Option<PathBuf>,
     #[arg(long)]
     cell: String,
 }
@@ -30,7 +35,7 @@ fn main() {
         ))
         .add_plugins(SimPlugin(WorldConfig {
             data_dir: Some(args.data),
-            plugin: args.plugin,
+            plugins: oo_sim::active_plugins(args.plugins, args.plugins_txt.as_deref()),
             cell: Some(args.cell),
         }))
         .add_systems(Update, report)
