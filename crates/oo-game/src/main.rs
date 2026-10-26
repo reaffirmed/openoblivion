@@ -41,6 +41,9 @@ struct Args {
     /// Turn off vsync to run as fast as the GPU allows.
     #[arg(long)]
     no_vsync: bool,
+    /// Log frames per second and frame time every second.
+    #[arg(long)]
+    fps: bool,
     /// Save a screenshot here once the cell has loaded, then quit. For testing.
     #[arg(long)]
     screenshot: Option<PathBuf>,
@@ -111,6 +114,12 @@ fn main() {
     );
     if let Some(camera) = args.camera {
         app.insert_resource(CameraStart(camera));
+    }
+    if args.fps {
+        app.add_plugins((
+            bevy::diagnostic::FrameTimeDiagnosticsPlugin::default(),
+            bevy::diagnostic::LogDiagnosticsPlugin::default(),
+        ));
     }
     if let Some(path) = args.screenshot {
         app.insert_resource(ScreenshotOnce(path))

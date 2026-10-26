@@ -11,6 +11,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use oo_sim::player::{PLAYER_HALF_HEIGHT, PLAYER_RADIUS};
@@ -28,12 +29,16 @@ fn data_dir() -> Option<PathBuf> {
 }
 
 fn app(data: PathBuf) -> App {
+    app_with(data, &["Oblivion.esm"])
+}
+
+fn app_with(data: PathBuf, plugins: &[&str]) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, TransformPlugin))
         .insert_resource(TimeUpdateStrategy::ManualDuration(FRAME))
         .add_plugins(SimPlugin(WorldConfig {
             data_dir: Some(data),
-            plugins: vec!["Oblivion.esm".into()],
+            plugins: plugins.iter().map(|p| p.to_string()).collect(),
             cell: Some(CELL.into()),
         }));
     app
@@ -235,4 +240,188 @@ fn tutorial_prison_spawn_walls_and_doors() {
         (feet(p).y - door_info.arrival.position.y).abs() < 40.0,
         "player should land near the door's arrival point"
     );
+}
+
+/// The prison's spiral-free staircase: three `prisonStairShort01` pieces climbing
+/// about 220 units to the north. Walk down it and back up, checking the player
+/// stays on the steps and doesn't get stuck on the way.
+#[test]
+fn tutorial_prison_stairs_down_and_up() {
+    let Some(data) = data_dir() else {
+        eprintln!("OO_DATA not set to an Oblivion Data directory; skipping");
+        return;
+    };
+    let mut app = app(data);
+    run(&mut app, 1);
+    let player = player(&mut app);
+
+    let mut steps: Vec<Vec3> = app
+        .world_mut()
+        .query::<(&Transform, &oo_sim::Model)>()
+        .iter(app.world())
+        .filter(|(_, m)| m.0.to_ascii_lowercase().contains("prisonstairshort01"))
+        .map(|(t, _)| t.translation)
+        .collect();
+    steps.sort_by(|a, b| a.y.total_cmp(&b.y));
+    assert_eq!(steps.len(), 3, "expected three stair pieces, got {steps:?}");
+    let (bottom, top) = (steps[0], steps[2]);
+    println!("stair pieces {steps:?}");
+
+    // Drop onto the top piece and settle.
+    {
+        let mut e = app.world_mut().entity_mut(player);
+        e.get_mut::<Transform>().unwrap().translation =
+            top + Vec3::Y * (PLAYER_HALF_HEIGHT + PLAYER_RADIUS + 60.0);
+        e.get_mut::<PlayerIntent>().unwrap().noclip = false;
+    }
+    run(&mut app, 120);
+    let (start, m, _) = state(&app, player);
+    println!(
+        "on the top step: feet {}, grounded {}",
+        feet(start),
+        m.grounded
+    );
+    assert!(m.grounded, "should be standing on the top stair piece");
+
+    // Walk towards the bottom piece and back, 4 s each way (about 600 units of
+    // walking, against a staircase about 520 long).
+    for (name, to) in [("down", bottom), ("up", top)] {
+        let (from, _, _) = state(&app, player);
+        let dir = (to - from).with_y(0.0).normalize();
+        {
+            let mut e = app.world_mut().entity_mut(player);
+            let mut i = e.get_mut::<PlayerIntent>().unwrap();
+            i.yaw = (-dir.x).atan2(-dir.z);
+            i.movement = Vec2::Y;
+        }
+        let mut airborne = 0;
+        let mut biggest_drop = 0.0f32;
+        let mut last = from;
+        for _ in 0..240 {
+            // Steer like a player would: keep aiming at the far end.
+            let (p, _, _) = state(&app, player);
+            let d = (to - p).with_y(0.0).normalize_or_zero();
+            app.world_mut()
+                .entity_mut(player)
+                .get_mut::<PlayerIntent>()
+                .unwrap()
+                .yaw = (-d.x).atan2(-d.z);
+            run(&mut app, 1);
+            let (p, m, _) = state(&app, player);
+            if std::env::var_os("OO_TRACE").is_some() {
+                println!("  {name} feet {} grounded {}", feet(p), m.grounded);
+            }
+            airborne += (!m.grounded) as u32;
+            biggest_drop = biggest_drop.max(last.y - p.y);
+            last = p;
+        }
+        let (end, m, _) = state(&app, player);
+        println!(
+            "walk {name:4}: feet {} -> {}, moved {:.1} horizontally, {:+.1} vertically, \
+             airborne {airborne}/240 frames, biggest one-frame drop {biggest_drop:.1}, grounded at end {}",
+            feet(from),
+            feet(end),
+            (end - from).xz().length(),
+            end.y - from.y,
+            m.grounded
+        );
+        assert!(m.grounded, "walking {name}: should end on the floor");
+        let climbed = end.y - from.y;
+        if name == "down" {
+            assert!(climbed < -150.0, "should have walked down the stairs");
+        } else {
+            assert!(climbed > 150.0, "should have walked back up the stairs");
+        }
+    }
+}
+
+/// Shivering Isles on top of Oblivion.esm: the prison still loads, and its
+/// archives join the virtual file system.
+#[test]
+fn shivering_isles_load_order() {
+    let Some(data) = data_dir() else {
+        eprintln!("OO_DATA not set to an Oblivion Data directory; skipping");
+        return;
+    };
+    if !data.join("DLCShiveringIsles.esp").exists() {
+        eprintln!("Shivering Isles not installed; skipping");
+        return;
+    }
+    // A mesh that's only in DLCShiveringIsles - Meshes.bsa.
+    const SI_MESH: &str =
+        r"meshes\dungeons\ruininteriors\torturedstatue\torturestatuepedestal2a.nif";
+
+    let mut vanilla = app(data.clone());
+    run(&mut vanilla, 1);
+    let vanilla_refs = vanilla
+        .world_mut()
+        .query::<&oo_sim::PlacedRef>()
+        .iter(vanilla.world())
+        .count();
+    assert!(
+        vanilla
+            .world()
+            .resource::<oo_sim::GameData>()
+            .read(SI_MESH)
+            .is_none(),
+        "SI archives shouldn't load without the SI plugin"
+    );
+
+    let mut si = app_with(data, &["Oblivion.esm", "DLCShiveringIsles.esp"]);
+    run(&mut si, 1);
+    let cell = si.world().resource::<CurrentCell>().clone();
+    let si_refs = si
+        .world_mut()
+        .query::<&oo_sim::PlacedRef>()
+        .iter(si.world())
+        .count();
+    println!(
+        "with SI: cell {} ({:08X}), {si_refs} references (vanilla {vanilla_refs})",
+        cell.editor_id, cell.form_id
+    );
+    assert_eq!(cell.form_id, 0x0001FBB9);
+    assert!(si_refs > 0);
+    assert!(
+        si.world()
+            .resource::<oo_sim::GameData>()
+            .read(SI_MESH)
+            .is_some(),
+        "SI archives should load with the SI plugin"
+    );
+}
+
+/// Diagnostic: prints the collision surface height along the prison stairs.
+/// Run with OO_TRACE=1.
+#[test]
+fn trace_stair_profile() {
+    use bevy_rapier3d::prelude::{QueryFilter, ReadRapierContext};
+    let (Some(data), Some(_)) = (data_dir(), std::env::var_os("OO_TRACE")) else {
+        return;
+    };
+    let mut app = app(data);
+    run(&mut app, 3);
+    // Start each ray a little above a straight ramp from the bottom to the top step.
+    let top = |z: f32| 437.0 + (-500.0 - z) * 0.43 + 60.0;
+    let probe = move |rapier: ReadRapierContext| {
+        let rapier = rapier.single().unwrap();
+        for x in [-520.0f32, -480.0, -440.0] {
+            let mut row = Vec::new();
+            for i in 0..=60 {
+                let z = -500.0 - i as f32 * 10.0;
+                let hit = rapier.cast_ray(
+                    Vec3::new(x, top(z), z),
+                    Vec3::NEG_Y,
+                    600.0,
+                    true,
+                    QueryFilter::default(),
+                );
+                row.push(format!(
+                    "{z:.0}:{}",
+                    hit.map_or("-".to_owned(), |(_, t)| format!("{:.0}", top(z) - t))
+                ));
+            }
+            println!("x={x}: {}", row.join(" "));
+        }
+    };
+    app.world_mut().run_system_once(probe).unwrap();
 }
