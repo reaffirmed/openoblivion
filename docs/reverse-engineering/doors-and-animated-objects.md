@@ -56,6 +56,32 @@ So yes, the group code maps to the sequence with the **same name** as the anim g
 `Idle` sequence is never stopped by `PlayGroup`, so an object's idle keeps running
 underneath. On actors `PlayGroup` goes through the actor's animation system instead.
 
+## Activation
+
+Activating any reference (player, NPC or script) goes through one routine:
+
+```
+activate(ref, by):
+    if ref is deleted: nothing
+    if `by` is an actor in a state that can't activate (e.g. a particular movement/combat
+       state) and ref is an activator: nothing
+    if ref has script-handled activation and the "default activation requested" marker
+       is not set:
+        record "activated by `by`" on ref's event list (the OnActivate flag)
+        run ref's script now (nested activations limited to 5 deep)
+        stop                                   # the default action does NOT happen
+    (with the console on and ref selected, print "'<by>' activated <type> '<ref>'")
+    if ref is a door: (player-only) cell-change bookkeeping for teleport doors
+    statics and trees: nothing
+    run the base object's own activation (door: open/close or teleport; container: open;
+       item: pick up; ...)
+```
+
+The script command `Activate` sets the "default activation requested" marker around its
+call, which is how an `OnActivate` block passes activation through to the default
+behaviour. Which references count as "script-handled" (presumably: has a script with an
+`OnActivate` block) is likely but not yet confirmed.
+
 ## Evidence
 
 | Fact | Source | Confidence |
@@ -65,6 +91,7 @@ underneath. On actors `PlayGroup` goes through the actor's animation system inst
 | `SetDoorDefaultOpen` marker and flag interplay | Executable: the command handler and the "is open" test | confirmed (flag naming: likely) |
 | `PlayGroup` sequence lookup, other sequences stopped except Idle, error messages | Executable: the command handler | confirmed |
 | Blend time `flags × 0.1 s` | Executable: the blend call's argument | likely |
+| Activation routine, script hand-off, nesting limit | Executable: the shared activation routine and the `Activate` command | confirmed (what makes a ref script-handled: likely) |
 
 ## Open
 
