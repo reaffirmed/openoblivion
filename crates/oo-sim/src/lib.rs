@@ -15,6 +15,7 @@ pub mod inventory;
 pub mod physics;
 pub mod player;
 pub mod script;
+pub mod trigger;
 
 use std::path::PathBuf;
 
@@ -73,6 +74,7 @@ impl Plugin for SimPlugin {
                     dialogue::update_conversations,
                     inventory::handle_actions,
                     script::run_quests,
+                    trigger::update_triggers,
                     script::run_object_scripts,
                     ai::run_ai,
                     cell::resync_cell,

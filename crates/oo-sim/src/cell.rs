@@ -31,6 +31,7 @@ use crate::player::{
     PLAYER_HALF_HEIGHT, PLAYER_RADIUS, Player, PlayerIntent, PlayerMotion, StepPositions,
 };
 use crate::script::{ScriptData, Scripted};
+use crate::trigger::Zone;
 use crate::{GameData, WorldConfig};
 use oo_formats::packages::{Package, packages};
 
@@ -443,6 +444,9 @@ fn spawn_reference(commands: &mut Commands, world: &WorldData, r: &Reference) ->
     }
     if let Some(&script) = world.scripting.object_scripts.get(&r.base) {
         entity.insert(Scripted(script));
+    }
+    if let Some(zone) = r.primitive.as_ref().and_then(Zone::from_primitive) {
+        entity.insert(zone);
     }
     if let Some(light) = world.lights.get(&r.base) {
         debug!(

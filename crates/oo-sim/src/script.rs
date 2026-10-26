@@ -688,8 +688,17 @@ impl Host for GameHost<'_> {
             }
 
             // What scripts do.
+            // The stage counts as set and done at once, so the rest of this
+            // run sees it; its result script runs after the run.
             "SetStage" => {
-                self.stages.push((form(0), arg_number(args, 1) as u16));
+                let (quest, stage) = (form(0), arg_number(args, 1) as u16);
+                if self.data.dialogue.quests.contains_key(&quest) {
+                    let progress = self.state.quests.entry(quest).or_default();
+                    progress.running = true;
+                    progress.stage = stage;
+                    progress.done.insert(stage);
+                }
+                self.stages.push((quest, stage));
                 1.0
             }
             "StartQuest" => {

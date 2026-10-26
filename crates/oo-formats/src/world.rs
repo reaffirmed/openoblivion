@@ -28,6 +28,24 @@ pub struct Reference {
     pub initially_disabled: bool,
     /// Enabled and disabled along with another reference (`XESP`).
     pub enable_parent: Option<EnableParent>,
+    /// A trigger zone or other invisible shape (`XPRM`).
+    pub primitive: Option<Primitive>,
+}
+
+/// An invisible shape placed in the editor, such as a trigger zone.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Primitive {
+    /// Half the size along each axis, before the reference's scale.
+    pub bounds: [f32; 3],
+    pub kind: PrimitiveKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimitiveKind {
+    Box,
+    Sphere,
+    PortalBox,
+    Other(u32),
 }
 
 /// A reference whose enabled state another reference follows.
@@ -222,6 +240,7 @@ impl Reference {
             teleport: None,
             initially_disabled: r.flags & INITIALLY_DISABLED != 0,
             enable_parent: None,
+            primitive: None,
         };
         let fields = r.fields()?;
         for field in fields.iter() {
@@ -238,6 +257,17 @@ impl Reference {
                     out.enable_parent = Some(EnableParent {
                         reference: u32_at(d, 0),
                         opposite: u32_at(d, 4) & 0x1 != 0,
+                    });
+                }
+                b"XPRM" if d.len() >= 32 => {
+                    out.primitive = Some(Primitive {
+                        bounds: [f32_at(d, 0), f32_at(d, 4), f32_at(d, 8)],
+                        kind: match u32_at(d, 28) {
+                            1 => PrimitiveKind::Box,
+                            2 => PrimitiveKind::Sphere,
+                            3 => PrimitiveKind::PortalBox,
+                            k => PrimitiveKind::Other(k),
+                        },
                     });
                 }
                 b"XTEL" if d.len() >= 28 => {
@@ -591,6 +621,7 @@ fn collect_references(nodes: Nodes<'_>, out: &mut Vec<(Reference, bool)>) -> Res
                         teleport: None,
                         initially_disabled: false,
                         enable_parent: None,
+                        primitive: None,
                     };
                     out.push((stub, true));
                 } else {
