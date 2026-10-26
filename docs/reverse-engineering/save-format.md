@@ -85,6 +85,76 @@ checks need). Its save routine only knows the common bit `0x1`.
 | `0x20` | owner: u32 form index |
 | `0x1000000` | another cell block (open; likely map/seen data) |
 
+**`REFR` (placed object).** Checked on all saves: **932,100 of 932,274 records (99.98%)**
+decode to exactly their declared size; the remaining 174 are rare cell-change records that
+carry extra physics data (below).
+
+| Order | Bit(s) | Data |
+|------:|--------|------|
+| 1 | `0x2` | two u32 (cell-change information; the first is usually 0, the second a form index) |
+| 2 | any of `0x2`, `0x4`, `0x8` | moved: u32 cell (form index), position 3×f32, rotation 3×f32 (radians) |
+| 3 | `0x800000`, only when not moved | u32 form index (likely the new cell) |
+| 4 | `0x1` | form flags (u32) |
+| 5 | `0x8000000` | inventory changes: u16 item count; per item: u32 form index, i32 count change, u32 stack count, then one extra-data list per stack |
+| 6 | any of `0x177577e0` | extra-data list (below) |
+| 7 | `0x2000000` | u16 length + that many bytes (animation state) |
+| 8 | `0x800` | u16 length + that many bytes |
+| 9 | `0x8` | u16 length + that many bytes (physics state) |
+| 10 | `0x10` | u32 |
+
+The order of parts 3 and 4 relative to each other isn't pinned down (both are fixed-size).
+A `0x2` record sometimes carries physics data after the moved block (the 174 exceptions).
+
+**Extra-data list:** u16 count, then per entry a u8 extra type and its payload. An entry is
+written only when its gating flag is set on the record (inventory stacks are written as if
+`0x20` were set). Form references are u32 form indices. Type names follow the public OBSE
+headers.
+
+| Type | Name | Gate | Payload |
+|-----:|------|------|---------|
+| `0x11` | persistent cell | actors only | u32 cell |
+| `0x12` | script | `0x4000000` or `0x20` | u32 script, u16 variable count, per variable: u32 index + f64 value, or (index with top nibble `0xF`) + u32 form for `ref` variables; then u8 "has events" + 8 bytes if set. Only non-zero variables are saved |
+| `0x1B`, `0x1C`, `0x47`, `0x50` | worn, worn left, cannot wear, bound armour | `0x20` | none (presence) |
+| `0x1E` | start location | always | u32 cell, 3×f32, 3×f32 |
+| `0x1F` | package | always | u32 package, u32, u32 target, u8, u8 (+ package-specific data in some cases) |
+| `0x20` | trespass package | `0x40000` | u32 (+ package data) |
+| `0x21` | run-once packages | always | u16 count, per entry u32 package + u8 |
+| `0x22` | reference pointer | `0x20` | u32 |
+| `0x23` | follower list | always | u16 count, u32 each |
+| `0x25` | ghost | always | none |
+| `0x27` | ownership | `0x80` or `0x20` | u32 owner |
+| `0x28` | global (ownership) | `0x100` or `0x20` | u32 |
+| `0x29` | faction rank | `0x200` or `0x20` | u32 |
+| `0x2A` | count | `0x20` | u16 |
+| `0x2B` | health | `0x20` | f32 |
+| `0x2C` | uses | `0x20` | u8 |
+| `0x2D` | time left | `0x20` | f32 |
+| `0x2E` | charge | `0x20` | f32 |
+| `0x2F` | soul | `0x20` | u8 |
+| `0x31` | lock | `0x40` | u8 level, u32 key, u8 flags |
+| `0x32` | teleport | `0x100000` | 3×f32 position, 3×f32 rotation, u32 destination door |
+| `0x33` | map marker | `0x400` | u8 flags |
+| `0x35` | levelled creature | `0x10000000` | none |
+| `0x36` | levelled item | `0x20` | u32, u8 |
+| `0x37` | scale | `0x20` | f32 |
+| `0x39` | magic caster | `0x200000` | 3×u32 |
+| `0x3A` | magic target (likely) | `0x200000` | u32, u16 count (+ entries; always 0 in the saves) |
+| `0x3D` | crime gold | `0x80` | f32 |
+| `0x3E` | Oblivion gate entry | `0x4000` | u32, 12 bytes |
+| `0x41` | item dropper | always | u32 |
+| `0x46` | persuasion percent | `0x1000` | u32, u32, u8, u32 |
+| `0x48` | poison | `0x20` | u32 |
+| `0x4A` | last finished sequence | `0x2000000` | u8 length, text |
+| `0x4B` | saved movement data | `0x1000000` | three × (u16 length + bytes) |
+| `0x4E` | friend-hit list | always | u16 count, per entry u32 + u16 + u32 |
+| `0x4F` | heading target | always | u32 |
+| `0x52` | investment gold | `0x2000` | u32 |
+| `0x53` | starting world or cell | `0x20` | u32 |
+| `0x55` | quick key | `0x20` | u8 |
+| `0x59` | info general topic | always | topic data (not seen in the saves) |
+| `0x5A` | has no rumours | always | u8 |
+| `0x5C` | haggle amount | always | u32 |
+
 The game can wrap each record in a debugging marker block (`BLOK` + u16 size) in a debug
 mode; normal saves don't use it (the reader above accounts for every byte without it).
 
@@ -102,11 +172,12 @@ with the script-variable block filling the remainder.
 | Common flag bit 0 = form flags | Executable: the base form save routine | confirmed |
 | `QUST` and `CELL` layouts | Executable: their save routines; `QUST` also checked on all saves | confirmed (`CELL` not yet checked on saves) |
 | `INFO` marker | All saves | confirmed (its meaning: likely) |
+| `REFR` layout and extra-data payloads | Executable: the reference, inventory, extra-data and script-variable save routines; then a decoder run over all 932,274 reference records (99.98% exact) | confirmed; bit meanings marked "likely" or open where noted |
 
 ## Open
 
-1. Per-type change flags and data layouts, starting with `REFR`, `ACHR`, `CELL`, `NPC_`,
-   `INFO`, `QUST`.
+1. Per-type layouts still to do: `ACHR`/`ACRE` (references plus actor state), `NPC_`, and
+   the two open `CELL` blocks.
 2. Contents of the eight size-prefixed blobs (processes, weather, quick keys…).
 3. How the game applies change records on load (order, what happens to records whose form
    no longer exists).
