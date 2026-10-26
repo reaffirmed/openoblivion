@@ -451,8 +451,10 @@ pub(crate) fn animate_objects(
                 }
                 AnimRequest::Group(code) => {
                     let name = ANIM_GROUPS.get(usize::from(code)).copied().unwrap_or("");
-                    if !anim.play(name) {
-                        debug!("{:08X}: sequence {name} not found", placed.0);
+                    if anim.play(name) {
+                        info!("{:08X}: plays {name}", placed.0);
+                    } else {
+                        info!("{:08X}: sequence {name} not found", placed.0);
                     }
                 }
             }
