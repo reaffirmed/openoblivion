@@ -1,7 +1,7 @@
 //! Readers for the data files shipped with The Elder Scrolls IV: Oblivion.
 //!
-//! Everything here is written from public format documentation (UESP, NifTools),
-//! not from the game's executable. See `docs/CLEAN_ROOM.md` in the repository root.
+//! Most of this is written from public format documentation (UESP, NifTools).
+//! `land` is adapted from nv-rs; its module documentation says what that covers.
 
 pub mod actors;
 pub mod bsa;
@@ -10,6 +10,7 @@ pub mod commands;
 pub mod dialogue;
 pub mod esm;
 pub mod items;
+pub mod land;
 pub mod load_order;
 pub mod mp3;
 pub mod packages;
