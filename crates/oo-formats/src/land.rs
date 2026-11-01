@@ -140,19 +140,16 @@ impl Land {
             .filter(|f| f.data.len() >= GRID * GRID * 3)
             .map(|f| {
                 f.data[..GRID * GRID * 3]
-                    .chunks_exact(3)
-                    .map(|c| normal([c[0] as i8, c[1] as i8, c[2] as i8]))
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|c| normal(c.map(|b| b as i8)))
                     .collect()
             });
         let colors = get(b"VCLR")
             .filter(|_| flags & 0x2 != 0)
             .filter(|f| f.data.len() >= GRID * GRID * 3)
-            .map(|f| {
-                f.data[..GRID * GRID * 3]
-                    .chunks_exact(3)
-                    .map(|c| [c[0], c[1], c[2]])
-                    .collect()
-            });
+            .map(|f| f.data[..GRID * GRID * 3].as_chunks::<3>().0.to_vec());
 
         // An `ATXT` names a slot (clamped to 5); a later `ATXT` in the same
         // slot replaces its texture and writes over its opacities. `VTXT`
@@ -190,7 +187,7 @@ impl Land {
                     else {
                         continue;
                     };
-                    for entry in f.data.chunks_exact(8) {
+                    for entry in f.data.as_chunks::<8>().0 {
                         let at = usize::from(u16::from_le_bytes([entry[0], entry[1]]));
                         if let Some(o) = layer.opacity.get_mut(at) {
                             *o = f32_at(entry, 4).max(0.0);
@@ -531,8 +528,8 @@ fn tangent_frames(
         (len > 1e-12).then(|| v.map(|c| c / len))
     };
     let mut sums = vec![[0.0f32; 3]; positions.len()];
-    for t in indices.chunks_exact(3) {
-        let [a, b, c] = [t[0], t[1], t[2]].map(usize::from);
+    for t in indices.as_chunks::<3>().0 {
+        let [a, b, c] = t.map(usize::from);
         let (e1, e2) = (
             sub(positions[b], positions[a]),
             sub(positions[c], positions[a]),
